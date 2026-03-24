@@ -26,6 +26,20 @@ pub enum OperatingMode {
     WakeUpAndSleep = 0x03,
 }
 
+impl TryFrom<u8> for OperatingMode {
+    type Error = u8;
+
+    fn try_from(val: u8) -> Result<Self, u8> {
+        match val {
+            0x00 => Ok(Self::Standby),
+            0x01 => Ok(Self::Sleep),
+            0x02 => Ok(Self::ContinuousMeasure),
+            0x03 => Ok(Self::WakeUpAndSleep),
+            other => Err(other),
+        }
+    }
+}
+
 /// Magnetic channel selection.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[cfg_attr(feature = "defmt", derive(defmt::Format))]
@@ -55,6 +69,28 @@ pub enum MagneticChannel {
     YZY = 0xA,
     /// Pseudo-simultaneous X-Z-X.
     XZX = 0xB,
+}
+
+impl TryFrom<u8> for MagneticChannel {
+    type Error = u8;
+
+    fn try_from(val: u8) -> Result<Self, u8> {
+        match val {
+            0x0 => Ok(Self::Off),
+            0x1 => Ok(Self::X),
+            0x2 => Ok(Self::Y),
+            0x3 => Ok(Self::XY),
+            0x4 => Ok(Self::Z),
+            0x5 => Ok(Self::ZX),
+            0x6 => Ok(Self::YZ),
+            0x7 => Ok(Self::XYZ),
+            0x8 => Ok(Self::XYX),
+            0x9 => Ok(Self::YXY),
+            0xA => Ok(Self::YZY),
+            0xB => Ok(Self::XZX),
+            other => Err(other),
+        }
+    }
 }
 
 impl MagneticChannel {
@@ -112,6 +148,22 @@ pub enum ConversionAverage {
     X32 = 0b101,
 }
 
+impl TryFrom<u8> for ConversionAverage {
+    type Error = u8;
+
+    fn try_from(val: u8) -> Result<Self, u8> {
+        match val {
+            0b000 => Ok(Self::X1),
+            0b001 => Ok(Self::X2),
+            0b010 => Ok(Self::X4),
+            0b011 => Ok(Self::X8),
+            0b100 => Ok(Self::X16),
+            0b101 => Ok(Self::X32),
+            other => Err(other),
+        }
+    }
+}
+
 impl ConversionAverage {
     /// Maximum poll count for conversion timeout (2x safety margin over
     /// datasheet max at 400 kHz I2C, ~50 µs per poll).
@@ -160,6 +212,29 @@ pub enum SleepDuration {
     Ms20000 = 0xC,
 }
 
+impl TryFrom<u8> for SleepDuration {
+    type Error = u8;
+
+    fn try_from(val: u8) -> Result<Self, u8> {
+        match val {
+            0x0 => Ok(Self::Ms1),
+            0x1 => Ok(Self::Ms5),
+            0x2 => Ok(Self::Ms10),
+            0x3 => Ok(Self::Ms15),
+            0x4 => Ok(Self::Ms20),
+            0x5 => Ok(Self::Ms30),
+            0x6 => Ok(Self::Ms50),
+            0x7 => Ok(Self::Ms100),
+            0x8 => Ok(Self::Ms500),
+            0x9 => Ok(Self::Ms1000),
+            0xA => Ok(Self::Ms2000),
+            0xB => Ok(Self::Ms5000),
+            0xC => Ok(Self::Ms20000),
+            other => Err(other),
+        }
+    }
+}
+
 /// Power mode.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[cfg_attr(feature = "defmt", derive(defmt::Format))]
@@ -171,6 +246,18 @@ pub enum PowerMode {
     LowNoise = 1,
 }
 
+impl TryFrom<u8> for PowerMode {
+    type Error = u8;
+
+    fn try_from(val: u8) -> Result<Self, u8> {
+        match val {
+            0 => Ok(Self::LowActiveCurrent),
+            1 => Ok(Self::LowNoise),
+            other => Err(other),
+        }
+    }
+}
+
 /// Trigger mode for standby conversions.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[cfg_attr(feature = "defmt", derive(defmt::Format))]
@@ -180,6 +267,18 @@ pub enum TriggerMode {
     I2cCommand = 0,
     /// INT pin triggers conversion.
     IntPin = 1,
+}
+
+impl TryFrom<u8> for TriggerMode {
+    type Error = u8;
+
+    fn try_from(val: u8) -> Result<Self, u8> {
+        match val {
+            0 => Ok(Self::I2cCommand),
+            1 => Ok(Self::IntPin),
+            other => Err(other),
+        }
+    }
 }
 
 /// Magnetic temperature compensation coefficient.
@@ -195,6 +294,19 @@ pub enum TempCoefficient {
     Ceramic = 0b11,
 }
 
+impl TryFrom<u8> for TempCoefficient {
+    type Error = u8;
+
+    fn try_from(val: u8) -> Result<Self, u8> {
+        match val {
+            0b00 => Ok(Self::None),
+            0b01 => Ok(Self::NdBFe),
+            0b11 => Ok(Self::Ceramic),
+            other => Err(other),
+        }
+    }
+}
+
 /// Angle calculation axis pair.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[cfg_attr(feature = "defmt", derive(defmt::Format))]
@@ -208,6 +320,20 @@ pub enum AngleCalculation {
     YZ = 0b10,
     /// X-Z plane angle.
     XZ = 0b11,
+}
+
+impl TryFrom<u8> for AngleCalculation {
+    type Error = u8;
+
+    fn try_from(val: u8) -> Result<Self, u8> {
+        match val {
+            0b00 => Ok(Self::None),
+            0b01 => Ok(Self::XY),
+            0b10 => Ok(Self::YZ),
+            0b11 => Ok(Self::XZ),
+            other => Err(other),
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -544,6 +670,18 @@ pub enum ThresholdDirection {
     Below = 1,
 }
 
+impl TryFrom<u8> for ThresholdDirection {
+    type Error = u8;
+
+    fn try_from(val: u8) -> Result<Self, u8> {
+        match val {
+            0 => Ok(Self::Above),
+            1 => Ok(Self::Below),
+            other => Err(other),
+        }
+    }
+}
+
 /// Per-axis threshold configuration for magnetic field and temperature.
 ///
 /// Threshold values are signed 8-bit integers representing the crossing
@@ -587,6 +725,21 @@ pub enum InterruptMode {
     SclLatched = 0b100,
 }
 
+impl TryFrom<u8> for InterruptMode {
+    type Error = u8;
+
+    fn try_from(val: u8) -> Result<Self, u8> {
+        match val {
+            0b000 => Ok(Self::None),
+            0b001 => Ok(Self::IntPin),
+            0b010 => Ok(Self::IntPinLatched),
+            0b011 => Ok(Self::Scl),
+            0b100 => Ok(Self::SclLatched),
+            other => Err(other),
+        }
+    }
+}
+
 /// INT pin assertion behavior.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[cfg_attr(feature = "defmt", derive(defmt::Format))]
@@ -596,6 +749,18 @@ pub enum IntPinBehavior {
     Latched = 0,
     /// INT pin pulses for 10 µs then deasserts.
     Pulse10us = 1,
+}
+
+impl TryFrom<u8> for IntPinBehavior {
+    type Error = u8;
+
+    fn try_from(val: u8) -> Result<Self, u8> {
+        match val {
+            0 => Ok(Self::Latched),
+            1 => Ok(Self::Pulse10us),
+            other => Err(other),
+        }
+    }
 }
 
 /// Interrupt configuration for the TMAG5273.
@@ -629,6 +794,18 @@ pub enum GainChannel {
     First = 0,
     /// Apply gain to second axis pair.
     Second = 1,
+}
+
+impl TryFrom<u8> for GainChannel {
+    type Error = u8;
+
+    fn try_from(val: u8) -> Result<Self, u8> {
+        match val {
+            0 => Ok(Self::First),
+            1 => Ok(Self::Second),
+            other => Err(other),
+        }
+    }
 }
 
 /// Magnetic gain and offset calibration configuration.
@@ -752,5 +929,231 @@ mod tests {
     fn max_polls_for_averaging() {
         assert_eq!(ConversionAverage::X1.max_polls(), 10);
         assert_eq!(ConversionAverage::X32.max_polls(), 100);
+    }
+
+    // -- TryFrom<u8> round-trip tests ----------------------------------------
+
+    #[test]
+    fn operating_mode_try_from_round_trip() {
+        for variant in [
+            OperatingMode::Standby,
+            OperatingMode::Sleep,
+            OperatingMode::ContinuousMeasure,
+            OperatingMode::WakeUpAndSleep,
+        ] {
+            assert_eq!(OperatingMode::try_from(variant as u8), Ok(variant));
+        }
+    }
+
+    #[test]
+    fn operating_mode_try_from_invalid() {
+        assert_eq!(OperatingMode::try_from(0x04), Err(0x04));
+        assert_eq!(OperatingMode::try_from(0xFF), Err(0xFF));
+    }
+
+    #[test]
+    fn magnetic_channel_try_from_round_trip() {
+        for variant in [
+            MagneticChannel::Off,
+            MagneticChannel::X,
+            MagneticChannel::Y,
+            MagneticChannel::XY,
+            MagneticChannel::Z,
+            MagneticChannel::ZX,
+            MagneticChannel::YZ,
+            MagneticChannel::XYZ,
+            MagneticChannel::XYX,
+            MagneticChannel::YXY,
+            MagneticChannel::YZY,
+            MagneticChannel::XZX,
+        ] {
+            assert_eq!(MagneticChannel::try_from(variant as u8), Ok(variant));
+        }
+    }
+
+    #[test]
+    fn magnetic_channel_try_from_invalid() {
+        assert_eq!(MagneticChannel::try_from(0x0C), Err(0x0C));
+        assert_eq!(MagneticChannel::try_from(0xFF), Err(0xFF));
+    }
+
+    #[test]
+    fn conversion_average_try_from_round_trip() {
+        for variant in [
+            ConversionAverage::X1,
+            ConversionAverage::X2,
+            ConversionAverage::X4,
+            ConversionAverage::X8,
+            ConversionAverage::X16,
+            ConversionAverage::X32,
+        ] {
+            assert_eq!(ConversionAverage::try_from(variant as u8), Ok(variant));
+        }
+    }
+
+    #[test]
+    fn conversion_average_try_from_invalid() {
+        assert_eq!(ConversionAverage::try_from(0b110), Err(0b110));
+        assert_eq!(ConversionAverage::try_from(0xFF), Err(0xFF));
+    }
+
+    #[test]
+    fn sleep_duration_try_from_round_trip() {
+        for variant in [
+            SleepDuration::Ms1,
+            SleepDuration::Ms5,
+            SleepDuration::Ms10,
+            SleepDuration::Ms15,
+            SleepDuration::Ms20,
+            SleepDuration::Ms30,
+            SleepDuration::Ms50,
+            SleepDuration::Ms100,
+            SleepDuration::Ms500,
+            SleepDuration::Ms1000,
+            SleepDuration::Ms2000,
+            SleepDuration::Ms5000,
+            SleepDuration::Ms20000,
+        ] {
+            assert_eq!(SleepDuration::try_from(variant as u8), Ok(variant));
+        }
+    }
+
+    #[test]
+    fn sleep_duration_try_from_invalid() {
+        assert_eq!(SleepDuration::try_from(0x0D), Err(0x0D));
+        assert_eq!(SleepDuration::try_from(0xFF), Err(0xFF));
+    }
+
+    #[test]
+    fn power_mode_try_from_round_trip() {
+        for variant in [PowerMode::LowActiveCurrent, PowerMode::LowNoise] {
+            assert_eq!(PowerMode::try_from(variant as u8), Ok(variant));
+        }
+    }
+
+    #[test]
+    fn power_mode_try_from_invalid() {
+        assert_eq!(PowerMode::try_from(2), Err(2));
+        assert_eq!(PowerMode::try_from(0xFF), Err(0xFF));
+    }
+
+    #[test]
+    fn trigger_mode_try_from_round_trip() {
+        for variant in [TriggerMode::I2cCommand, TriggerMode::IntPin] {
+            assert_eq!(TriggerMode::try_from(variant as u8), Ok(variant));
+        }
+    }
+
+    #[test]
+    fn trigger_mode_try_from_invalid() {
+        assert_eq!(TriggerMode::try_from(2), Err(2));
+        assert_eq!(TriggerMode::try_from(0xFF), Err(0xFF));
+    }
+
+    #[test]
+    fn temp_coefficient_try_from_round_trip() {
+        for variant in [
+            TempCoefficient::None,
+            TempCoefficient::NdBFe,
+            TempCoefficient::Ceramic,
+        ] {
+            assert_eq!(TempCoefficient::try_from(variant as u8), Ok(variant));
+        }
+    }
+
+    #[test]
+    fn temp_coefficient_try_from_invalid() {
+        // 0b10 is reserved
+        assert_eq!(TempCoefficient::try_from(0b10), Err(0b10));
+        assert_eq!(TempCoefficient::try_from(0xFF), Err(0xFF));
+    }
+
+    #[test]
+    fn angle_calculation_try_from_round_trip() {
+        for variant in [
+            AngleCalculation::None,
+            AngleCalculation::XY,
+            AngleCalculation::YZ,
+            AngleCalculation::XZ,
+        ] {
+            assert_eq!(AngleCalculation::try_from(variant as u8), Ok(variant));
+        }
+    }
+
+    #[test]
+    fn angle_calculation_try_from_invalid() {
+        assert_eq!(AngleCalculation::try_from(0x04), Err(0x04));
+        assert_eq!(AngleCalculation::try_from(0xFF), Err(0xFF));
+    }
+
+    #[test]
+    fn threshold_direction_try_from_round_trip() {
+        for variant in [ThresholdDirection::Above, ThresholdDirection::Below] {
+            assert_eq!(ThresholdDirection::try_from(variant as u8), Ok(variant));
+        }
+    }
+
+    #[test]
+    fn threshold_direction_try_from_invalid() {
+        assert_eq!(ThresholdDirection::try_from(2), Err(2));
+        assert_eq!(ThresholdDirection::try_from(0xFF), Err(0xFF));
+    }
+
+    #[test]
+    fn interrupt_mode_try_from_round_trip() {
+        for variant in [
+            InterruptMode::None,
+            InterruptMode::IntPin,
+            InterruptMode::IntPinLatched,
+            InterruptMode::Scl,
+            InterruptMode::SclLatched,
+        ] {
+            assert_eq!(InterruptMode::try_from(variant as u8), Ok(variant));
+        }
+    }
+
+    #[test]
+    fn interrupt_mode_try_from_invalid() {
+        assert_eq!(InterruptMode::try_from(0b101), Err(0b101));
+        assert_eq!(InterruptMode::try_from(0xFF), Err(0xFF));
+    }
+
+    #[test]
+    fn int_pin_behavior_try_from_round_trip() {
+        for variant in [IntPinBehavior::Latched, IntPinBehavior::Pulse10us] {
+            assert_eq!(IntPinBehavior::try_from(variant as u8), Ok(variant));
+        }
+    }
+
+    #[test]
+    fn int_pin_behavior_try_from_invalid() {
+        assert_eq!(IntPinBehavior::try_from(2), Err(2));
+        assert_eq!(IntPinBehavior::try_from(0xFF), Err(0xFF));
+    }
+
+    #[test]
+    fn gain_channel_try_from_round_trip() {
+        for variant in [GainChannel::First, GainChannel::Second] {
+            assert_eq!(GainChannel::try_from(variant as u8), Ok(variant));
+        }
+    }
+
+    #[test]
+    fn gain_channel_try_from_invalid() {
+        assert_eq!(GainChannel::try_from(2), Err(2));
+        assert_eq!(GainChannel::try_from(0xFF), Err(0xFF));
+    }
+
+    #[test]
+    fn range_try_from_round_trip() {
+        for variant in [Range::Low, Range::High] {
+            assert_eq!(Range::try_from(variant as u8), Ok(variant));
+        }
+    }
+
+    #[test]
+    fn range_try_from_invalid() {
+        assert_eq!(Range::try_from(2), Err(2));
+        assert_eq!(Range::try_from(0xFF), Err(0xFF));
     }
 }

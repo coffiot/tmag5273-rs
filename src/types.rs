@@ -18,6 +18,18 @@ pub enum Range {
     High = 1,
 }
 
+impl TryFrom<u8> for Range {
+    type Error = u8;
+
+    fn try_from(val: u8) -> Result<Self, u8> {
+        match val {
+            0 => Ok(Self::Low),
+            1 => Ok(Self::High),
+            other => Err(other),
+        }
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Device variant
 // ---------------------------------------------------------------------------
