@@ -88,17 +88,7 @@ impl<I2C: I2c> Tmag5273<I2C, Unconfigured> {
     ///
     /// The I2C address is derived from the [`DeviceVariant`].
     pub fn new(i2c: I2C, variant: DeviceVariant) -> Self {
-        Self {
-            address: variant.default_address(),
-            i2c,
-            variant,
-            xy_range: Range::Low,
-            z_range: Range::Low,
-            channels: MagneticChannel::Off,
-            angle_enabled: false,
-            max_polls: 10,
-            _state: PhantomData,
-        }
+        Self::new_with_address(i2c, variant, variant.default_address())
     }
 
     /// Create a new driver instance with a custom I2C address.

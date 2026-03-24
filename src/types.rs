@@ -8,7 +8,7 @@
 // ---------------------------------------------------------------------------
 
 /// Magnetic field measurement range.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 #[cfg_attr(feature = "defmt", derive(defmt::Format))]
 #[repr(u8)]
 pub enum Range {
@@ -65,7 +65,7 @@ const RANGE_V2_HIGH_Z: f32 = 266.0;
 ///
 /// The letter (A–D) determines the default I2C address and the number (1/2)
 /// determines the magnetic sensitivity range (version).
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 #[cfg_attr(feature = "defmt", derive(defmt::Format))]
 pub enum DeviceVariant {
     /// TMAG5273A1 — address 0x35, version 1.
@@ -158,6 +158,7 @@ pub struct Degrees(pub f32);
 /// Disabled channels are represented as `None`.
 #[derive(Debug, Default, Clone, Copy, PartialEq)]
 #[cfg_attr(feature = "defmt", derive(defmt::Format))]
+#[must_use]
 pub struct MagneticReading {
     /// X-axis magnetic flux density, or `None` if the channel is disabled.
     pub x: Option<MilliTesla>,
@@ -170,6 +171,7 @@ pub struct MagneticReading {
 /// Angle measurement result from the TMAG5273 angle engine.
 #[derive(Debug, Clone, Copy, PartialEq)]
 #[cfg_attr(feature = "defmt", derive(defmt::Format))]
+#[must_use]
 pub struct AngleReading {
     /// Computed angle in degrees (0–360).
     pub angle: Degrees,
@@ -182,8 +184,9 @@ pub struct AngleReading {
 // ---------------------------------------------------------------------------
 
 /// Parsed contents of the `DEVICE_STATUS` register (0x1C).
-#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Hash)]
 #[cfg_attr(feature = "defmt", derive(defmt::Format))]
+#[must_use]
 pub struct DeviceStatus {
     /// VCC supply is below the undervoltage threshold.
     pub vcc_undervoltage: bool,
@@ -205,6 +208,12 @@ const DEVICE_STATUS_INT_ERR_BIT: u8 = 2;
 const DEVICE_STATUS_OSC_ERR_BIT: u8 = 3;
 
 impl DeviceStatus {
+    /// Returns `true` if no fault flags are set.
+    #[inline]
+    pub const fn is_ok(&self) -> bool {
+        !self.vcc_undervoltage && !self.otp_crc_error && !self.int_error && !self.oscillator_error
+    }
+
     /// Parses a raw `DEVICE_STATUS` register byte into structured flags.
     #[inline]
     pub const fn from_reg(reg: u8) -> Self {
@@ -218,8 +227,9 @@ impl DeviceStatus {
 }
 
 /// Parsed contents of the `CONV_STATUS` register (0x18).
-#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Hash)]
 #[cfg_attr(feature = "defmt", derive(defmt::Format))]
+#[must_use]
 pub struct ConversionStatus {
     /// Rolling conversion set counter (0–7).
     pub set_count: u8,
@@ -250,6 +260,12 @@ const CONV_STATUS_DIAG_BIT: u8 = 1;
 const CONV_STATUS_READY_BIT: u8 = 0;
 
 impl ConversionStatus {
+    /// Returns `true` if a new conversion result is available.
+    #[inline]
+    pub const fn is_ready(&self) -> bool {
+        self.result_ready
+    }
+
     /// Parses a raw `CONV_STATUS` register byte into structured fields.
     #[inline]
     pub const fn from_reg(reg: u8) -> Self {

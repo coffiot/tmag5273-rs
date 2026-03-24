@@ -7,11 +7,8 @@
 
 use crate::types::Range;
 
-// Placeholder — will be filled in Phase 2
-// All config enums, ConfigBuilder, Config, and validation go here.
-
 /// Operating mode for the TMAG5273.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 #[cfg_attr(feature = "defmt", derive(defmt::Format))]
 #[repr(u8)]
 pub enum OperatingMode {
@@ -40,7 +37,7 @@ impl TryFrom<u8> for OperatingMode {
 }
 
 /// Magnetic channel selection.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 #[cfg_attr(feature = "defmt", derive(defmt::Format))]
 #[repr(u8)]
 pub enum MagneticChannel {
@@ -129,7 +126,7 @@ impl MagneticChannel {
 }
 
 /// Conversion averaging samples.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 #[cfg_attr(feature = "defmt", derive(defmt::Format))]
 #[repr(u8)]
 pub enum ConversionAverage {
@@ -179,7 +176,7 @@ impl ConversionAverage {
 }
 
 /// Sleep duration between measurements in wake-up-and-sleep mode.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 #[cfg_attr(feature = "defmt", derive(defmt::Format))]
 #[repr(u8)]
 pub enum SleepDuration {
@@ -235,7 +232,7 @@ impl TryFrom<u8> for SleepDuration {
 }
 
 /// Power mode.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 #[cfg_attr(feature = "defmt", derive(defmt::Format))]
 #[repr(u8)]
 pub enum PowerMode {
@@ -258,7 +255,7 @@ impl TryFrom<u8> for PowerMode {
 }
 
 /// Trigger mode for standby conversions.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 #[cfg_attr(feature = "defmt", derive(defmt::Format))]
 #[repr(u8)]
 pub enum TriggerMode {
@@ -281,7 +278,7 @@ impl TryFrom<u8> for TriggerMode {
 }
 
 /// Magnetic temperature compensation coefficient.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 #[cfg_attr(feature = "defmt", derive(defmt::Format))]
 #[repr(u8)]
 pub enum TempCoefficient {
@@ -307,7 +304,7 @@ impl TryFrom<u8> for TempCoefficient {
 }
 
 /// Angle calculation axis pair.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 #[cfg_attr(feature = "defmt", derive(defmt::Format))]
 #[repr(u8)]
 pub enum AngleCalculation {
@@ -343,8 +340,9 @@ impl TryFrom<u8> for AngleCalculation {
 ///
 /// Construct via [`ConfigBuilder`]. The `#[non_exhaustive]` attribute allows
 /// pub field reads but prevents construction outside this crate.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 #[cfg_attr(feature = "defmt", derive(defmt::Format))]
+#[must_use]
 #[non_exhaustive]
 pub struct Config {
     /// Operating mode.
@@ -418,7 +416,7 @@ impl Default for ConfigBuilder {
 impl ConfigBuilder {
     /// Create a new builder with defaults matching the SparkFun `begin()`
     /// production configuration.
-    pub fn new() -> Self {
+    pub const fn new() -> Self {
         Self {
             operating_mode: OperatingMode::ContinuousMeasure,
             magnetic_channels: MagneticChannel::XYZ,
@@ -436,73 +434,73 @@ impl ConfigBuilder {
     }
 
     /// Set the operating mode.
-    pub fn operating_mode(mut self, mode: OperatingMode) -> Self {
+    pub const fn operating_mode(mut self, mode: OperatingMode) -> Self {
         self.operating_mode = mode;
         self
     }
 
     /// Set the magnetic channel selection.
-    pub fn magnetic_channels(mut self, channels: MagneticChannel) -> Self {
+    pub const fn magnetic_channels(mut self, channels: MagneticChannel) -> Self {
         self.magnetic_channels = channels;
         self
     }
 
     /// Enable or disable the temperature channel.
-    pub fn temperature_enabled(mut self, enabled: bool) -> Self {
+    pub const fn temperature_enabled(mut self, enabled: bool) -> Self {
         self.temperature_enabled = enabled;
         self
     }
 
     /// Set the angle calculation axis pair.
-    pub fn angle_calculation(mut self, angle: AngleCalculation) -> Self {
+    pub const fn angle_calculation(mut self, angle: AngleCalculation) -> Self {
         self.angle_calculation = angle;
         self
     }
 
     /// Set the conversion averaging.
-    pub fn conversion_average(mut self, avg: ConversionAverage) -> Self {
+    pub const fn conversion_average(mut self, avg: ConversionAverage) -> Self {
         self.conversion_average = avg;
         self
     }
 
     /// Set the X/Y axis measurement range.
-    pub fn xy_range(mut self, range: Range) -> Self {
+    pub const fn xy_range(mut self, range: Range) -> Self {
         self.xy_range = range;
         self
     }
 
     /// Set the Z axis measurement range.
-    pub fn z_range(mut self, range: Range) -> Self {
+    pub const fn z_range(mut self, range: Range) -> Self {
         self.z_range = range;
         self
     }
 
     /// Set the power mode.
-    pub fn power_mode(mut self, mode: PowerMode) -> Self {
+    pub const fn power_mode(mut self, mode: PowerMode) -> Self {
         self.power_mode = mode;
         self
     }
 
     /// Set the sleep duration (for wake-up-and-sleep mode).
-    pub fn sleep_duration(mut self, dur: SleepDuration) -> Self {
+    pub const fn sleep_duration(mut self, dur: SleepDuration) -> Self {
         self.sleep_duration = dur;
         self
     }
 
     /// Set the trigger mode.
-    pub fn trigger_mode(mut self, mode: TriggerMode) -> Self {
+    pub const fn trigger_mode(mut self, mode: TriggerMode) -> Self {
         self.trigger_mode = mode;
         self
     }
 
     /// Enable or disable the I2C glitch filter.
-    pub fn glitch_filter(mut self, enabled: bool) -> Self {
+    pub const fn glitch_filter(mut self, enabled: bool) -> Self {
         self.glitch_filter = enabled;
         self
     }
 
     /// Set the temperature compensation coefficient.
-    pub fn temp_coefficient(mut self, coeff: TempCoefficient) -> Self {
+    pub const fn temp_coefficient(mut self, coeff: TempCoefficient) -> Self {
         self.temp_coefficient = coeff;
         self
     }
@@ -649,7 +647,7 @@ impl Config {
 // ---------------------------------------------------------------------------
 
 /// Threshold crossing direction.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 #[cfg_attr(feature = "defmt", derive(defmt::Format))]
 #[repr(u8)]
 pub enum ThresholdDirection {
@@ -676,7 +674,7 @@ impl TryFrom<u8> for ThresholdDirection {
 /// Threshold values are signed 8-bit integers representing the crossing
 /// point in sensor-native units. Use with
 /// [`set_thresholds`](crate::Tmag5273::set_thresholds).
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 #[cfg_attr(feature = "defmt", derive(defmt::Format))]
 pub struct ThresholdConfig {
     /// X-axis threshold (signed, sensor-native units).
@@ -701,7 +699,7 @@ pub struct ThresholdConfig {
 // ---------------------------------------------------------------------------
 
 /// Interrupt routing mode.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 #[cfg_attr(feature = "defmt", derive(defmt::Format))]
 #[repr(u8)]
 pub enum InterruptMode {
@@ -733,7 +731,7 @@ impl TryFrom<u8> for InterruptMode {
 }
 
 /// INT pin assertion behavior.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 #[cfg_attr(feature = "defmt", derive(defmt::Format))]
 #[repr(u8)]
 pub enum IntPinBehavior {
@@ -758,7 +756,7 @@ impl TryFrom<u8> for IntPinBehavior {
 /// Interrupt configuration for the TMAG5273.
 ///
 /// Use with [`set_interrupt`](crate::Tmag5273::set_interrupt).
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 #[cfg_attr(feature = "defmt", derive(defmt::Format))]
 pub struct InterruptConfig {
     /// Interrupt routing mode.
@@ -778,7 +776,7 @@ pub struct InterruptConfig {
 // ---------------------------------------------------------------------------
 
 /// Gain adjustment channel selection.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 #[cfg_attr(feature = "defmt", derive(defmt::Format))]
 #[repr(u8)]
 pub enum GainChannel {
@@ -807,7 +805,7 @@ impl TryFrom<u8> for GainChannel {
 /// **Note:** The SparkFun Arduino library has a known copy-paste bug where
 /// `config_mag_offset_2()` writes to register 0x0A instead of 0x0B.
 /// This driver writes to the correct registers.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 #[cfg_attr(feature = "defmt", derive(defmt::Format))]
 pub struct CalibrationConfig {
     /// Magnetic gain adjustment (raw 8-bit value, register 0x09).
