@@ -239,11 +239,8 @@ impl<I2C: I2c> Tmag5273<I2C, Configured> {
     ///
     /// Returns [`Error::I2c`] on bus communication failure.
     pub fn read_temperature(&mut self) -> Result<Celsius, Error<I2C::Error>> {
-        let mut buf = [0u8; 2];
-        self.i2c
-            .write_read(self.address, &[register::T_MSB_RESULT], &mut buf)?;
-
-        let raw = i16::from_be_bytes([buf[0], buf[1]]);
+        let buf = self.read_register_pair(register::T_MSB_RESULT)?;
+        let raw = i16::from_be_bytes(buf);
         Ok(crate::types::raw_to_celsius(raw))
     }
 
@@ -255,12 +252,9 @@ impl<I2C: I2c> Tmag5273<I2C, Configured> {
     ///
     /// Returns [`Error::I2c`] on bus communication failure.
     pub fn read_angle(&mut self) -> Result<AngleReading, Error<I2C::Error>> {
-        let mut buf = [0u8; 3];
-        self.i2c
-            .write_read(self.address, &[register::ANGLE_RESULT_MSB], &mut buf)?;
-
-        let raw_angle = u16::from_be_bytes([buf[0], buf[1]]);
-        let magnitude = buf[2];
+        let angle_buf = self.read_register_pair(register::ANGLE_RESULT_MSB)?;
+        let raw_angle = u16::from_be_bytes(angle_buf);
+        let magnitude = self.read_register(register::MAGNITUDE_RESULT)?;
 
         Ok(AngleReading {
             angle: crate::types::raw_to_degrees(raw_angle),
@@ -809,13 +803,24 @@ mod tests {
     #[test]
     fn read_temperature() {
         let mut expectations = init_expectations(0x22);
-        // Temperature read: 2 bytes from register 0x10
-        // raw = 17508 (0x4464) → 25.0°C
+        // Temperature read from register 0x10. raw = 17508 (0x4464) → 25.0°C.
+        // With CRC feature: 3 bytes (data + CRC); without: 2 bytes.
+        #[cfg(not(feature = "crc"))]
         expectations.push(I2cTransaction::write_read(
             0x22,
             vec![0x10],
             vec![0x44, 0x64],
         ));
+        #[cfg(feature = "crc")]
+        {
+            // CRC input: [addr<<1|W=0x44, reg=0x10, addr<<1|R=0x45, MSB=0x44, LSB=0x64]
+            let crc = super::crc8(&[0x44, 0x10, 0x45, 0x44, 0x64]);
+            expectations.push(I2cTransaction::write_read(
+                0x22,
+                vec![0x10],
+                vec![0x44, 0x64, crc],
+            ));
+        }
 
         let i2c = I2cMock::new(&expectations);
         let sensor = Tmag5273::new(i2c, DeviceVariant::B1);

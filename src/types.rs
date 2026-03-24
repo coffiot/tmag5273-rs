@@ -235,16 +235,23 @@ pub struct ConversionStatus {
     pub result_ready: bool,
 }
 
-/// Bit mask for the 3-bit set counter in `CONV_STATUS`.
-const CONV_STATUS_SET_COUNT_MASK: u8 = 0b0000_0111;
-/// Bit shift for the set counter field in `CONV_STATUS`.
-const CONV_STATUS_SET_COUNT_SHIFT: u8 = 0;
-/// Bit position of the power-on-reset flag in `CONV_STATUS`.
-const CONV_STATUS_POR_BIT: u8 = 3;
-/// Bit position of the diagnostic fail flag in `CONV_STATUS`.
-const CONV_STATUS_DIAG_BIT: u8 = 4;
-/// Bit position of the result-ready flag in `CONV_STATUS`.
-const CONV_STATUS_READY_BIT: u8 = 5;
+// CONV_STATUS register bit layout (from TI datasheet SBASAI4 Rev C):
+//   [7:5] SET_COUNT   — rolling conversion counter (3 bits)
+//   [4]   POR         — power-on-reset flag
+//   [3:2] reserved
+//   [1]   DIAG_STATUS — diagnostic self-test fail
+//   [0]   RESULT_STATUS — conversion result ready
+
+/// Bit shift for the 3-bit set counter (bits [7:5]).
+const CONV_STATUS_SET_COUNT_SHIFT: u8 = 5;
+/// Mask for the set counter AFTER shifting.
+const CONV_STATUS_SET_COUNT_MASK: u8 = 0x07;
+/// Bit position of the power-on-reset flag (bit 4).
+const CONV_STATUS_POR_BIT: u8 = 4;
+/// Bit position of the diagnostic fail flag (bit 1).
+const CONV_STATUS_DIAG_BIT: u8 = 1;
+/// Bit position of the result-ready flag (bit 0).
+const CONV_STATUS_READY_BIT: u8 = 0;
 
 impl ConversionStatus {
     /// Parses a raw `CONV_STATUS` register byte into structured fields.
@@ -569,21 +576,23 @@ mod tests {
 
     #[test]
     fn conv_status_set_count() {
-        // set_count occupies bits [2:0]
-        let s = ConversionStatus::from_reg(0b0000_0101);
+        // set_count occupies bits [7:5] — value 5 = 0b101 << 5 = 0xA0
+        let s = ConversionStatus::from_reg(0b1010_0000);
         assert_eq!(s.set_count, 5);
         assert!(!s.power_on_reset);
     }
 
     #[test]
     fn conv_status_set_count_max() {
-        let s = ConversionStatus::from_reg(0b0000_0111);
+        // 7 = 0b111 << 5 = 0xE0
+        let s = ConversionStatus::from_reg(0b1110_0000);
         assert_eq!(s.set_count, 7);
     }
 
     #[test]
     fn conv_status_power_on_reset() {
-        let s = ConversionStatus::from_reg(0b0000_1000);
+        // POR = bit 4 = 0x10
+        let s = ConversionStatus::from_reg(0b0001_0000);
         assert_eq!(s.set_count, 0);
         assert!(s.power_on_reset);
         assert!(!s.diag_fail);
@@ -592,21 +601,25 @@ mod tests {
 
     #[test]
     fn conv_status_diag_fail() {
-        let s = ConversionStatus::from_reg(0b0001_0000);
+        // DIAG_STATUS = bit 1 = 0x02
+        let s = ConversionStatus::from_reg(0b0000_0010);
         assert!(s.diag_fail);
         assert!(!s.result_ready);
     }
 
     #[test]
     fn conv_status_result_ready() {
-        let s = ConversionStatus::from_reg(0b0010_0000);
+        // RESULT_STATUS = bit 0 = 0x01
+        let s = ConversionStatus::from_reg(0b0000_0001);
         assert!(s.result_ready);
         assert!(!s.diag_fail);
     }
 
     #[test]
     fn conv_status_all_flags() {
-        let s = ConversionStatus::from_reg(0b0011_1111);
+        // SET_COUNT=7 (bits [7:5]) | POR (bit 4) | DIAG (bit 1) | RESULT (bit 0)
+        // = 0b1110_0000 | 0b0001_0000 | 0b0000_0010 | 0b0000_0001 = 0xF3
+        let s = ConversionStatus::from_reg(0b1111_0011);
         assert_eq!(s.set_count, 7);
         assert!(s.power_on_reset);
         assert!(s.diag_fail);
