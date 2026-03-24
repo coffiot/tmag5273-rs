@@ -212,8 +212,9 @@ pub(crate) const ANGLE_RESULT_MSB: u8 = 0x19;
 // 0x1A ANGLE_RESULT_LSB — implicit via burst read (MSB + 1)
 
 // ---------------------------------------------------------------------------
-// 0x1B — MAGNITUDE_RESULT (read-only)
+// 0x1B — MAGNITUDE_RESULT (read-only, used in CRC path of read_angle)
 // ---------------------------------------------------------------------------
+#[cfg_attr(not(feature = "crc"), allow(dead_code))]
 pub(crate) const MAGNITUDE_RESULT: u8 = 0x1B;
 
 // ---------------------------------------------------------------------------

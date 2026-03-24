@@ -868,9 +868,8 @@ impl<I2C: I2c> Tmag5273<I2C, Configured> {
     /// Read whether the I2C glitch filter is enabled from register
     /// `DEVICE_CONFIG_2`.
     ///
-    /// The register bit is inverted: bit 0 = filter disabled, bit 1 = filter
-    /// disabled. This getter returns `true` when the filter is enabled
-    /// (register bit == 0).
+    /// The register bit is inverted: 0 = filter enabled, 1 = filter disabled.
+    /// This getter returns `true` when the filter is enabled (register bit == 0).
     ///
     /// # Errors
     ///
