@@ -10,7 +10,11 @@ use core::marker::PhantomData;
 
 use embedded_hal::i2c::I2c;
 
-use crate::config::{AngleCalculation, Config, I2cReadMode, MagneticChannel, OperatingMode};
+use crate::config::{
+    AngleCalculation, Config, ConversionAverage, GainChannel, I2cReadMode, InterruptMode,
+    MagneticChannel, OperatingMode, PowerMode, SleepDuration, TempCoefficient, ThresholdDirection,
+    TriggerMode,
+};
 use crate::error::{Error, InitError};
 use crate::register;
 use crate::types::{
@@ -768,6 +772,423 @@ impl<I2C: I2c> Tmag5273<I2C, Configured> {
         self.set_mode(OperatingMode::Sleep)
     }
 
+    // -----------------------------------------------------------------------
+    // Configuration read-back getters
+    // -----------------------------------------------------------------------
+
+    /// Read the magnetic temperature compensation coefficient from register
+    /// `DEVICE_CONFIG_1`.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::InvalidRegisterValue`] if the register contains an
+    /// unrecognized value.
+    /// Returns [`Error::I2c`] on bus communication failure.
+    pub fn get_temp_coefficient(&mut self) -> Result<TempCoefficient, Error<I2C::Error>> {
+        let raw = self.read_register(register::DEVICE_CONFIG_1)?;
+        let val = register::extract(raw, register::MAG_TEMPCO_MASK, register::MAG_TEMPCO_SHIFT);
+        TempCoefficient::try_from(val).map_err(|_| Error::InvalidRegisterValue {
+            register: register::DEVICE_CONFIG_1,
+            value: val,
+        })
+    }
+
+    /// Read the conversion averaging mode from register `DEVICE_CONFIG_1`.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::InvalidRegisterValue`] if the register contains an
+    /// unrecognized value.
+    /// Returns [`Error::I2c`] on bus communication failure.
+    pub fn get_conversion_average(&mut self) -> Result<ConversionAverage, Error<I2C::Error>> {
+        let raw = self.read_register(register::DEVICE_CONFIG_1)?;
+        let val = register::extract(raw, register::CONV_AVG_MASK, register::CONV_AVG_SHIFT);
+        ConversionAverage::try_from(val).map_err(|_| Error::InvalidRegisterValue {
+            register: register::DEVICE_CONFIG_1,
+            value: val,
+        })
+    }
+
+    /// Read the current operating mode from register `DEVICE_CONFIG_2`.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::InvalidRegisterValue`] if the register contains an
+    /// unrecognized value.
+    /// Returns [`Error::I2c`] on bus communication failure.
+    pub fn get_operating_mode(&mut self) -> Result<OperatingMode, Error<I2C::Error>> {
+        let raw = self.read_register(register::DEVICE_CONFIG_2)?;
+        let val =
+            register::extract(raw, register::OPERATING_MODE_MASK, register::OPERATING_MODE_SHIFT);
+        OperatingMode::try_from(val).map_err(|_| Error::InvalidRegisterValue {
+            register: register::DEVICE_CONFIG_2,
+            value: val,
+        })
+    }
+
+    /// Read the power mode from register `DEVICE_CONFIG_2`.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::InvalidRegisterValue`] if the register contains an
+    /// unrecognized value.
+    /// Returns [`Error::I2c`] on bus communication failure.
+    pub fn get_power_mode(&mut self) -> Result<PowerMode, Error<I2C::Error>> {
+        let raw = self.read_register(register::DEVICE_CONFIG_2)?;
+        let val = register::extract(raw, register::LP_LN_MASK, register::LP_LN_SHIFT);
+        PowerMode::try_from(val).map_err(|_| Error::InvalidRegisterValue {
+            register: register::DEVICE_CONFIG_2,
+            value: val,
+        })
+    }
+
+    /// Read the trigger mode from register `DEVICE_CONFIG_2`.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::InvalidRegisterValue`] if the register contains an
+    /// unrecognized value.
+    /// Returns [`Error::I2c`] on bus communication failure.
+    pub fn get_trigger_mode(&mut self) -> Result<TriggerMode, Error<I2C::Error>> {
+        let raw = self.read_register(register::DEVICE_CONFIG_2)?;
+        let val =
+            register::extract(raw, register::TRIGGER_MODE_MASK, register::TRIGGER_MODE_SHIFT);
+        TriggerMode::try_from(val).map_err(|_| Error::InvalidRegisterValue {
+            register: register::DEVICE_CONFIG_2,
+            value: val,
+        })
+    }
+
+    /// Read whether the I2C glitch filter is enabled from register
+    /// `DEVICE_CONFIG_2`.
+    ///
+    /// The register bit is inverted: bit 0 = filter disabled, bit 1 = filter
+    /// disabled. This getter returns `true` when the filter is enabled
+    /// (register bit == 0).
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::I2c`] on bus communication failure.
+    pub fn get_glitch_filter(&mut self) -> Result<bool, Error<I2C::Error>> {
+        let raw = self.read_register(register::DEVICE_CONFIG_2)?;
+        Ok(register::extract(
+            raw,
+            register::I2C_GLITCH_FILTER_MASK,
+            register::I2C_GLITCH_FILTER_SHIFT,
+        ) == 0)
+    }
+
+    /// Read the threshold hysteresis value from register `DEVICE_CONFIG_2`.
+    ///
+    /// Returns the raw 3-bit hysteresis field (0--7).
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::I2c`] on bus communication failure.
+    pub fn get_hysteresis(&mut self) -> Result<u8, Error<I2C::Error>> {
+        let raw = self.read_register(register::DEVICE_CONFIG_2)?;
+        Ok(register::extract(
+            raw,
+            register::THR_HYST_MASK,
+            register::THR_HYST_SHIFT,
+        ))
+    }
+
+    /// Read the magnetic channel selection from register `SENSOR_CONFIG_1`.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::InvalidRegisterValue`] if the register contains an
+    /// unrecognized value.
+    /// Returns [`Error::I2c`] on bus communication failure.
+    pub fn get_magnetic_channels(&mut self) -> Result<MagneticChannel, Error<I2C::Error>> {
+        let raw = self.read_register(register::SENSOR_CONFIG_1)?;
+        let val = register::extract(raw, register::MAG_CH_EN_MASK, register::MAG_CH_EN_SHIFT);
+        MagneticChannel::try_from(val).map_err(|_| Error::InvalidRegisterValue {
+            register: register::SENSOR_CONFIG_1,
+            value: val,
+        })
+    }
+
+    /// Read the sleep duration from register `SENSOR_CONFIG_1`.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::InvalidRegisterValue`] if the register contains an
+    /// unrecognized value.
+    /// Returns [`Error::I2c`] on bus communication failure.
+    pub fn get_sleep_duration(&mut self) -> Result<SleepDuration, Error<I2C::Error>> {
+        let raw = self.read_register(register::SENSOR_CONFIG_1)?;
+        let val = register::extract(raw, register::SLEEPTIME_MASK, register::SLEEPTIME_SHIFT);
+        SleepDuration::try_from(val).map_err(|_| Error::InvalidRegisterValue {
+            register: register::SENSOR_CONFIG_1,
+            value: val,
+        })
+    }
+
+    /// Read the angle calculation mode from register `SENSOR_CONFIG_2`.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::InvalidRegisterValue`] if the register contains an
+    /// unrecognized value.
+    /// Returns [`Error::I2c`] on bus communication failure.
+    pub fn get_angle_calculation(&mut self) -> Result<AngleCalculation, Error<I2C::Error>> {
+        let raw = self.read_register(register::SENSOR_CONFIG_2)?;
+        let val = register::extract(raw, register::ANGLE_EN_MASK, register::ANGLE_EN_SHIFT);
+        AngleCalculation::try_from(val).map_err(|_| Error::InvalidRegisterValue {
+            register: register::SENSOR_CONFIG_2,
+            value: val,
+        })
+    }
+
+    /// Read the X/Y axis measurement range from register `SENSOR_CONFIG_2`.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::InvalidRegisterValue`] if the register contains an
+    /// unrecognized value.
+    /// Returns [`Error::I2c`] on bus communication failure.
+    pub fn get_xy_range(&mut self) -> Result<Range, Error<I2C::Error>> {
+        let raw = self.read_register(register::SENSOR_CONFIG_2)?;
+        let val = register::extract(raw, register::X_Y_RANGE_MASK, register::X_Y_RANGE_SHIFT);
+        Range::try_from(val).map_err(|_| Error::InvalidRegisterValue {
+            register: register::SENSOR_CONFIG_2,
+            value: val,
+        })
+    }
+
+    /// Read the Z axis measurement range from register `SENSOR_CONFIG_2`.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::InvalidRegisterValue`] if the register contains an
+    /// unrecognized value.
+    /// Returns [`Error::I2c`] on bus communication failure.
+    pub fn get_z_range(&mut self) -> Result<Range, Error<I2C::Error>> {
+        let raw = self.read_register(register::SENSOR_CONFIG_2)?;
+        let val = register::extract(raw, register::Z_RANGE_MASK, register::Z_RANGE_SHIFT);
+        Range::try_from(val).map_err(|_| Error::InvalidRegisterValue {
+            register: register::SENSOR_CONFIG_2,
+            value: val,
+        })
+    }
+
+    /// Read the threshold crossing direction from register `SENSOR_CONFIG_2`.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::InvalidRegisterValue`] if the register contains an
+    /// unrecognized value.
+    /// Returns [`Error::I2c`] on bus communication failure.
+    pub fn get_threshold_direction(&mut self) -> Result<ThresholdDirection, Error<I2C::Error>> {
+        let raw = self.read_register(register::SENSOR_CONFIG_2)?;
+        let val =
+            register::extract(raw, register::MAG_THR_DIR_MASK, register::MAG_THR_DIR_SHIFT);
+        ThresholdDirection::try_from(val).map_err(|_| Error::InvalidRegisterValue {
+            register: register::SENSOR_CONFIG_2,
+            value: val,
+        })
+    }
+
+    /// Read the gain channel selection from register `SENSOR_CONFIG_2`.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::InvalidRegisterValue`] if the register contains an
+    /// unrecognized value.
+    /// Returns [`Error::I2c`] on bus communication failure.
+    pub fn get_gain_channel(&mut self) -> Result<GainChannel, Error<I2C::Error>> {
+        let raw = self.read_register(register::SENSOR_CONFIG_2)?;
+        let val =
+            register::extract(raw, register::MAG_GAIN_CH_MASK, register::MAG_GAIN_CH_SHIFT);
+        GainChannel::try_from(val).map_err(|_| Error::InvalidRegisterValue {
+            register: register::SENSOR_CONFIG_2,
+            value: val,
+        })
+    }
+
+    /// Read whether the temperature channel is enabled from register
+    /// `T_CONFIG`.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::I2c`] on bus communication failure.
+    pub fn get_temperature_enabled(&mut self) -> Result<bool, Error<I2C::Error>> {
+        let raw = self.read_register(register::T_CONFIG)?;
+        Ok(register::extract(raw, register::T_CH_EN_MASK, register::T_CH_EN_SHIFT) != 0)
+    }
+
+    /// Read the temperature threshold value from register `T_CONFIG`.
+    ///
+    /// Returns the signed 7-bit threshold occupying the upper bits of
+    /// `T_CONFIG`.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::I2c`] on bus communication failure.
+    pub fn get_temperature_threshold(&mut self) -> Result<i8, Error<I2C::Error>> {
+        let raw = self.read_register(register::T_CONFIG)?;
+        let val =
+            register::extract(raw, register::T_THR_CONFIG_MASK, register::T_THR_CONFIG_SHIFT);
+        Ok(val as i8)
+    }
+
+    /// Read the interrupt routing mode from register `INT_CONFIG_1`.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::InvalidRegisterValue`] if the register contains an
+    /// unrecognized value.
+    /// Returns [`Error::I2c`] on bus communication failure.
+    pub fn get_interrupt_mode(&mut self) -> Result<InterruptMode, Error<I2C::Error>> {
+        let raw = self.read_register(register::INT_CONFIG_1)?;
+        let val = register::extract(raw, register::INT_MODE_MASK, register::INT_MODE_SHIFT);
+        InterruptMode::try_from(val).map_err(|_| Error::InvalidRegisterValue {
+            register: register::INT_CONFIG_1,
+            value: val,
+        })
+    }
+
+    /// Read whether the interrupt-on-conversion-complete flag is set from
+    /// register `INT_CONFIG_1`.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::I2c`] on bus communication failure.
+    pub fn get_interrupt_on_conversion(&mut self) -> Result<bool, Error<I2C::Error>> {
+        let raw = self.read_register(register::INT_CONFIG_1)?;
+        Ok(register::extract(raw, register::RSLT_INT_MASK, register::RSLT_INT_SHIFT) != 0)
+    }
+
+    /// Read whether the interrupt-on-threshold-crossing flag is set from
+    /// register `INT_CONFIG_1`.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::I2c`] on bus communication failure.
+    pub fn get_interrupt_on_threshold(&mut self) -> Result<bool, Error<I2C::Error>> {
+        let raw = self.read_register(register::INT_CONFIG_1)?;
+        Ok(register::extract(
+            raw,
+            register::THRESHOLD_INT_MASK,
+            register::THRESHOLD_INT_SHIFT,
+        ) != 0)
+    }
+
+    /// Read the INT pin assertion behavior from register `INT_CONFIG_1`.
+    ///
+    /// Returns `true` for pulsed mode, `false` for latched mode.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::I2c`] on bus communication failure.
+    pub fn get_interrupt_pin_state(&mut self) -> Result<bool, Error<I2C::Error>> {
+        let raw = self.read_register(register::INT_CONFIG_1)?;
+        Ok(register::extract(raw, register::INT_STATE_MASK, register::INT_STATE_SHIFT) != 0)
+    }
+
+    /// Read whether the interrupt pin output is masked from register
+    /// `INT_CONFIG_1`.
+    ///
+    /// Returns `true` when the INT output is disabled (masked).
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::I2c`] on bus communication failure.
+    pub fn get_interrupt_mask(&mut self) -> Result<bool, Error<I2C::Error>> {
+        let raw = self.read_register(register::INT_CONFIG_1)?;
+        Ok(register::extract(raw, register::MASK_INTB_MASK, register::MASK_INTB_SHIFT) != 0)
+    }
+
+    /// Read the X-axis threshold value from register `X_THR_CONFIG`.
+    ///
+    /// Returns the full register byte interpreted as a signed threshold.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::I2c`] on bus communication failure.
+    pub fn get_x_threshold(&mut self) -> Result<i8, Error<I2C::Error>> {
+        let raw = self.read_register(register::X_THR_CONFIG)?;
+        Ok(raw as i8)
+    }
+
+    /// Read the Y-axis threshold value from register `Y_THR_CONFIG`.
+    ///
+    /// Returns the full register byte interpreted as a signed threshold.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::I2c`] on bus communication failure.
+    pub fn get_y_threshold(&mut self) -> Result<i8, Error<I2C::Error>> {
+        let raw = self.read_register(register::Y_THR_CONFIG)?;
+        Ok(raw as i8)
+    }
+
+    /// Read the Z-axis threshold value from register `Z_THR_CONFIG`.
+    ///
+    /// Returns the full register byte interpreted as a signed threshold.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::I2c`] on bus communication failure.
+    pub fn get_z_threshold(&mut self) -> Result<i8, Error<I2C::Error>> {
+        let raw = self.read_register(register::Z_THR_CONFIG)?;
+        Ok(raw as i8)
+    }
+
+    /// Read the magnetic gain adjustment value from register
+    /// `MAG_GAIN_CONFIG`.
+    ///
+    /// Returns the raw 8-bit gain value.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::I2c`] on bus communication failure.
+    pub fn get_magnetic_gain(&mut self) -> Result<u8, Error<I2C::Error>> {
+        Ok(self.read_register(register::MAG_GAIN_CONFIG)?)
+    }
+
+    /// Read the first magnetic offset value from register
+    /// `MAG_OFFSET_CONFIG_1`.
+    ///
+    /// Returns the full register byte interpreted as a signed offset.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::I2c`] on bus communication failure.
+    pub fn get_magnetic_offset_1(&mut self) -> Result<i8, Error<I2C::Error>> {
+        let raw = self.read_register(register::MAG_OFFSET_CONFIG_1)?;
+        Ok(raw as i8)
+    }
+
+    /// Read the second magnetic offset value from register
+    /// `MAG_OFFSET_CONFIG_2`.
+    ///
+    /// Returns the full register byte interpreted as a signed offset.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::I2c`] on bus communication failure.
+    pub fn get_magnetic_offset_2(&mut self) -> Result<i8, Error<I2C::Error>> {
+        let raw = self.read_register(register::MAG_OFFSET_CONFIG_2)?;
+        Ok(raw as i8)
+    }
+
+    /// Read the conversion status register (`CONV_STATUS`, 0x18).
+    ///
+    /// Returns a parsed [`ConversionStatus`] containing the rolling set
+    /// counter, power-on-reset flag, diagnostic status, and result-ready
+    /// flag.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::I2c`] on bus communication failure.
+    pub fn read_conversion_status(&mut self) -> Result<ConversionStatus, Error<I2C::Error>> {
+        let raw = self.read_register(register::CONV_STATUS)?;
+        Ok(ConversionStatus::from_reg(raw))
+    }
+
     /// Release the I2C bus, consuming the driver.
     ///
     /// The sensor is left in whatever operating mode it was in. Call
@@ -1516,5 +1937,85 @@ mod tests {
         // 0x00 XOR 0xFF = 0xFF, shift through poly 8 times.
         // The exact value depends on the polynomial — just verify non-zero.
         assert_ne!(c0, 0);
+    }
+
+    // -- Phase 4: Configuration read-back getters ----------------------------
+
+    #[test]
+    fn get_operating_mode_reads_correct_value() {
+        let address = 0x22u8;
+        let mut expectations = init_expectations(address);
+
+        // DEVICE_CONFIG_2 with operating_mode = WakeUpAndSleep (0b11) in
+        // bits [1:0], plus LP_LN=1 (bit 4) to verify field isolation.
+        // Register value: 0b0001_0011 = 0x13
+        expectations.push(I2cTransaction::write_read(
+            address,
+            vec![0x01],
+            vec![0x13],
+        ));
+
+        let i2c = I2cMock::new(&expectations);
+        let sensor = Tmag5273::new(i2c, DeviceVariant::B1);
+        let config = ConfigBuilder::new().build().unwrap();
+        let mut sensor = sensor.init(&config).unwrap();
+
+        let mode = sensor.get_operating_mode().unwrap();
+        assert_eq!(mode, OperatingMode::WakeUpAndSleep);
+
+        sensor.into_inner().done();
+    }
+
+    #[test]
+    fn get_magnetic_channels_reads_correct_value() {
+        let address = 0x22u8;
+        let mut expectations = init_expectations(address);
+
+        // SENSOR_CONFIG_1 with MAG_CH_EN = XYZ (0x7) in bits [7:4],
+        // SLEEPTIME = Ms5 (0x1) in bits [3:0].
+        // Register value: 0b0111_0001 = 0x71
+        expectations.push(I2cTransaction::write_read(
+            address,
+            vec![0x02],
+            vec![0x71],
+        ));
+
+        let i2c = I2cMock::new(&expectations);
+        let sensor = Tmag5273::new(i2c, DeviceVariant::B1);
+        let config = ConfigBuilder::new().build().unwrap();
+        let mut sensor = sensor.init(&config).unwrap();
+
+        let channels = sensor.get_magnetic_channels().unwrap();
+        assert_eq!(channels, MagneticChannel::XYZ);
+
+        sensor.into_inner().done();
+    }
+
+    #[test]
+    fn read_conversion_status_parses_all_fields() {
+        let address = 0x22u8;
+        let mut expectations = init_expectations(address);
+
+        // CONV_STATUS with SET_COUNT=5 (bits [7:5] = 0b101), POR=1 (bit 4),
+        // DIAG=1 (bit 1), RESULT=1 (bit 0).
+        // 0b1011_0011 = 0xB3
+        expectations.push(I2cTransaction::write_read(
+            address,
+            vec![0x18],
+            vec![0xB3],
+        ));
+
+        let i2c = I2cMock::new(&expectations);
+        let sensor = Tmag5273::new(i2c, DeviceVariant::B1);
+        let config = ConfigBuilder::new().build().unwrap();
+        let mut sensor = sensor.init(&config).unwrap();
+
+        let status = sensor.read_conversion_status().unwrap();
+        assert_eq!(status.set_count, 5);
+        assert!(status.power_on_reset);
+        assert!(status.diag_fail);
+        assert!(status.result_ready);
+
+        sensor.into_inner().done();
     }
 }
