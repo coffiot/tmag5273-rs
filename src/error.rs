@@ -86,6 +86,13 @@ pub enum Error<E> {
 // From<E> — enables `?` on raw I2C calls
 // ---------------------------------------------------------------------------
 
+/// Blanket conversion from any I2C bus error into [`Error::I2c`].
+///
+/// This enables the `?` operator on raw `I2C::Error` values inside driver
+/// methods. The trade-off is that Rust's coherence rules prevent adding
+/// additional `impl<E> From<OtherError> for Error<E>` conversions in the
+/// future — this is intentional, as all non-I2C error variants are
+/// constructed explicitly by the driver.
 impl<E> From<E> for Error<E> {
     #[inline]
     fn from(e: E) -> Self {

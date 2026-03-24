@@ -46,12 +46,12 @@ pub use device::{Configured, Tmag5273, Unconfigured};
 pub use error::{Error, InitError};
 pub use types::{
     AngleReading, Celsius, ConversionStatus, Degrees, DeviceStatus, DeviceVariant, MagneticReading,
-    MilliTesla,
+    MilliTesla, Range,
 };
 
 // Re-export config enums for consumer use
 pub use config::{
     AngleCalculation, CalibrationConfig, ConversionAverage, GainChannel, IntPinBehavior,
-    InterruptConfig, InterruptMode, MagneticChannel, OperatingMode, PowerMode, Range,
-    SleepDuration, TempCoefficient, ThresholdConfig, ThresholdDirection, TriggerMode,
+    InterruptConfig, InterruptMode, MagneticChannel, OperatingMode, PowerMode, SleepDuration,
+    TempCoefficient, ThresholdConfig, ThresholdDirection, TriggerMode,
 };

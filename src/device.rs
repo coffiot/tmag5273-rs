@@ -10,7 +10,7 @@ use core::marker::PhantomData;
 
 use embedded_hal::i2c::I2c;
 
-use crate::config::{Config, MagneticChannel, OperatingMode};
+use crate::config::{AngleCalculation, Config, MagneticChannel, OperatingMode};
 use crate::error::{Error, InitError};
 use crate::register;
 use crate::types::{
@@ -59,6 +59,7 @@ pub struct Tmag5273<I2C, State = Unconfigured> {
     xy_range: Range,
     z_range: Range,
     channels: MagneticChannel,
+    angle_enabled: bool,
     max_polls: u16,
     _state: PhantomData<State>,
 }
@@ -72,10 +73,10 @@ impl<I2C, State> fmt::Debug for Tmag5273<I2C, State> {
     }
 }
 
-// Compile-time size assertion — should be ~12 bytes on ESP32 (I2C handle ~4 bytes + fields).
+// Compile-time size assertion — should be ~14 bytes on ESP32 (I2C handle ~4 bytes + fields).
 const _: () = assert!(
-    core::mem::size_of::<Tmag5273<[u8; 4], Configured>>() <= 16,
-    "Tmag5273 struct exceeds 16-byte budget (excluding I2C handle)"
+    core::mem::size_of::<Tmag5273<[u8; 4], Configured>>() <= 18,
+    "Tmag5273 struct exceeds 18-byte budget (excluding I2C handle)"
 );
 
 // ---------------------------------------------------------------------------
@@ -94,6 +95,7 @@ impl<I2C: I2c> Tmag5273<I2C, Unconfigured> {
             xy_range: Range::Low,
             z_range: Range::Low,
             channels: MagneticChannel::Off,
+            angle_enabled: false,
             max_polls: 10,
             _state: PhantomData,
         }
@@ -103,7 +105,15 @@ impl<I2C: I2c> Tmag5273<I2C, Unconfigured> {
     ///
     /// Use this when the sensor's address has been changed from the factory
     /// default.
+    ///
+    /// # Panics
+    ///
+    /// Panics in debug mode if `address > 0x7F` (I2C addresses are 7-bit).
     pub fn new_with_address(i2c: I2C, variant: DeviceVariant, address: u8) -> Self {
+        debug_assert!(
+            address <= 0x7F,
+            "I2C address must be 7-bit (0x00-0x7F), got 0x{address:02X}"
+        );
         Self {
             address,
             i2c,
@@ -111,6 +121,7 @@ impl<I2C: I2c> Tmag5273<I2C, Unconfigured> {
             xy_range: Range::Low,
             z_range: Range::Low,
             channels: MagneticChannel::Off,
+            angle_enabled: false,
             max_polls: 10,
             _state: PhantomData,
         }
@@ -142,6 +153,7 @@ impl<I2C: I2c> Tmag5273<I2C, Unconfigured> {
             xy_range: config.xy_range,
             z_range: config.z_range,
             channels: config.magnetic_channels,
+            angle_enabled: !matches!(config.angle_calculation, AngleCalculation::None),
             max_polls: config.max_polls,
             _state: PhantomData,
         })
@@ -150,10 +162,13 @@ impl<I2C: I2c> Tmag5273<I2C, Unconfigured> {
     /// Inner init logic — returns `Error` for easier `?` usage, wrapped by
     /// `init()` into `InitError`.
     fn init_inner(&mut self, config: &Config) -> Result<(), Error<I2C::Error>> {
-        // 1. Read and verify manufacturer ID (registers 0x0E + 0x0F) = 0x5449
-        let id_lsb = self.read_register(register::MANUFACTURER_ID_LSB)?;
-        let id_msb = self.read_register(register::MANUFACTURER_ID_MSB)?;
-        let manufacturer_id = u16::from(id_msb) << 8 | u16::from(id_lsb);
+        // 1. Read and verify manufacturer ID (registers 0x0E + 0x0F) = 0x5449.
+        // Single 2-byte burst read starting at MANUFACTURER_ID_LSB — the two
+        // ID registers are consecutive, so this halves the I2C transactions.
+        let mut id_buf = [0u8; 2];
+        self.i2c
+            .write_read(self.address, &[register::MANUFACTURER_ID_LSB], &mut id_buf)?;
+        let manufacturer_id = u16::from(id_buf[1]) << 8 | u16::from(id_buf[0]);
 
         if manufacturer_id != register::MANUFACTURER_ID_EXPECTED {
             return Err(Error::InvalidManufacturerId(manufacturer_id));
@@ -170,18 +185,27 @@ impl<I2C: I2c> Tmag5273<I2C, Unconfigured> {
             });
         }
 
-        // 3. Write configuration registers (optimized: one write per register)
-        for (addr, value) in config.to_register_writes() {
-            self.write_register(addr, value)?;
-        }
+        // 3. Write configuration registers.
+        // Registers 0x00-0x03 (DEVICE_CONFIG_1 through SENSOR_CONFIG_2) are
+        // consecutive — write as a single 5-byte I2C transaction (address +
+        // 4 data bytes) to halve the bus overhead.
+        let writes = config.to_register_writes();
+        self.i2c.write(
+            self.address,
+            &[
+                register::DEVICE_CONFIG_1,
+                writes[0].1,
+                writes[1].1,
+                writes[2].1,
+                writes[3].1,
+            ],
+        )?;
+        // T_CONFIG (0x07) is not contiguous with 0x03 — separate write.
+        self.write_register(writes[4].0, writes[4].1)?;
 
-        // 4. Read and check device status for hardware faults
-        let status_byte = self.read_register(register::DEVICE_STATUS)?;
-        let status = DeviceStatus::from_reg(status_byte);
-        if status.oscillator_error || status.otp_crc_error || status.vcc_undervoltage {
-            // A device fault is not a driver error — the sensor itself reports
-            // a problem. We proceed but the caller can check status later.
-        }
+        // 4. Read device status — hardware faults are not driver errors.
+        // The caller can inspect status via `read_status()` after init.
+        let _status_byte = self.read_register(register::DEVICE_STATUS)?;
 
         // 5. Clear POR flag by reading CONV_STATUS
         let _ = self.read_register(register::CONV_STATUS)?;
@@ -199,6 +223,12 @@ impl<I2C: I2c> Tmag5273<I2C, Configured> {
     ///
     /// Uses a burst read (6 bytes) for data coherence and speed.
     /// Disabled channels return `None`.
+    ///
+    /// **CRC limitation:** Even when the `crc` feature is enabled, this
+    /// method does **not** validate CRC on the magnetic burst read. The
+    /// TMAG5273 CRC scheme operates on 2-byte register-pair reads, not
+    /// 6-byte bursts. CRC validation covers temperature and angle reads
+    /// only (via [`read_register_pair`](Self::read_temperature)).
     ///
     /// # Errors
     ///
@@ -248,20 +278,47 @@ impl<I2C: I2c> Tmag5273<I2C, Configured> {
 
     /// Read the CORDIC angle calculation result.
     ///
-    /// Requires angle calculation to be enabled in the configuration.
+    /// Requires angle calculation to be enabled in the configuration
+    /// (any [`AngleCalculation`] variant other than `None`).
     ///
     /// # Errors
     ///
+    /// Returns [`Error::AngleRequiresTwoChannels`] if angle calculation was
+    /// not enabled during initialization.
     /// Returns [`Error::I2c`] on bus communication failure.
     pub fn read_angle(&mut self) -> Result<AngleReading, Error<I2C::Error>> {
-        let angle_buf = self.read_register_pair(register::ANGLE_RESULT_MSB)?;
-        let raw_angle = u16::from_be_bytes(angle_buf);
-        let magnitude = self.read_register(register::MAGNITUDE_RESULT)?;
+        if !self.angle_enabled {
+            return Err(Error::AngleRequiresTwoChannels);
+        }
 
-        Ok(AngleReading {
-            angle: crate::types::raw_to_degrees(raw_angle),
-            magnitude,
-        })
+        // Without CRC, read all 3 registers (ANGLE_MSB, ANGLE_LSB,
+        // MAGNITUDE) in a single burst — they are consecutive.
+        #[cfg(not(feature = "crc"))]
+        {
+            let mut buf = [0u8; 3];
+            self.i2c
+                .write_read(self.address, &[register::ANGLE_RESULT_MSB], &mut buf)?;
+            let raw_angle = u16::from_be_bytes([buf[0], buf[1]]);
+            let magnitude = buf[2];
+            Ok(AngleReading {
+                angle: crate::types::raw_to_degrees(raw_angle),
+                magnitude,
+            })
+        }
+
+        // With CRC, use the existing 2-call approach — `read_register_pair`
+        // validates the CRC over the angle register pair, and the magnitude
+        // is a separate single-byte read.
+        #[cfg(feature = "crc")]
+        {
+            let angle_buf = self.read_register_pair(register::ANGLE_RESULT_MSB)?;
+            let raw_angle = u16::from_be_bytes(angle_buf);
+            let magnitude = self.read_register(register::MAGNITUDE_RESULT)?;
+            Ok(AngleReading {
+                angle: crate::types::raw_to_degrees(raw_angle),
+                magnitude,
+            })
+        }
     }
 
     /// Switch the operating mode at runtime.
@@ -509,8 +566,9 @@ impl<I2C: I2c> Tmag5273<I2C, Configured> {
     ///
     /// Returns [`Error::I2c`] if the initial write to register 0x0C fails.
     pub fn change_address(&mut self, new_address: u8) -> Result<(), Error<I2C::Error>> {
-        // Reject addresses outside valid 7-bit I2C range.
-        if new_address > 0x7F {
+        // Reject addresses outside the usable 7-bit I2C range.
+        // 0x00-0x07 and 0x78-0x7F are reserved by the I2C specification.
+        if !(0x08..=0x77).contains(&new_address) {
             return Err(Error::AddressChangeFailed { new_address });
         }
 
@@ -714,18 +772,14 @@ mod tests {
     /// Helper: create mock expectations for a successful init sequence.
     fn init_expectations(address: u8) -> Vec<I2cTransaction> {
         vec![
-            // Read manufacturer ID LSB (0x0E) → 0x49
-            I2cTransaction::write_read(address, vec![0x0E], vec![0x49]),
-            // Read manufacturer ID MSB (0x0F) → 0x54
-            I2cTransaction::write_read(address, vec![0x0F], vec![0x54]),
+            // Burst read manufacturer ID (0x0E..=0x0F) → [LSB=0x49, MSB=0x54]
+            I2cTransaction::write_read(address, vec![0x0E], vec![0x49, 0x54]),
             // Read device ID (0x0D) → version 1
             I2cTransaction::write_read(address, vec![0x0D], vec![0x01]),
-            // Write 5 config registers
-            I2cTransaction::write(address, vec![0x00, 0x00]), // DEVICE_CONFIG_1
-            I2cTransaction::write(address, vec![0x01, 0x02]), // DEVICE_CONFIG_2 (continuous)
-            I2cTransaction::write(address, vec![0x02, 0x70]), // SENSOR_CONFIG_1 (XYZ)
-            I2cTransaction::write(address, vec![0x03, 0x03]), // SENSOR_CONFIG_2 (high range)
-            I2cTransaction::write(address, vec![0x07, 0x01]), // T_CONFIG (temp enabled)
+            // Burst write config registers 0x00-0x03
+            I2cTransaction::write(address, vec![0x00, 0x00, 0x02, 0x70, 0x03]),
+            // Separate write for T_CONFIG (0x07)
+            I2cTransaction::write(address, vec![0x07, 0x01]),
             // Read device status
             I2cTransaction::write_read(address, vec![0x1C], vec![0x00]),
             // Read conv status (clear POR)
@@ -745,9 +799,8 @@ mod tests {
     #[test]
     fn init_wrong_manufacturer_id_returns_bus() {
         let expectations = vec![
-            // Return wrong manufacturer ID
-            I2cTransaction::write_read(0x22, vec![0x0E], vec![0x00]),
-            I2cTransaction::write_read(0x22, vec![0x0F], vec![0x00]),
+            // Burst read manufacturer ID — return wrong ID
+            I2cTransaction::write_read(0x22, vec![0x0E], vec![0x00, 0x00]),
         ];
         let i2c = I2cMock::new(&expectations);
         let sensor = Tmag5273::new(i2c, DeviceVariant::B1);
@@ -762,8 +815,8 @@ mod tests {
     #[test]
     fn init_wrong_version_returns_bus() {
         let expectations = vec![
-            I2cTransaction::write_read(0x22, vec![0x0E], vec![0x49]),
-            I2cTransaction::write_read(0x22, vec![0x0F], vec![0x54]),
+            // Burst read manufacturer ID — correct
+            I2cTransaction::write_read(0x22, vec![0x0E], vec![0x49, 0x54]),
             // Return version 2 when B1 expects version 1
             I2cTransaction::write_read(0x22, vec![0x0D], vec![0x02]),
         ];
@@ -849,16 +902,21 @@ mod tests {
             .unwrap();
 
         // Build init expectations dynamically from config
+        let writes = config.to_register_writes();
         let mut expectations = vec![
-            I2cTransaction::write_read(address, vec![0x0E], vec![0x49]),
-            I2cTransaction::write_read(address, vec![0x0F], vec![0x54]),
+            // Burst manufacturer ID read
+            I2cTransaction::write_read(address, vec![0x0E], vec![0x49, 0x54]),
             I2cTransaction::write_read(address, vec![0x0D], vec![0x01]),
+            // Burst write registers 0x00-0x03
+            I2cTransaction::write(
+                address,
+                vec![0x00, writes[0].1, writes[1].1, writes[2].1, writes[3].1],
+            ),
+            // Separate T_CONFIG write
+            I2cTransaction::write(address, vec![writes[4].0, writes[4].1]),
+            I2cTransaction::write_read(address, vec![0x1C], vec![0x00]),
+            I2cTransaction::write_read(address, vec![0x18], vec![0x00]),
         ];
-        for (reg, val) in config.to_register_writes() {
-            expectations.push(I2cTransaction::write(address, vec![reg, val]));
-        }
-        expectations.push(I2cTransaction::write_read(address, vec![0x1C], vec![0x00]));
-        expectations.push(I2cTransaction::write_read(address, vec![0x18], vec![0x00]));
 
         // trigger_conversion: read-modify-write on DEVICE_CONFIG_2
         let dc2_value = config

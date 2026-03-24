@@ -5,8 +5,7 @@
 //! Use [`ConfigBuilder`] to construct a validated [`Config`], then pass it to
 //! [`Tmag5273::init`](crate::Tmag5273).
 
-// Re-export Range from types — it is the canonical definition
-pub use crate::types::Range;
+use crate::types::Range;
 
 // Placeholder — will be filled in Phase 2
 // All config enums, ConfigBuilder, Config, and validation go here.
@@ -508,16 +507,6 @@ impl ConfigBuilder {
         self
     }
 
-    /// Enable CRC-8 validation on I2C reads.
-    ///
-    /// When the `crc` feature is compiled in, CRC is always active on reads.
-    /// This builder method is a no-op kept for API discoverability — the
-    /// `crc` Cargo feature alone controls CRC behavior.
-    #[cfg(feature = "crc")]
-    pub fn crc_enable(self, _enable: bool) -> Self {
-        self
-    }
-
     /// Validate and build the [`Config`].
     ///
     /// # Errors
@@ -698,7 +687,10 @@ pub struct ThresholdConfig {
     pub z: i8,
     /// Temperature threshold (signed, upper 7 bits of T_CONFIG).
     pub temperature: i8,
-    /// Hysteresis level (0–7). Higher values reduce noise sensitivity.
+    /// Hysteresis level (3-bit field). Higher values reduce noise sensitivity.
+    ///
+    /// Valid range: 0--7. Values above 7 are silently clamped to 3 bits
+    /// (`& 0x07`) when written to the device register.
     pub hysteresis: u8,
     /// Whether to trigger on field above or below the threshold.
     pub direction: ThresholdDirection,
