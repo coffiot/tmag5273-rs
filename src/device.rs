@@ -629,6 +629,70 @@ impl<I2C: I2c, State> Tmag5273<I2C, State> {
         self.i2c.write(self.address, &[reg, value])?;
         Ok(())
     }
+
+    /// Read a register pair (MSB + LSB) and return as `i16` (big-endian).
+    ///
+    /// When the `crc` feature is enabled, reads 3 bytes (MSB + LSB + CRC)
+    /// and validates the CRC-8 checksum. Without the feature, reads 2 bytes.
+    #[cfg(not(feature = "crc"))]
+    fn read_register_pair(&mut self, reg: u8) -> Result<[u8; 2], Error<I2C::Error>> {
+        let mut buf = [0u8; 2];
+        self.i2c.write_read(self.address, &[reg], &mut buf)?;
+        Ok(buf)
+    }
+
+    /// Read a register pair with CRC-8 validation.
+    ///
+    /// Reads 3 bytes: MSB, LSB, CRC. Validates the CRC over `[address_W, reg, address_R, MSB, LSB]`
+    /// per TI datasheet Section 7.5.3.2.
+    #[cfg(feature = "crc")]
+    fn read_register_pair(&mut self, reg: u8) -> Result<[u8; 2], Error<I2C::Error>> {
+        let mut buf = [0u8; 3]; // MSB + LSB + CRC
+        self.i2c.write_read(self.address, &[reg], &mut buf)?;
+
+        // CRC is computed over the full I2C transaction bytes:
+        // [device_addr << 1 | W, register_addr, device_addr << 1 | R, data_MSB, data_LSB]
+        let crc_input = [
+            self.address << 1,       // address + write bit
+            reg,                     // register address
+            (self.address << 1) | 1, // address + read bit
+            buf[0],                  // data MSB
+            buf[1],                  // data LSB
+        ];
+        let computed = crc8(&crc_input);
+        let expected = buf[2];
+
+        if computed != expected {
+            return Err(Error::CrcMismatch { expected, computed });
+        }
+
+        Ok([buf[0], buf[1]])
+    }
+}
+
+// ---------------------------------------------------------------------------
+// CRC-8 (feature-gated)
+// ---------------------------------------------------------------------------
+
+/// Compute CRC-8 with polynomial 0x07 and initial value 0xFF.
+///
+/// This is the CRC algorithm specified in the TMAG5273 datasheet for I2C
+/// data integrity validation. Bitwise implementation — no lookup table
+/// (the TMAG5273 CRCs at most 5 bytes per transaction).
+#[cfg(feature = "crc")]
+fn crc8(data: &[u8]) -> u8 {
+    let mut crc: u8 = 0xFF;
+    for &byte in data {
+        crc ^= byte;
+        for _ in 0..8 {
+            crc = if crc & 0x80 != 0 {
+                (crc << 1) ^ 0x07
+            } else {
+                crc << 1
+            };
+        }
+    }
+    crc
 }
 
 // ---------------------------------------------------------------------------
@@ -1044,5 +1108,36 @@ mod tests {
         );
 
         sensor.into_inner().done();
+    }
+
+    // -- CRC-8 ---------------------------------------------------------------
+
+    #[cfg(feature = "crc")]
+    #[test]
+    fn crc8_empty_is_init_value() {
+        assert_eq!(super::crc8(&[]), 0xFF);
+    }
+
+    #[cfg(feature = "crc")]
+    #[test]
+    fn crc8_deterministic_and_order_dependent() {
+        let a = super::crc8(&[0x01, 0x02]);
+        let b = super::crc8(&[0x02, 0x01]);
+        assert_ne!(a, b, "CRC must be order-dependent");
+
+        // Same input produces same output.
+        assert_eq!(super::crc8(&[0x01, 0x02]), a);
+    }
+
+    #[cfg(feature = "crc")]
+    #[test]
+    fn crc8_single_byte_values() {
+        // Just verify these don't panic and produce non-trivial results.
+        let c0 = super::crc8(&[0x00]);
+        let c1 = super::crc8(&[0xFF]);
+        assert_ne!(c0, c1);
+        // 0x00 XOR 0xFF = 0xFF, shift through poly 8 times.
+        // The exact value depends on the polynomial — just verify non-zero.
+        assert_ne!(c0, 0);
     }
 }
