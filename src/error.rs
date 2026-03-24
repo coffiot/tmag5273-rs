@@ -80,6 +80,22 @@ pub enum Error<E> {
         /// The new address that was written to the device.
         new_address: u8,
     },
+
+    /// A register returned a value that does not map to any known enum variant.
+    #[error("register 0x{register:02X} returned invalid value 0x{value:02X}")]
+    InvalidRegisterValue {
+        /// The register address that was read.
+        register: u8,
+        /// The raw value that could not be decoded.
+        value: u8,
+    },
+
+    /// High-level read methods require Standard I2C read mode.
+    #[error("read methods require Standard I2C mode, current mode is 0x{mode:02X}")]
+    NonStandardReadMode {
+        /// The current I2C read mode that is incompatible.
+        mode: u8,
+    },
 }
 
 // ---------------------------------------------------------------------------
@@ -207,6 +223,33 @@ mod tests {
     fn variant_sleep_duration_required() {
         let err: Error<FakeI2cError> = Error::SleepDurationRequired;
         assert_eq!(err, Error::SleepDurationRequired);
+    }
+
+    #[test]
+    fn variant_address_change_failed() {
+        let err: Error<FakeI2cError> = Error::AddressChangeFailed { new_address: 0x30 };
+        assert_eq!(err, Error::AddressChangeFailed { new_address: 0x30 });
+    }
+
+    #[test]
+    fn variant_invalid_register_value() {
+        let err: Error<FakeI2cError> = Error::InvalidRegisterValue {
+            register: 0x00,
+            value: 0xFF,
+        };
+        assert_eq!(
+            err,
+            Error::InvalidRegisterValue {
+                register: 0x00,
+                value: 0xFF,
+            }
+        );
+    }
+
+    #[test]
+    fn variant_non_standard_read_mode() {
+        let err: Error<FakeI2cError> = Error::NonStandardReadMode { mode: 0x01 };
+        assert_eq!(err, Error::NonStandardReadMode { mode: 0x01 });
     }
 
     #[test]

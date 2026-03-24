@@ -52,7 +52,7 @@ pub use types::{
 
 // Re-export config enums for consumer use
 pub use config::{
-    AngleCalculation, CalibrationConfig, ConversionAverage, GainChannel, IntPinBehavior,
-    InterruptConfig, InterruptMode, MagneticChannel, OperatingMode, PowerMode, SleepDuration,
-    TempCoefficient, ThresholdConfig, ThresholdDirection, TriggerMode,
+    AngleCalculation, CalibrationConfig, ConversionAverage, GainChannel, I2cReadMode,
+    IntPinBehavior, InterruptConfig, InterruptMode, MagneticChannel, OperatingMode, PowerMode,
+    SleepDuration, TempCoefficient, ThresholdConfig, ThresholdDirection, TriggerMode,
 };

@@ -7,6 +7,38 @@
 
 use crate::types::Range;
 
+/// I2C read mode for the TMAG5273.
+///
+/// Controls how the sensor formats I2C read responses. All high-level
+/// read methods ([`read_magnetic`](crate::Tmag5273::read_magnetic),
+/// [`read_temperature`](crate::Tmag5273::read_temperature),
+/// [`read_angle`](crate::Tmag5273::read_angle)) require
+/// [`Standard`](Self::Standard) mode.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[cfg_attr(feature = "defmt", derive(defmt::Format))]
+#[repr(u8)]
+pub enum I2cReadMode {
+    /// Standard 3-byte read (register address + 2 data bytes). Default.
+    Standard = 0x00,
+    /// 1-byte read returning 16-bit sensor data + conversion status.
+    OneByte16Bit = 0x01,
+    /// 1-byte read returning 8-bit MSB data + conversion status.
+    OneByte8Bit = 0x02,
+}
+
+impl TryFrom<u8> for I2cReadMode {
+    type Error = u8;
+
+    fn try_from(val: u8) -> Result<Self, u8> {
+        match val {
+            0x00 => Ok(Self::Standard),
+            0x01 => Ok(Self::OneByte16Bit),
+            0x02 => Ok(Self::OneByte8Bit),
+            other => Err(other),
+        }
+    }
+}
+
 /// Operating mode for the TMAG5273.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 #[cfg_attr(feature = "defmt", derive(defmt::Format))]
@@ -558,7 +590,24 @@ impl Config {
         use crate::register;
 
         // DEVICE_CONFIG_1 (0x00)
+        //
+        // CRC_EN (bit 7): set when the `crc` Cargo feature is active so the
+        // sensor sends a CRC byte on every 2-byte read. Cleared otherwise to
+        // avoid the extra byte that the non-CRC read path does not expect.
+        //
+        // I2C_RD (bits 1:0): always Standard (0x00) — the driver's high-level
+        // read methods rely on standard 3-byte I2C responses.
+        #[cfg(feature = "crc")]
+        let crc_en: u8 = 1;
+        #[cfg(not(feature = "crc"))]
+        let crc_en: u8 = 0;
+
         let dc1 = register::insert(
+            0,
+            register::CRC_EN_MASK,
+            register::CRC_EN_SHIFT,
+            crc_en,
+        ) | register::insert(
             0,
             register::MAG_TEMPCO_MASK,
             register::MAG_TEMPCO_SHIFT,
@@ -568,6 +617,11 @@ impl Config {
             register::CONV_AVG_MASK,
             register::CONV_AVG_SHIFT,
             self.conversion_average as u8,
+        ) | register::insert(
+            0,
+            register::I2C_RD_MASK,
+            register::I2C_RD_SHIFT,
+            I2cReadMode::Standard as u8,
         );
 
         // DEVICE_CONFIG_2 (0x01)
@@ -1132,6 +1186,23 @@ mod tests {
     fn gain_channel_try_from_invalid() {
         assert_eq!(GainChannel::try_from(2), Err(2));
         assert_eq!(GainChannel::try_from(0xFF), Err(0xFF));
+    }
+
+    #[test]
+    fn i2c_read_mode_try_from_round_trip() {
+        for variant in [
+            I2cReadMode::Standard,
+            I2cReadMode::OneByte16Bit,
+            I2cReadMode::OneByte8Bit,
+        ] {
+            assert_eq!(I2cReadMode::try_from(variant as u8), Ok(variant));
+        }
+    }
+
+    #[test]
+    fn i2c_read_mode_try_from_invalid() {
+        assert_eq!(I2cReadMode::try_from(0x03), Err(0x03));
+        assert_eq!(I2cReadMode::try_from(0xFF), Err(0xFF));
     }
 
     #[test]

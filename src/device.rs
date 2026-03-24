@@ -10,7 +10,7 @@ use core::marker::PhantomData;
 
 use embedded_hal::i2c::I2c;
 
-use crate::config::{AngleCalculation, Config, MagneticChannel, OperatingMode};
+use crate::config::{AngleCalculation, Config, I2cReadMode, MagneticChannel, OperatingMode};
 use crate::error::{Error, InitError};
 use crate::register;
 use crate::types::{
@@ -61,6 +61,10 @@ pub struct Tmag5273<I2C, State = Unconfigured> {
     channels: MagneticChannel,
     angle_enabled: bool,
     max_polls: u16,
+    /// Tracked for future read-mode guards (Phase 2+); currently always
+    /// [`I2cReadMode::Standard`].
+    #[allow(dead_code)]
+    read_mode: I2cReadMode,
     _state: PhantomData<State>,
 }
 
@@ -73,10 +77,10 @@ impl<I2C, State> fmt::Debug for Tmag5273<I2C, State> {
     }
 }
 
-// Compile-time size assertion — should be ~14 bytes on ESP32 (I2C handle ~4 bytes + fields).
+// Compile-time size assertion — should be ~15 bytes on ESP32 (I2C handle ~4 bytes + fields).
 const _: () = assert!(
-    core::mem::size_of::<Tmag5273<[u8; 4], Configured>>() <= 18,
-    "Tmag5273 struct exceeds 18-byte budget (excluding I2C handle)"
+    core::mem::size_of::<Tmag5273<[u8; 4], Configured>>() <= 20,
+    "Tmag5273 struct exceeds 20-byte budget (excluding I2C handle)"
 );
 
 // ---------------------------------------------------------------------------
@@ -113,6 +117,7 @@ impl<I2C: I2c> Tmag5273<I2C, Unconfigured> {
             channels: MagneticChannel::Off,
             angle_enabled: false,
             max_polls: 10,
+            read_mode: I2cReadMode::Standard,
             _state: PhantomData,
         }
     }
@@ -145,6 +150,7 @@ impl<I2C: I2c> Tmag5273<I2C, Unconfigured> {
             channels: config.magnetic_channels,
             angle_enabled: !matches!(config.angle_calculation, AngleCalculation::None),
             max_polls: config.max_polls,
+            read_mode: I2cReadMode::Standard,
             _state: PhantomData,
         })
     }
@@ -309,6 +315,46 @@ impl<I2C: I2c> Tmag5273<I2C, Configured> {
                 magnitude,
             })
         }
+    }
+
+    /// Enable or disable CRC-8 on the sensor's I2C interface.
+    ///
+    /// This controls the sensor's hardware CRC generation (register
+    /// `DEVICE_CONFIG_1` bit 7). It does NOT control driver-side CRC
+    /// validation — that is controlled by the `crc` Cargo feature.
+    ///
+    /// # CRC Layer Interaction
+    ///
+    /// | `crc` feature | Sensor CRC | Behavior |
+    /// |---|---|---|
+    /// | OFF | OFF | Normal reads (default) |
+    /// | OFF | ON | **Reads fail** — sensor sends extra CRC byte |
+    /// | ON | OFF | **CRC mismatch** — driver expects CRC sensor omits |
+    /// | ON | ON | Full CRC protection (correct) |
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::I2c`] on bus communication failure.
+    pub fn set_crc_enabled(&mut self, enabled: bool) -> Result<(), Error<I2C::Error>> {
+        let current = self.read_register(register::DEVICE_CONFIG_1)?;
+        let updated = register::insert(
+            current,
+            register::CRC_EN_MASK,
+            register::CRC_EN_SHIFT,
+            u8::from(enabled),
+        );
+        self.write_register(register::DEVICE_CONFIG_1, updated)?;
+        Ok(())
+    }
+
+    /// Read the sensor's CRC mode from register `DEVICE_CONFIG_1` bit 7.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::I2c`] on bus communication failure.
+    pub fn get_crc_enabled(&mut self) -> Result<bool, Error<I2C::Error>> {
+        let raw = self.read_register(register::DEVICE_CONFIG_1)?;
+        Ok(register::extract(raw, register::CRC_EN_MASK, register::CRC_EN_SHIFT) != 0)
     }
 
     /// Switch the operating mode at runtime.
@@ -761,13 +807,19 @@ mod tests {
 
     /// Helper: create mock expectations for a successful init sequence.
     fn init_expectations(address: u8) -> Vec<I2cTransaction> {
+        // DEVICE_CONFIG_1: CRC_EN is set when `crc` feature is active.
+        #[cfg(feature = "crc")]
+        let dc1: u8 = 0x80;
+        #[cfg(not(feature = "crc"))]
+        let dc1: u8 = 0x00;
+
         vec![
             // Burst read manufacturer ID (0x0E..=0x0F) → [LSB=0x49, MSB=0x54]
             I2cTransaction::write_read(address, vec![0x0E], vec![0x49, 0x54]),
             // Read device ID (0x0D) → version 1
             I2cTransaction::write_read(address, vec![0x0D], vec![0x01]),
             // Burst write config registers 0x00-0x03
-            I2cTransaction::write(address, vec![0x00, 0x00, 0x02, 0x70, 0x03]),
+            I2cTransaction::write(address, vec![0x00, dc1, 0x02, 0x70, 0x03]),
             // Separate write for T_CONFIG (0x07)
             I2cTransaction::write(address, vec![0x07, 0x01]),
             // Read device status
@@ -1166,6 +1218,82 @@ mod tests {
                 new_address: new_addr
             }
         );
+
+        sensor.into_inner().done();
+    }
+
+    // -- Runtime CRC toggle ---------------------------------------------------
+
+    #[test]
+    fn set_crc_enabled_writes_bit7() {
+        let address = 0x22u8;
+        let mut expectations = init_expectations(address);
+
+        // Read DEVICE_CONFIG_1, then write with CRC_EN=1 (bit 7 set).
+        expectations.push(I2cTransaction::write_read(address, vec![0x00], vec![0x00]));
+        expectations.push(I2cTransaction::write(address, vec![0x00, 0x80]));
+
+        let i2c = I2cMock::new(&expectations);
+        let sensor = Tmag5273::new(i2c, DeviceVariant::B1);
+        let config = ConfigBuilder::new().build().unwrap();
+        let mut sensor = sensor.init(&config).unwrap();
+
+        sensor.set_crc_enabled(true).unwrap();
+
+        sensor.into_inner().done();
+    }
+
+    #[test]
+    fn set_crc_disabled_clears_bit7() {
+        let address = 0x22u8;
+        let mut expectations = init_expectations(address);
+
+        // Read DEVICE_CONFIG_1 with CRC_EN=1, then write with CRC_EN=0.
+        expectations.push(I2cTransaction::write_read(address, vec![0x00], vec![0x80]));
+        expectations.push(I2cTransaction::write(address, vec![0x00, 0x00]));
+
+        let i2c = I2cMock::new(&expectations);
+        let sensor = Tmag5273::new(i2c, DeviceVariant::B1);
+        let config = ConfigBuilder::new().build().unwrap();
+        let mut sensor = sensor.init(&config).unwrap();
+
+        sensor.set_crc_enabled(false).unwrap();
+
+        sensor.into_inner().done();
+    }
+
+    #[test]
+    fn get_crc_enabled_reads_bit7() {
+        let address = 0x22u8;
+        let mut expectations = init_expectations(address);
+
+        // Return DEVICE_CONFIG_1 with CRC_EN=1.
+        expectations.push(I2cTransaction::write_read(address, vec![0x00], vec![0x80]));
+
+        let i2c = I2cMock::new(&expectations);
+        let sensor = Tmag5273::new(i2c, DeviceVariant::B1);
+        let config = ConfigBuilder::new().build().unwrap();
+        let mut sensor = sensor.init(&config).unwrap();
+
+        assert!(sensor.get_crc_enabled().unwrap());
+
+        sensor.into_inner().done();
+    }
+
+    #[test]
+    fn get_crc_disabled_reads_bit7_clear() {
+        let address = 0x22u8;
+        let mut expectations = init_expectations(address);
+
+        // Return DEVICE_CONFIG_1 with CRC_EN=0.
+        expectations.push(I2cTransaction::write_read(address, vec![0x00], vec![0x00]));
+
+        let i2c = I2cMock::new(&expectations);
+        let sensor = Tmag5273::new(i2c, DeviceVariant::B1);
+        let config = ConfigBuilder::new().build().unwrap();
+        let mut sensor = sensor.init(&config).unwrap();
+
+        assert!(!sensor.get_crc_enabled().unwrap());
 
         sensor.into_inner().done();
     }
