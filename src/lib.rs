@@ -37,7 +37,8 @@
 mod config;
 mod device;
 mod error;
-#[allow(dead_code)] // Complete register map — advanced feature registers used in future phases
+#[allow(dead_code)] // Constants for unimplemented features: runtime CRC toggle, I2C read mode,
+                     // INT pin readback, per-register config getters, single-axis CRC reads
 mod register;
 mod types;
 
