@@ -22,9 +22,11 @@ use crate::types::{
 // ---------------------------------------------------------------------------
 
 /// Marker type: sensor has not been initialized.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Unconfigured;
 
 /// Marker type: sensor has been initialized and is ready for measurement.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Configured;
 
 // ---------------------------------------------------------------------------
@@ -507,6 +509,11 @@ impl<I2C: I2c> Tmag5273<I2C, Configured> {
     ///
     /// Returns [`Error::I2c`] if the initial write to register 0x0C fails.
     pub fn change_address(&mut self, new_address: u8) -> Result<(), Error<I2C::Error>> {
+        // Reject addresses outside valid 7-bit I2C range.
+        if new_address > 0x7F {
+            return Err(Error::AddressChangeFailed { new_address });
+        }
+
         // Write new address with update-enable bit set.
         let reg_val = register::insert(
             0,

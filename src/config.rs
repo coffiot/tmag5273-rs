@@ -344,7 +344,7 @@ impl TryFrom<u8> for AngleCalculation {
 ///
 /// Construct via [`ConfigBuilder`]. The `#[non_exhaustive]` attribute allows
 /// pub field reads but prevents construction outside this crate.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[cfg_attr(feature = "defmt", derive(defmt::Format))]
 #[non_exhaustive]
 pub struct Config {
@@ -394,7 +394,7 @@ pub struct Config {
 /// let config = ConfigBuilder::new().build().unwrap();
 /// assert_eq!(config.magnetic_channels, tmag5273::MagneticChannel::XYZ);
 /// ```
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Copy)]
 pub struct ConfigBuilder {
     operating_mode: OperatingMode,
     magnetic_channels: MagneticChannel,
@@ -510,11 +510,11 @@ impl ConfigBuilder {
 
     /// Enable CRC-8 validation on I2C reads.
     ///
-    /// Only available when the `crc` feature is enabled. Without the feature,
-    /// this method does not exist — the compiler rejects the call.
+    /// When the `crc` feature is compiled in, CRC is always active on reads.
+    /// This builder method is a no-op kept for API discoverability — the
+    /// `crc` Cargo feature alone controls CRC behavior.
     #[cfg(feature = "crc")]
     pub fn crc_enable(self, _enable: bool) -> Self {
-        // CRC config will be applied during init when the crc feature is active
         self
     }
 
@@ -567,7 +567,7 @@ impl ConfigBuilder {
 impl Config {
     /// Serialize this configuration into register address/value pairs for
     /// writing to the device.
-    pub(crate) fn to_register_writes(&self) -> [(u8, u8); 5] {
+    pub(crate) fn to_register_writes(self) -> [(u8, u8); 5] {
         use crate::register;
 
         // DEVICE_CONFIG_1 (0x00)
@@ -687,7 +687,7 @@ impl TryFrom<u8> for ThresholdDirection {
 /// Threshold values are signed 8-bit integers representing the crossing
 /// point in sensor-native units. Use with
 /// [`set_thresholds`](crate::Tmag5273::set_thresholds).
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[cfg_attr(feature = "defmt", derive(defmt::Format))]
 pub struct ThresholdConfig {
     /// X-axis threshold (signed, sensor-native units).
@@ -766,7 +766,7 @@ impl TryFrom<u8> for IntPinBehavior {
 /// Interrupt configuration for the TMAG5273.
 ///
 /// Use with [`set_interrupt`](crate::Tmag5273::set_interrupt).
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[cfg_attr(feature = "defmt", derive(defmt::Format))]
 pub struct InterruptConfig {
     /// Interrupt routing mode.
@@ -815,7 +815,7 @@ impl TryFrom<u8> for GainChannel {
 /// **Note:** The SparkFun Arduino library has a known copy-paste bug where
 /// `config_mag_offset_2()` writes to register 0x0A instead of 0x0B.
 /// This driver writes to the correct registers.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[cfg_attr(feature = "defmt", derive(defmt::Format))]
 pub struct CalibrationConfig {
     /// Magnetic gain adjustment (raw 8-bit value, register 0x09).

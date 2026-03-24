@@ -1,7 +1,7 @@
 // Rust guideline compliant 2026-03-24
 
-/// Public types, newtypes, and raw-to-physical conversion helpers for the
-/// TMAG5273 Hall-effect sensor driver.
+//! Public types, newtypes, and raw-to-physical conversion helpers for the
+//! TMAG5273 Hall-effect sensor driver.
 
 // ---------------------------------------------------------------------------
 // Magnetic field measurement range
@@ -110,26 +110,22 @@ impl DeviceVariant {
     /// Returns the full-scale magnetic range in mT for the X and Y axes.
     #[inline]
     pub const fn range_mt_xy(&self, range: Range) -> f32 {
-        match (self.version(), range) {
-            (1, Range::Low) => RANGE_V1_LOW_XY,
-            (1, Range::High) => RANGE_V1_HIGH_XY,
-            (2, Range::Low) => RANGE_V2_LOW_XY,
-            (2, Range::High) => RANGE_V2_HIGH_XY,
-            // SAFETY: version() only returns 1 or 2; this arm is unreachable.
-            _ => RANGE_V1_LOW_XY,
+        match (self, range) {
+            (Self::A1 | Self::B1 | Self::C1 | Self::D1, Range::Low) => RANGE_V1_LOW_XY,
+            (Self::A1 | Self::B1 | Self::C1 | Self::D1, Range::High) => RANGE_V1_HIGH_XY,
+            (Self::A2 | Self::B2 | Self::C2 | Self::D2, Range::Low) => RANGE_V2_LOW_XY,
+            (Self::A2 | Self::B2 | Self::C2 | Self::D2, Range::High) => RANGE_V2_HIGH_XY,
         }
     }
 
     /// Returns the full-scale magnetic range in mT for the Z axis.
     #[inline]
     pub const fn range_mt_z(&self, range: Range) -> f32 {
-        match (self.version(), range) {
-            (1, Range::Low) => RANGE_V1_LOW_Z,
-            (1, Range::High) => RANGE_V1_HIGH_Z,
-            (2, Range::Low) => RANGE_V2_LOW_Z,
-            (2, Range::High) => RANGE_V2_HIGH_Z,
-            // SAFETY: version() only returns 1 or 2; this arm is unreachable.
-            _ => RANGE_V1_LOW_Z,
+        match (self, range) {
+            (Self::A1 | Self::B1 | Self::C1 | Self::D1, Range::Low) => RANGE_V1_LOW_Z,
+            (Self::A1 | Self::B1 | Self::C1 | Self::D1, Range::High) => RANGE_V1_HIGH_Z,
+            (Self::A2 | Self::B2 | Self::C2 | Self::D2, Range::Low) => RANGE_V2_LOW_Z,
+            (Self::A2 | Self::B2 | Self::C2 | Self::D2, Range::High) => RANGE_V2_HIGH_Z,
         }
     }
 }
@@ -139,17 +135,17 @@ impl DeviceVariant {
 // ---------------------------------------------------------------------------
 
 /// Magnetic flux density in millitesla.
-#[derive(Debug, Clone, Copy, PartialEq, PartialOrd)]
+#[derive(Debug, Default, Clone, Copy, PartialEq, PartialOrd)]
 #[cfg_attr(feature = "defmt", derive(defmt::Format))]
 pub struct MilliTesla(pub f32);
 
 /// Temperature in degrees Celsius.
-#[derive(Debug, Clone, Copy, PartialEq, PartialOrd)]
+#[derive(Debug, Default, Clone, Copy, PartialEq, PartialOrd)]
 #[cfg_attr(feature = "defmt", derive(defmt::Format))]
 pub struct Celsius(pub f32);
 
 /// Angle in degrees (0–360).
-#[derive(Debug, Clone, Copy, PartialEq, PartialOrd)]
+#[derive(Debug, Default, Clone, Copy, PartialEq, PartialOrd)]
 #[cfg_attr(feature = "defmt", derive(defmt::Format))]
 pub struct Degrees(pub f32);
 
@@ -160,7 +156,7 @@ pub struct Degrees(pub f32);
 /// Magnetic field reading from all enabled axes.
 ///
 /// Disabled channels are represented as `None`.
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Default, Clone, Copy, PartialEq)]
 #[cfg_attr(feature = "defmt", derive(defmt::Format))]
 pub struct MagneticReading {
     /// X-axis magnetic flux density, or `None` if the channel is disabled.
@@ -186,7 +182,7 @@ pub struct AngleReading {
 // ---------------------------------------------------------------------------
 
 /// Parsed contents of the `DEVICE_STATUS` register (0x1C).
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
 #[cfg_attr(feature = "defmt", derive(defmt::Format))]
 pub struct DeviceStatus {
     /// VCC supply is below the undervoltage threshold.
@@ -222,7 +218,7 @@ impl DeviceStatus {
 }
 
 /// Parsed contents of the `CONV_STATUS` register (0x18).
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
 #[cfg_attr(feature = "defmt", derive(defmt::Format))]
 pub struct ConversionStatus {
     /// Rolling conversion set counter (0–7).
