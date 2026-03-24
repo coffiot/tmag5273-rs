@@ -818,8 +818,11 @@ impl<I2C: I2c> Tmag5273<I2C, Configured> {
     /// Returns [`Error::I2c`] on bus communication failure.
     pub fn get_operating_mode(&mut self) -> Result<OperatingMode, Error<I2C::Error>> {
         let raw = self.read_register(register::DEVICE_CONFIG_2)?;
-        let val =
-            register::extract(raw, register::OPERATING_MODE_MASK, register::OPERATING_MODE_SHIFT);
+        let val = register::extract(
+            raw,
+            register::OPERATING_MODE_MASK,
+            register::OPERATING_MODE_SHIFT,
+        );
         OperatingMode::try_from(val).map_err(|_| Error::InvalidRegisterValue {
             register: register::DEVICE_CONFIG_2,
             value: val,
@@ -851,8 +854,11 @@ impl<I2C: I2c> Tmag5273<I2C, Configured> {
     /// Returns [`Error::I2c`] on bus communication failure.
     pub fn get_trigger_mode(&mut self) -> Result<TriggerMode, Error<I2C::Error>> {
         let raw = self.read_register(register::DEVICE_CONFIG_2)?;
-        let val =
-            register::extract(raw, register::TRIGGER_MODE_MASK, register::TRIGGER_MODE_SHIFT);
+        let val = register::extract(
+            raw,
+            register::TRIGGER_MODE_MASK,
+            register::TRIGGER_MODE_SHIFT,
+        );
         TriggerMode::try_from(val).map_err(|_| Error::InvalidRegisterValue {
             register: register::DEVICE_CONFIG_2,
             value: val,
@@ -983,8 +989,7 @@ impl<I2C: I2c> Tmag5273<I2C, Configured> {
     /// Returns [`Error::I2c`] on bus communication failure.
     pub fn get_threshold_direction(&mut self) -> Result<ThresholdDirection, Error<I2C::Error>> {
         let raw = self.read_register(register::SENSOR_CONFIG_2)?;
-        let val =
-            register::extract(raw, register::MAG_THR_DIR_MASK, register::MAG_THR_DIR_SHIFT);
+        let val = register::extract(raw, register::MAG_THR_DIR_MASK, register::MAG_THR_DIR_SHIFT);
         ThresholdDirection::try_from(val).map_err(|_| Error::InvalidRegisterValue {
             register: register::SENSOR_CONFIG_2,
             value: val,
@@ -1000,8 +1005,7 @@ impl<I2C: I2c> Tmag5273<I2C, Configured> {
     /// Returns [`Error::I2c`] on bus communication failure.
     pub fn get_gain_channel(&mut self) -> Result<GainChannel, Error<I2C::Error>> {
         let raw = self.read_register(register::SENSOR_CONFIG_2)?;
-        let val =
-            register::extract(raw, register::MAG_GAIN_CH_MASK, register::MAG_GAIN_CH_SHIFT);
+        let val = register::extract(raw, register::MAG_GAIN_CH_MASK, register::MAG_GAIN_CH_SHIFT);
         GainChannel::try_from(val).map_err(|_| Error::InvalidRegisterValue {
             register: register::SENSOR_CONFIG_2,
             value: val,
@@ -1029,8 +1033,11 @@ impl<I2C: I2c> Tmag5273<I2C, Configured> {
     /// Returns [`Error::I2c`] on bus communication failure.
     pub fn get_temperature_threshold(&mut self) -> Result<i8, Error<I2C::Error>> {
         let raw = self.read_register(register::T_CONFIG)?;
-        let val =
-            register::extract(raw, register::T_THR_CONFIG_MASK, register::T_THR_CONFIG_SHIFT);
+        let val = register::extract(
+            raw,
+            register::T_THR_CONFIG_MASK,
+            register::T_THR_CONFIG_SHIFT,
+        );
         Ok(val as i8)
     }
 
@@ -1949,11 +1956,7 @@ mod tests {
         // DEVICE_CONFIG_2 with operating_mode = WakeUpAndSleep (0b11) in
         // bits [1:0], plus LP_LN=1 (bit 4) to verify field isolation.
         // Register value: 0b0001_0011 = 0x13
-        expectations.push(I2cTransaction::write_read(
-            address,
-            vec![0x01],
-            vec![0x13],
-        ));
+        expectations.push(I2cTransaction::write_read(address, vec![0x01], vec![0x13]));
 
         let i2c = I2cMock::new(&expectations);
         let sensor = Tmag5273::new(i2c, DeviceVariant::B1);
@@ -1974,11 +1977,7 @@ mod tests {
         // SENSOR_CONFIG_1 with MAG_CH_EN = XYZ (0x7) in bits [7:4],
         // SLEEPTIME = Ms5 (0x1) in bits [3:0].
         // Register value: 0b0111_0001 = 0x71
-        expectations.push(I2cTransaction::write_read(
-            address,
-            vec![0x02],
-            vec![0x71],
-        ));
+        expectations.push(I2cTransaction::write_read(address, vec![0x02], vec![0x71]));
 
         let i2c = I2cMock::new(&expectations);
         let sensor = Tmag5273::new(i2c, DeviceVariant::B1);
@@ -1999,11 +1998,7 @@ mod tests {
         // CONV_STATUS with SET_COUNT=5 (bits [7:5] = 0b101), POR=1 (bit 4),
         // DIAG=1 (bit 1), RESULT=1 (bit 0).
         // 0b1011_0011 = 0xB3
-        expectations.push(I2cTransaction::write_read(
-            address,
-            vec![0x18],
-            vec![0xB3],
-        ));
+        expectations.push(I2cTransaction::write_read(address, vec![0x18], vec![0xB3]));
 
         let i2c = I2cMock::new(&expectations);
         let sensor = Tmag5273::new(i2c, DeviceVariant::B1);

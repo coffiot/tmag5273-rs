@@ -602,27 +602,25 @@ impl Config {
         #[cfg(not(feature = "crc"))]
         let crc_en: u8 = 0;
 
-        let dc1 = register::insert(
-            0,
-            register::CRC_EN_MASK,
-            register::CRC_EN_SHIFT,
-            crc_en,
-        ) | register::insert(
-            0,
-            register::MAG_TEMPCO_MASK,
-            register::MAG_TEMPCO_SHIFT,
-            self.temp_coefficient as u8,
-        ) | register::insert(
-            0,
-            register::CONV_AVG_MASK,
-            register::CONV_AVG_SHIFT,
-            self.conversion_average as u8,
-        ) | register::insert(
-            0,
-            register::I2C_RD_MASK,
-            register::I2C_RD_SHIFT,
-            I2cReadMode::Standard as u8,
-        );
+        let dc1 = register::insert(0, register::CRC_EN_MASK, register::CRC_EN_SHIFT, crc_en)
+            | register::insert(
+                0,
+                register::MAG_TEMPCO_MASK,
+                register::MAG_TEMPCO_SHIFT,
+                self.temp_coefficient as u8,
+            )
+            | register::insert(
+                0,
+                register::CONV_AVG_MASK,
+                register::CONV_AVG_SHIFT,
+                self.conversion_average as u8,
+            )
+            | register::insert(
+                0,
+                register::I2C_RD_MASK,
+                register::I2C_RD_SHIFT,
+                I2cReadMode::Standard as u8,
+            );
 
         // DEVICE_CONFIG_2 (0x01)
         let dc2 = register::insert(

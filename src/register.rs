@@ -3,8 +3,9 @@
 // TMAG5273 register addresses, bit-field masks/shifts, and helpers.
 // Reference: TI TMAG5273 datasheet SBASAI4 Rev C.
 //
-// Complete register map defined for datasheet parity — advanced feature
-// registers (thresholds, interrupts, I2C address) are used in Phase 5.
+// Register addresses and bitfield masks for all 29 registers (0x00–0x1C).
+// Status register field parsing (CONV_STATUS, DEVICE_STATUS) lives in types.rs.
+// Result register LSB addresses are implicit (MSB + 1 via burst reads).
 
 // ---------------------------------------------------------------------------
 // Bit-field helpers
@@ -95,24 +96,15 @@ pub(crate) const Z_RANGE_SHIFT: u8 = 0;
 // ---------------------------------------------------------------------------
 pub(crate) const X_THR_CONFIG: u8 = 0x04;
 
-pub(crate) const X_THR_MASK: u8 = 0xFF;
-pub(crate) const X_THR_SHIFT: u8 = 0;
-
 // ---------------------------------------------------------------------------
 // 0x05 — Y_THR_CONFIG
 // ---------------------------------------------------------------------------
 pub(crate) const Y_THR_CONFIG: u8 = 0x05;
 
-pub(crate) const Y_THR_MASK: u8 = 0xFF;
-pub(crate) const Y_THR_SHIFT: u8 = 0;
-
 // ---------------------------------------------------------------------------
 // 0x06 — Z_THR_CONFIG
 // ---------------------------------------------------------------------------
 pub(crate) const Z_THR_CONFIG: u8 = 0x06;
-
-pub(crate) const Z_THR_MASK: u8 = 0xFF;
-pub(crate) const Z_THR_SHIFT: u8 = 0;
 
 // ---------------------------------------------------------------------------
 // 0x07 — T_CONFIG
@@ -145,32 +137,20 @@ pub(crate) const INT_MODE_SHIFT: u8 = 2;
 pub(crate) const MASK_INTB_MASK: u8 = 0b0000_0010;
 pub(crate) const MASK_INTB_SHIFT: u8 = 1;
 
-pub(crate) const INT_PINSTATE_MASK: u8 = 0b0000_0001;
-pub(crate) const INT_PINSTATE_SHIFT: u8 = 0;
-
 // ---------------------------------------------------------------------------
 // 0x09 — MAG_GAIN_CONFIG
 // ---------------------------------------------------------------------------
 pub(crate) const MAG_GAIN_CONFIG: u8 = 0x09;
-
-pub(crate) const MAG_GAIN_VALUE_MASK: u8 = 0xFF;
-pub(crate) const MAG_GAIN_VALUE_SHIFT: u8 = 0;
 
 // ---------------------------------------------------------------------------
 // 0x0A — MAG_OFFSET_CONFIG_1
 // ---------------------------------------------------------------------------
 pub(crate) const MAG_OFFSET_CONFIG_1: u8 = 0x0A;
 
-pub(crate) const MAG_OFFSET_1_MASK: u8 = 0xFF;
-pub(crate) const MAG_OFFSET_1_SHIFT: u8 = 0;
-
 // ---------------------------------------------------------------------------
 // 0x0B — MAG_OFFSET_CONFIG_2
 // ---------------------------------------------------------------------------
 pub(crate) const MAG_OFFSET_CONFIG_2: u8 = 0x0B;
-
-pub(crate) const MAG_OFFSET_2_MASK: u8 = 0xFF;
-pub(crate) const MAG_OFFSET_2_SHIFT: u8 = 0;
 
 // ---------------------------------------------------------------------------
 // 0x0C — I2C_ADDRESS (read-only)
@@ -208,56 +188,20 @@ pub(crate) const MANUFACTURER_ID_EXPECTED: u16 = 0x5449;
 // 0x10 — T_MSB_RESULT (read-only)
 // ---------------------------------------------------------------------------
 pub(crate) const T_MSB_RESULT: u8 = 0x10;
+// 0x11 T_LSB_RESULT — implicit via burst read (MSB + 1)
 
 // ---------------------------------------------------------------------------
-// 0x11 — T_LSB_RESULT (read-only)
-// ---------------------------------------------------------------------------
-pub(crate) const T_LSB_RESULT: u8 = 0x11;
-
-// ---------------------------------------------------------------------------
-// 0x12 — X_MSB_RESULT (read-only)
+// 0x12 — X_MSB_RESULT (read-only, burst reads X/Y/Z from here)
 // ---------------------------------------------------------------------------
 pub(crate) const X_MSB_RESULT: u8 = 0x12;
-
-// ---------------------------------------------------------------------------
-// 0x13 — X_LSB_RESULT (read-only)
-// ---------------------------------------------------------------------------
-pub(crate) const X_LSB_RESULT: u8 = 0x13;
-
-// ---------------------------------------------------------------------------
-// 0x14 — Y_MSB_RESULT (read-only)
-// ---------------------------------------------------------------------------
-pub(crate) const Y_MSB_RESULT: u8 = 0x14;
-
-// ---------------------------------------------------------------------------
-// 0x15 — Y_LSB_RESULT (read-only)
-// ---------------------------------------------------------------------------
-pub(crate) const Y_LSB_RESULT: u8 = 0x15;
-
-// ---------------------------------------------------------------------------
-// 0x16 — Z_MSB_RESULT (read-only)
-// ---------------------------------------------------------------------------
-pub(crate) const Z_MSB_RESULT: u8 = 0x16;
-
-// ---------------------------------------------------------------------------
-// 0x17 — Z_LSB_RESULT (read-only)
-// ---------------------------------------------------------------------------
-pub(crate) const Z_LSB_RESULT: u8 = 0x17;
+// 0x13–0x17 X_LSB, Y_MSB/LSB, Z_MSB/LSB — implicit via 6-byte burst from X_MSB
 
 // ---------------------------------------------------------------------------
 // 0x18 — CONV_STATUS (read-only)
 // ---------------------------------------------------------------------------
 pub(crate) const CONV_STATUS: u8 = 0x18;
 
-pub(crate) const SET_COUNT_MASK: u8 = 0b1110_0000;
-pub(crate) const SET_COUNT_SHIFT: u8 = 5;
-
-pub(crate) const POR_MASK: u8 = 0b0001_0000;
-pub(crate) const POR_SHIFT: u8 = 4;
-
-pub(crate) const DIAG_STATUS_MASK: u8 = 0b0000_0010;
-pub(crate) const DIAG_STATUS_SHIFT: u8 = 1;
-
+// CONV_STATUS field masks live in types.rs (ConversionStatus::from_reg)
 pub(crate) const RESULT_STATUS_MASK: u8 = 0b0000_0001;
 pub(crate) const RESULT_STATUS_SHIFT: u8 = 0;
 
@@ -265,11 +209,7 @@ pub(crate) const RESULT_STATUS_SHIFT: u8 = 0;
 // 0x19 — ANGLE_RESULT_MSB (read-only)
 // ---------------------------------------------------------------------------
 pub(crate) const ANGLE_RESULT_MSB: u8 = 0x19;
-
-// ---------------------------------------------------------------------------
-// 0x1A — ANGLE_RESULT_LSB (read-only)
-// ---------------------------------------------------------------------------
-pub(crate) const ANGLE_RESULT_LSB: u8 = 0x1A;
+// 0x1A ANGLE_RESULT_LSB — implicit via burst read (MSB + 1)
 
 // ---------------------------------------------------------------------------
 // 0x1B — MAGNITUDE_RESULT (read-only)
@@ -281,20 +221,7 @@ pub(crate) const MAGNITUDE_RESULT: u8 = 0x1B;
 // ---------------------------------------------------------------------------
 pub(crate) const DEVICE_STATUS: u8 = 0x1C;
 
-pub(crate) const INTB_RB_MASK: u8 = 0b0001_0000;
-pub(crate) const INTB_RB_SHIFT: u8 = 4;
-
-pub(crate) const OSC_ER_MASK: u8 = 0b0000_1000;
-pub(crate) const OSC_ER_SHIFT: u8 = 3;
-
-pub(crate) const INT_ER_MASK: u8 = 0b0000_0100;
-pub(crate) const INT_ER_SHIFT: u8 = 2;
-
-pub(crate) const OTP_CRC_ER_MASK: u8 = 0b0000_0010;
-pub(crate) const OTP_CRC_ER_SHIFT: u8 = 1;
-
-pub(crate) const VCC_UV_ER_MASK: u8 = 0b0000_0001;
-pub(crate) const VCC_UV_ER_SHIFT: u8 = 0;
+// DEVICE_STATUS field masks live in types.rs (DeviceStatus::from_reg)
 
 // ===========================================================================
 // Tests
@@ -539,15 +466,6 @@ mod tests {
         );
     }
 
-    #[test]
-    fn round_trip_int_pinstate() {
-        round_trip(
-            INT_PINSTATE_MASK,
-            INT_PINSTATE_SHIFT,
-            field_max(INT_PINSTATE_MASK, INT_PINSTATE_SHIFT),
-        );
-    }
-
     // -- I2C_ADDRESS (0x0C) -------------------------------------------------
 
     #[test]
@@ -582,29 +500,6 @@ mod tests {
     // -- CONV_STATUS (0x18) -------------------------------------------------
 
     #[test]
-    fn round_trip_set_count() {
-        round_trip(
-            SET_COUNT_MASK,
-            SET_COUNT_SHIFT,
-            field_max(SET_COUNT_MASK, SET_COUNT_SHIFT),
-        );
-    }
-
-    #[test]
-    fn round_trip_por() {
-        round_trip(POR_MASK, POR_SHIFT, field_max(POR_MASK, POR_SHIFT));
-    }
-
-    #[test]
-    fn round_trip_diag_status() {
-        round_trip(
-            DIAG_STATUS_MASK,
-            DIAG_STATUS_SHIFT,
-            field_max(DIAG_STATUS_MASK, DIAG_STATUS_SHIFT),
-        );
-    }
-
-    #[test]
     fn round_trip_result_status() {
         round_trip(
             RESULT_STATUS_MASK,
@@ -613,52 +508,9 @@ mod tests {
         );
     }
 
-    // -- DEVICE_STATUS (0x1C) -----------------------------------------------
-
-    #[test]
-    fn round_trip_intb_rb() {
-        round_trip(
-            INTB_RB_MASK,
-            INTB_RB_SHIFT,
-            field_max(INTB_RB_MASK, INTB_RB_SHIFT),
-        );
-    }
-
-    #[test]
-    fn round_trip_osc_er() {
-        round_trip(
-            OSC_ER_MASK,
-            OSC_ER_SHIFT,
-            field_max(OSC_ER_MASK, OSC_ER_SHIFT),
-        );
-    }
-
-    #[test]
-    fn round_trip_int_er() {
-        round_trip(
-            INT_ER_MASK,
-            INT_ER_SHIFT,
-            field_max(INT_ER_MASK, INT_ER_SHIFT),
-        );
-    }
-
-    #[test]
-    fn round_trip_otp_crc_er() {
-        round_trip(
-            OTP_CRC_ER_MASK,
-            OTP_CRC_ER_SHIFT,
-            field_max(OTP_CRC_ER_MASK, OTP_CRC_ER_SHIFT),
-        );
-    }
-
-    #[test]
-    fn round_trip_vcc_uv_er() {
-        round_trip(
-            VCC_UV_ER_MASK,
-            VCC_UV_ER_SHIFT,
-            field_max(VCC_UV_ER_MASK, VCC_UV_ER_SHIFT),
-        );
-    }
+    // CONV_STATUS field masks (SET_COUNT, POR, DIAG_STATUS) and
+    // DEVICE_STATUS field masks (INTB_RB, OSC_ER, INT_ER, OTP_CRC_ER, VCC_UV_ER)
+    // are tested in types.rs via ConversionStatus::from_reg() and DeviceStatus::from_reg().
 
     // -----------------------------------------------------------------------
     // Edge cases
@@ -672,7 +524,6 @@ mod tests {
         assert_eq!(extract(0xFF, THR_HYST_MASK, THR_HYST_SHIFT), 0x07);
         assert_eq!(extract(0xFF, INT_MODE_MASK, INT_MODE_SHIFT), 0x07);
         assert_eq!(extract(0xFF, ANGLE_EN_MASK, ANGLE_EN_SHIFT), 0x03);
-        assert_eq!(extract(0xFF, SET_COUNT_MASK, SET_COUNT_SHIFT), 0x07);
         assert_eq!(extract(0xFF, T_THR_CONFIG_MASK, T_THR_CONFIG_SHIFT), 0x7F);
         assert_eq!(
             extract(0xFF, I2C_ADDRESS_BITS_MASK, I2C_ADDRESS_BITS_SHIFT),
@@ -731,35 +582,35 @@ mod tests {
     #[test]
     fn all_29_register_addresses_are_unique() {
         let addrs: [u8; 29] = [
-            DEVICE_CONFIG_1,
-            DEVICE_CONFIG_2,
-            SENSOR_CONFIG_1,
-            SENSOR_CONFIG_2,
-            X_THR_CONFIG,
-            Y_THR_CONFIG,
-            Z_THR_CONFIG,
-            T_CONFIG,
-            INT_CONFIG_1,
-            MAG_GAIN_CONFIG,
-            MAG_OFFSET_CONFIG_1,
-            MAG_OFFSET_CONFIG_2,
-            I2C_ADDRESS,
-            DEVICE_ID,
-            MANUFACTURER_ID_LSB,
-            MANUFACTURER_ID_MSB,
-            T_MSB_RESULT,
-            T_LSB_RESULT,
-            X_MSB_RESULT,
-            X_LSB_RESULT,
-            Y_MSB_RESULT,
-            Y_LSB_RESULT,
-            Z_MSB_RESULT,
-            Z_LSB_RESULT,
-            CONV_STATUS,
-            ANGLE_RESULT_MSB,
-            ANGLE_RESULT_LSB,
-            MAGNITUDE_RESULT,
-            DEVICE_STATUS,
+            DEVICE_CONFIG_1,     // 0x00
+            DEVICE_CONFIG_2,     // 0x01
+            SENSOR_CONFIG_1,     // 0x02
+            SENSOR_CONFIG_2,     // 0x03
+            X_THR_CONFIG,        // 0x04
+            Y_THR_CONFIG,        // 0x05
+            Z_THR_CONFIG,        // 0x06
+            T_CONFIG,            // 0x07
+            INT_CONFIG_1,        // 0x08
+            MAG_GAIN_CONFIG,     // 0x09
+            MAG_OFFSET_CONFIG_1, // 0x0A
+            MAG_OFFSET_CONFIG_2, // 0x0B
+            I2C_ADDRESS,         // 0x0C
+            DEVICE_ID,           // 0x0D
+            MANUFACTURER_ID_LSB, // 0x0E
+            MANUFACTURER_ID_MSB, // 0x0F
+            T_MSB_RESULT,        // 0x10
+            0x11,                // T_LSB_RESULT (burst read, no const)
+            X_MSB_RESULT,        // 0x12
+            0x13,                // X_LSB_RESULT (burst read)
+            0x14,                // Y_MSB_RESULT (burst read)
+            0x15,                // Y_LSB_RESULT (burst read)
+            0x16,                // Z_MSB_RESULT (burst read)
+            0x17,                // Z_LSB_RESULT (burst read)
+            CONV_STATUS,         // 0x18
+            ANGLE_RESULT_MSB,    // 0x19
+            0x1A,                // ANGLE_RESULT_LSB (burst read)
+            MAGNITUDE_RESULT,    // 0x1B
+            DEVICE_STATUS,       // 0x1C
         ];
 
         // Verify sequential addresses 0x00..=0x1C
