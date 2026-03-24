@@ -555,6 +555,45 @@ impl<I2C: I2c> Tmag5273<I2C, Configured> {
         }
     }
 
+    // -----------------------------------------------------------------------
+    // Advanced: Wake-Up-and-Sleep Lifecycle
+    // -----------------------------------------------------------------------
+
+    /// Configure the sensor for wake-up-and-sleep mode.
+    ///
+    /// This is a convenience method that writes the exact register values
+    /// documented in the TI datasheet (section 8.2.1.2) and verified in the
+    /// SparkFun Arduino `setupWakeUpAndSleep()` function:
+    ///
+    /// - `INT_CONFIG_1` = `0x64`: threshold interrupt enabled, INT pin pulsed,
+    ///   routed through INT pin
+    /// - `DEVICE_CONFIG_2` = `0x23`: 7-LSB hysteresis, low active current,
+    ///   glitch filter on, I2C trigger, wake-up-and-sleep mode
+    ///
+    /// After calling this, the sensor periodically wakes, measures, checks
+    /// thresholds, and asserts INT if crossed. Configure thresholds with
+    /// [`set_thresholds`](Self::set_thresholds) before calling this method.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::I2c`] on bus communication failure.
+    pub fn configure_wake_and_sleep(&mut self) -> Result<(), Error<I2C::Error>> {
+        // Hardcoded values from TI datasheet section 8.2.1.2:
+        //   INT_CONFIG_1 = 0x64 = 0b0110_0100
+        //     RSLT_INT=0, THRESHOLD_INT=1, INT_STATE=1(pulse),
+        //     INT_MODE=001(INT pin), MASK_INTB=0, INT_PINSTATE=0
+        const WAKE_SLEEP_INT_CONFIG: u8 = 0x64;
+
+        //   DEVICE_CONFIG_2 = 0x23 = 0b0010_0011
+        //     THR_HYST=001(7 LSB), LP_LN=0, GLITCH_FILTER=0(on),
+        //     TRIGGER=0(I2C), OPERATING_MODE=11(wake-up-and-sleep)
+        const WAKE_SLEEP_DEVICE_CONFIG: u8 = 0x23;
+
+        self.write_register(register::INT_CONFIG_1, WAKE_SLEEP_INT_CONFIG)?;
+        self.write_register(register::DEVICE_CONFIG_2, WAKE_SLEEP_DEVICE_CONFIG)?;
+        Ok(())
+    }
+
     /// Put the sensor into sleep mode for power savings.
     ///
     /// # Errors
@@ -997,7 +1036,12 @@ mod tests {
         let mut sensor = sensor.init(&config).unwrap();
 
         let err = sensor.change_address(new_addr).unwrap_err();
-        assert_eq!(err, Error::AddressChangeFailed { new_address: new_addr });
+        assert_eq!(
+            err,
+            Error::AddressChangeFailed {
+                new_address: new_addr
+            }
+        );
 
         sensor.into_inner().done();
     }
