@@ -1,0 +1,40 @@
+[package]
+name = "tmag5273"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.93"
+authors = ["CofIoT <info@coffiot.com>"]
+description = "Platform-agnostic no_std driver for the TI TMAG5273 3-axis Hall-effect sensor"
+documentation = "https://docs.rs/tmag5273"
+repository = "https://github.com/coffiot/tmag5273"
+license = "MIT OR Apache-2.0"
+keywords = ["embedded-hal", "sensor", "hall-effect", "no-std", "driver"]
+categories = ["embedded", "hardware-support", "no-std::no-alloc"]
+readme = "README.md"
+
+[package.metadata.docs.rs]
+all-features = true
+rustdoc-args = ["--cfg", "docsrs"]
+
+[dependencies]
+embedded-hal = "1.0"
+defmt = { workspace = true, optional = true }
+thiserror = { workspace = true }
+
+[dev-dependencies]
+embedded-hal-mock = { version = "0.11", default-features = false, features = [
+    "eh1",
+] }
+
+[features]
+default = []
+std = []                 # std::error::Error + Display impls on Error<E>
+crc = []                 # CRC-8 validation on I2C reads
+defmt-03 = ["dep:defmt"] # defmt::Format derives on all public types
+
+[lib]
+name = "tmag5273"
+path = "src/lib.rs"
+
+[lints.clippy]
+collapsible_if = "allow"
