@@ -48,6 +48,7 @@ pub use types::{AngleReading, Celsius, Degrees, DeviceVariant, MagneticReading, 
 
 // Re-export config enums for consumer use
 pub use config::{
-    AngleCalculation, ConversionAverage, MagneticChannel, OperatingMode, PowerMode, Range,
-    SleepDuration, TempCoefficient, TriggerMode,
+    AngleCalculation, CalibrationConfig, ConversionAverage, GainChannel, IntPinBehavior,
+    InterruptConfig, InterruptMode, MagneticChannel, OperatingMode, PowerMode, Range,
+    SleepDuration, TempCoefficient, ThresholdConfig, ThresholdDirection, TriggerMode,
 };

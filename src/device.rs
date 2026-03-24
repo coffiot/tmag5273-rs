@@ -350,6 +350,145 @@ impl<I2C: I2c> Tmag5273<I2C, Configured> {
         Ok(DeviceStatus::from_reg(raw))
     }
 
+    // -----------------------------------------------------------------------
+    // Advanced: Thresholds
+    // -----------------------------------------------------------------------
+
+    /// Configure per-axis magnetic field and temperature thresholds.
+    ///
+    /// Threshold crossing can trigger an interrupt when combined with
+    /// [`set_interrupt`](Self::set_interrupt). The direction (above/below)
+    /// and hysteresis are part of the threshold configuration.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::I2c`] on bus communication failure.
+    pub fn set_thresholds(
+        &mut self,
+        config: &crate::config::ThresholdConfig,
+    ) -> Result<(), Error<I2C::Error>> {
+        // Per-axis thresholds: direct register writes (full-byte fields).
+        self.write_register(register::X_THR_CONFIG, config.x as u8)?;
+        self.write_register(register::Y_THR_CONFIG, config.y as u8)?;
+        self.write_register(register::Z_THR_CONFIG, config.z as u8)?;
+
+        // Temperature threshold: upper 7 bits of T_CONFIG, preserve T_CH_EN.
+        let t_reg = self.read_register(register::T_CONFIG)?;
+        let t_new = register::insert(
+            t_reg,
+            register::T_THR_CONFIG_MASK,
+            register::T_THR_CONFIG_SHIFT,
+            config.temperature as u8,
+        );
+        self.write_register(register::T_CONFIG, t_new)?;
+
+        // Hysteresis: DEVICE_CONFIG_2[7:5] — read-modify-write.
+        let dc2 = self.read_register(register::DEVICE_CONFIG_2)?;
+        let dc2 = register::insert(
+            dc2,
+            register::THR_HYST_MASK,
+            register::THR_HYST_SHIFT,
+            config.hysteresis & 0x07, // clamp to 3-bit
+        );
+        self.write_register(register::DEVICE_CONFIG_2, dc2)?;
+
+        // Direction: SENSOR_CONFIG_2[5] — read-modify-write.
+        let sc2 = self.read_register(register::SENSOR_CONFIG_2)?;
+        let sc2 = register::insert(
+            sc2,
+            register::MAG_THR_DIR_MASK,
+            register::MAG_THR_DIR_SHIFT,
+            config.direction as u8,
+        );
+        self.write_register(register::SENSOR_CONFIG_2, sc2)?;
+
+        Ok(())
+    }
+
+    // -----------------------------------------------------------------------
+    // Advanced: Interrupts
+    // -----------------------------------------------------------------------
+
+    /// Configure the interrupt output behavior.
+    ///
+    /// The TMAG5273 supports 5 interrupt routing modes plus options for
+    /// conversion-complete and threshold-crossing triggers.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::I2c`] on bus communication failure.
+    pub fn set_interrupt(
+        &mut self,
+        config: &crate::config::InterruptConfig,
+    ) -> Result<(), Error<I2C::Error>> {
+        // INT_CONFIG_1 is a standalone register — full write, no read-modify-write.
+        let reg = register::insert(
+            0,
+            register::RSLT_INT_MASK,
+            register::RSLT_INT_SHIFT,
+            u8::from(config.on_conversion_complete),
+        ) | register::insert(
+            0,
+            register::THRESHOLD_INT_MASK,
+            register::THRESHOLD_INT_SHIFT,
+            u8::from(config.on_threshold_crossing),
+        ) | register::insert(
+            0,
+            register::INT_STATE_MASK,
+            register::INT_STATE_SHIFT,
+            config.pin_behavior as u8,
+        ) | register::insert(
+            0,
+            register::INT_MODE_MASK,
+            register::INT_MODE_SHIFT,
+            config.mode as u8,
+        ) | register::insert(
+            0,
+            register::MASK_INTB_MASK,
+            register::MASK_INTB_SHIFT,
+            u8::from(config.mask),
+        );
+        self.write_register(register::INT_CONFIG_1, reg)?;
+        Ok(())
+    }
+
+    // -----------------------------------------------------------------------
+    // Advanced: Gain/Offset Calibration
+    // -----------------------------------------------------------------------
+
+    /// Configure magnetic gain and offset calibration.
+    ///
+    /// Gain and offset corrections are applied by the sensor hardware to
+    /// improve measurement accuracy. The gain channel selects which axis
+    /// pair receives the adjustment.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::I2c`] on bus communication failure.
+    pub fn set_calibration(
+        &mut self,
+        config: &crate::config::CalibrationConfig,
+    ) -> Result<(), Error<I2C::Error>> {
+        self.write_register(register::MAG_GAIN_CONFIG, config.gain)?;
+        self.write_register(register::MAG_OFFSET_CONFIG_1, config.offset_1 as u8)?;
+        // NOTE: This is register 0x0B (MAG_OFFSET_CONFIG_2), NOT 0x0A.
+        // The SparkFun Arduino library has a copy-paste bug that writes both
+        // offsets to 0x0A. We write to the correct register.
+        self.write_register(register::MAG_OFFSET_CONFIG_2, config.offset_2 as u8)?;
+
+        // Gain channel select: SENSOR_CONFIG_2[4] — read-modify-write.
+        let sc2 = self.read_register(register::SENSOR_CONFIG_2)?;
+        let sc2 = register::insert(
+            sc2,
+            register::MAG_GAIN_CH_MASK,
+            register::MAG_GAIN_CH_SHIFT,
+            config.gain_channel as u8,
+        );
+        self.write_register(register::SENSOR_CONFIG_2, sc2)?;
+
+        Ok(())
+    }
+
     /// Put the sensor into sleep mode for power savings.
     ///
     /// # Errors
@@ -566,6 +705,181 @@ mod tests {
         sensor.trigger_conversion().unwrap();
         let err = sensor.wait_for_conversion().unwrap_err();
         assert_eq!(err, Error::ConversionTimeout);
+
+        sensor.into_inner().done();
+    }
+
+    // -- Phase 1: Thresholds ------------------------------------------------
+
+    #[test]
+    fn set_thresholds_writes_correct_registers() {
+        let address = 0x22u8;
+        let mut expectations = init_expectations(address);
+
+        // set_thresholds: 3 direct writes + 3 read-modify-writes
+        expectations.push(I2cTransaction::write(address, vec![0x04, 0x05])); // X threshold = 5
+        expectations.push(I2cTransaction::write(address, vec![0x05, 0xFB])); // Y threshold = -5 (0xFB)
+        expectations.push(I2cTransaction::write(address, vec![0x06, 0x0A])); // Z threshold = 10
+        // T_CONFIG read-modify-write: preserve T_CH_EN bit (0x01 from init)
+        expectations.push(I2cTransaction::write_read(address, vec![0x07], vec![0x01]));
+        expectations.push(I2cTransaction::write(address, vec![0x07, 0x07])); // temp=3 << 1 | T_CH_EN=1
+        // DEVICE_CONFIG_2 read-modify-write: hysteresis=2 in bits [7:5]
+        expectations.push(I2cTransaction::write_read(address, vec![0x01], vec![0x02]));
+        expectations.push(I2cTransaction::write(address, vec![0x01, 0x42])); // 0x02 | (2 << 5) = 0x42
+        // SENSOR_CONFIG_2 read-modify-write: direction=Below(1) in bit [5]
+        expectations.push(I2cTransaction::write_read(address, vec![0x03], vec![0x03]));
+        expectations.push(I2cTransaction::write(address, vec![0x03, 0x23])); // 0x03 | (1 << 5) = 0x23
+
+        let i2c = I2cMock::new(&expectations);
+        let sensor = Tmag5273::new(i2c, DeviceVariant::B1);
+        let config = ConfigBuilder::new().build().unwrap();
+        let mut sensor = sensor.init(&config).unwrap();
+
+        use crate::config::{ThresholdConfig, ThresholdDirection};
+        sensor
+            .set_thresholds(&ThresholdConfig {
+                x: 5,
+                y: -5,
+                z: 10,
+                temperature: 3,
+                hysteresis: 2,
+                direction: ThresholdDirection::Below,
+            })
+            .unwrap();
+
+        sensor.into_inner().done();
+    }
+
+    // -- Phase 2: Interrupts ------------------------------------------------
+
+    #[test]
+    fn set_interrupt_writes_correct_byte() {
+        let address = 0x22u8;
+        let mut expectations = init_expectations(address);
+
+        // INT_CONFIG_1 full write:
+        // RSLT_INT=0 | THRESHOLD_INT=1 | INT_STATE=1 | INT_MODE=001 | MASK_INTB=0 | INT_PINSTATE=0
+        // = 0b0110_0100 = 0x64 (matches SparkFun's setupWakeUpAndSleep hardcoded value)
+        expectations.push(I2cTransaction::write(address, vec![0x08, 0x64]));
+
+        let i2c = I2cMock::new(&expectations);
+        let sensor = Tmag5273::new(i2c, DeviceVariant::B1);
+        let config = ConfigBuilder::new().build().unwrap();
+        let mut sensor = sensor.init(&config).unwrap();
+
+        use crate::config::{IntPinBehavior, InterruptConfig, InterruptMode};
+        sensor
+            .set_interrupt(&InterruptConfig {
+                mode: InterruptMode::IntPin,
+                on_conversion_complete: false,
+                on_threshold_crossing: true,
+                pin_behavior: IntPinBehavior::Pulse10us,
+                mask: false,
+            })
+            .unwrap();
+
+        sensor.into_inner().done();
+    }
+
+    #[test]
+    fn set_interrupt_all_modes() {
+        use crate::config::{IntPinBehavior, InterruptConfig, InterruptMode};
+
+        let modes = [
+            (InterruptMode::None, 0b000),
+            (InterruptMode::IntPin, 0b001),
+            (InterruptMode::IntPinLatched, 0b010),
+            (InterruptMode::Scl, 0b011),
+            (InterruptMode::SclLatched, 0b100),
+        ];
+
+        for (mode, expected_bits) in modes {
+            let address = 0x22u8;
+            let mut expectations = init_expectations(address);
+
+            let expected_byte = expected_bits << 2; // INT_MODE is bits [4:2]
+            expectations.push(I2cTransaction::write(address, vec![0x08, expected_byte]));
+
+            let i2c = I2cMock::new(&expectations);
+            let sensor = Tmag5273::new(i2c, DeviceVariant::B1);
+            let config = ConfigBuilder::new().build().unwrap();
+            let mut sensor = sensor.init(&config).unwrap();
+
+            sensor
+                .set_interrupt(&InterruptConfig {
+                    mode,
+                    on_conversion_complete: false,
+                    on_threshold_crossing: false,
+                    pin_behavior: IntPinBehavior::Latched,
+                    mask: false,
+                })
+                .unwrap();
+
+            sensor.into_inner().done();
+        }
+    }
+
+    // -- Phase 3: Gain/Offset Calibration -----------------------------------
+
+    #[test]
+    fn set_calibration_writes_correct_registers() {
+        let address = 0x22u8;
+        let mut expectations = init_expectations(address);
+
+        // MAG_GAIN_CONFIG (0x09)
+        expectations.push(I2cTransaction::write(address, vec![0x09, 0x80]));
+        // MAG_OFFSET_CONFIG_1 (0x0A) — NOT 0x0B!
+        expectations.push(I2cTransaction::write(address, vec![0x0A, 0xF0])); // -16 as u8
+        // MAG_OFFSET_CONFIG_2 (0x0B) — correct register, avoids Arduino bug
+        expectations.push(I2cTransaction::write(address, vec![0x0B, 0x10])); // +16
+        // SENSOR_CONFIG_2 read-modify-write: gain_channel=Second(1) in bit [4]
+        expectations.push(I2cTransaction::write_read(address, vec![0x03], vec![0x03]));
+        expectations.push(I2cTransaction::write(address, vec![0x03, 0x13])); // 0x03 | (1 << 4) = 0x13
+
+        let i2c = I2cMock::new(&expectations);
+        let sensor = Tmag5273::new(i2c, DeviceVariant::B1);
+        let config = ConfigBuilder::new().build().unwrap();
+        let mut sensor = sensor.init(&config).unwrap();
+
+        use crate::config::{CalibrationConfig, GainChannel};
+        sensor
+            .set_calibration(&CalibrationConfig {
+                gain: 0x80,
+                offset_1: -16,
+                offset_2: 16,
+                gain_channel: GainChannel::Second,
+            })
+            .unwrap();
+
+        sensor.into_inner().done();
+    }
+
+    #[test]
+    fn set_calibration_offset2_uses_register_0x0b_not_0x0a() {
+        // Explicit regression test for the SparkFun Arduino copy-paste bug.
+        let address = 0x22u8;
+        let mut expectations = init_expectations(address);
+
+        expectations.push(I2cTransaction::write(address, vec![0x09, 0x00])); // gain
+        expectations.push(I2cTransaction::write(address, vec![0x0A, 0x00])); // offset_1 → 0x0A
+        expectations.push(I2cTransaction::write(address, vec![0x0B, 0xFF])); // offset_2 → 0x0B (NOT 0x0A)
+        expectations.push(I2cTransaction::write_read(address, vec![0x03], vec![0x03]));
+        expectations.push(I2cTransaction::write(address, vec![0x03, 0x03])); // gain_channel=First, preserve bits
+
+        let i2c = I2cMock::new(&expectations);
+        let sensor = Tmag5273::new(i2c, DeviceVariant::B1);
+        let config = ConfigBuilder::new().build().unwrap();
+        let mut sensor = sensor.init(&config).unwrap();
+
+        use crate::config::{CalibrationConfig, GainChannel};
+        sensor
+            .set_calibration(&CalibrationConfig {
+                gain: 0,
+                offset_1: 0,
+                offset_2: -1, // 0xFF as u8
+                gain_channel: GainChannel::First,
+            })
+            .unwrap();
 
         sensor.into_inner().done();
     }

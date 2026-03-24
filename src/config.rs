@@ -530,6 +530,128 @@ impl Config {
 }
 
 // ---------------------------------------------------------------------------
+// Threshold configuration
+// ---------------------------------------------------------------------------
+
+/// Threshold crossing direction.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[cfg_attr(feature = "defmt", derive(defmt::Format))]
+#[repr(u8)]
+pub enum ThresholdDirection {
+    /// Interrupt when field exceeds threshold (above).
+    Above = 0,
+    /// Interrupt when field falls below threshold (below).
+    Below = 1,
+}
+
+/// Per-axis threshold configuration for magnetic field and temperature.
+///
+/// Threshold values are signed 8-bit integers representing the crossing
+/// point in sensor-native units. Use with
+/// [`set_thresholds`](crate::Tmag5273::set_thresholds).
+#[derive(Debug, Clone, Copy)]
+#[cfg_attr(feature = "defmt", derive(defmt::Format))]
+pub struct ThresholdConfig {
+    /// X-axis threshold (signed, sensor-native units).
+    pub x: i8,
+    /// Y-axis threshold (signed, sensor-native units).
+    pub y: i8,
+    /// Z-axis threshold (signed, sensor-native units).
+    pub z: i8,
+    /// Temperature threshold (signed, upper 7 bits of T_CONFIG).
+    pub temperature: i8,
+    /// Hysteresis level (0–7). Higher values reduce noise sensitivity.
+    pub hysteresis: u8,
+    /// Whether to trigger on field above or below the threshold.
+    pub direction: ThresholdDirection,
+}
+
+// ---------------------------------------------------------------------------
+// Interrupt configuration
+// ---------------------------------------------------------------------------
+
+/// Interrupt routing mode.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[cfg_attr(feature = "defmt", derive(defmt::Format))]
+#[repr(u8)]
+pub enum InterruptMode {
+    /// No interrupt.
+    None = 0b000,
+    /// Interrupt through INT pin.
+    IntPin = 0b001,
+    /// Interrupt through INT pin, latched until cleared by I2C read.
+    IntPinLatched = 0b010,
+    /// Interrupt through SCL (clock stretching).
+    Scl = 0b011,
+    /// Interrupt through SCL, latched until cleared by I2C read.
+    SclLatched = 0b100,
+}
+
+/// INT pin assertion behavior.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[cfg_attr(feature = "defmt", derive(defmt::Format))]
+#[repr(u8)]
+pub enum IntPinBehavior {
+    /// INT pin stays asserted until host clears it.
+    Latched = 0,
+    /// INT pin pulses for 10 µs then deasserts.
+    Pulse10us = 1,
+}
+
+/// Interrupt configuration for the TMAG5273.
+///
+/// Use with [`set_interrupt`](crate::Tmag5273::set_interrupt).
+#[derive(Debug, Clone, Copy)]
+#[cfg_attr(feature = "defmt", derive(defmt::Format))]
+pub struct InterruptConfig {
+    /// Interrupt routing mode.
+    pub mode: InterruptMode,
+    /// Assert interrupt on conversion complete.
+    pub on_conversion_complete: bool,
+    /// Assert interrupt on threshold crossing.
+    pub on_threshold_crossing: bool,
+    /// INT pin behavior (latched vs pulsed).
+    pub pin_behavior: IntPinBehavior,
+    /// Mask the interrupt pin (true = INT output disabled).
+    pub mask: bool,
+}
+
+// ---------------------------------------------------------------------------
+// Gain/offset calibration
+// ---------------------------------------------------------------------------
+
+/// Gain adjustment channel selection.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[cfg_attr(feature = "defmt", derive(defmt::Format))]
+#[repr(u8)]
+pub enum GainChannel {
+    /// Apply gain to first axis pair.
+    First = 0,
+    /// Apply gain to second axis pair.
+    Second = 1,
+}
+
+/// Magnetic gain and offset calibration configuration.
+///
+/// Use with [`set_calibration`](crate::Tmag5273::set_calibration).
+///
+/// **Note:** The SparkFun Arduino library has a known copy-paste bug where
+/// `config_mag_offset_2()` writes to register 0x0A instead of 0x0B.
+/// This driver writes to the correct registers.
+#[derive(Debug, Clone, Copy)]
+#[cfg_attr(feature = "defmt", derive(defmt::Format))]
+pub struct CalibrationConfig {
+    /// Magnetic gain adjustment (raw 8-bit value, register 0x09).
+    pub gain: u8,
+    /// Magnetic offset for axis 1 (signed, register 0x0A).
+    pub offset_1: i8,
+    /// Magnetic offset for axis 2 (signed, register 0x0B).
+    pub offset_2: i8,
+    /// Which axis pair receives the gain adjustment.
+    pub gain_channel: GainChannel,
+}
+
+// ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
 
