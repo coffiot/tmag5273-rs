@@ -70,6 +70,16 @@ pub enum Error<E> {
     /// Wake-up-and-sleep operating mode requires a non-zero sleep duration.
     #[error("wake-up-and-sleep mode requires a sleep duration")]
     SleepDurationRequired,
+
+    /// I2C address change could not be verified at the new address.
+    ///
+    /// The device may have already changed its address — the caller must
+    /// decide whether to power-cycle or retry at the new address.
+    #[error("address change to 0x{new_address:02X} could not be verified")]
+    AddressChangeFailed {
+        /// The new address that was written to the device.
+        new_address: u8,
+    },
 }
 
 // ---------------------------------------------------------------------------

@@ -489,6 +489,72 @@ impl<I2C: I2c> Tmag5273<I2C, Configured> {
         Ok(())
     }
 
+    // -----------------------------------------------------------------------
+    // Advanced: I2C Address Change
+    // -----------------------------------------------------------------------
+
+    /// Change the sensor's I2C address at runtime.
+    ///
+    /// Writes the new 7-bit address to register `I2C_ADDRESS` (0x0C) with the
+    /// update-enable bit set, then verifies the device responds at the new
+    /// address by reading the manufacturer ID.
+    ///
+    /// On success, all subsequent I2C operations use the new address.
+    ///
+    /// **Note:** The address resets to the factory default on power cycle.
+    /// To make the change permanent across power cycles, the firmware must
+    /// re-apply it on every boot.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::AddressChangeFailed`] if the device does not respond
+    /// at the new address after the write. The device may have already changed
+    /// its address — the caller must decide whether to power-cycle or retry.
+    ///
+    /// Returns [`Error::I2c`] if the initial write to register 0x0C fails.
+    pub fn change_address(&mut self, new_address: u8) -> Result<(), Error<I2C::Error>> {
+        // Write new address with update-enable bit set.
+        let reg_val = register::insert(
+            0,
+            register::I2C_ADDRESS_BITS_MASK,
+            register::I2C_ADDRESS_BITS_SHIFT,
+            new_address,
+        ) | register::insert(
+            0,
+            register::I2C_ADDRESS_UPDATE_EN_MASK,
+            register::I2C_ADDRESS_UPDATE_EN_SHIFT,
+            1,
+        );
+        self.write_register(register::I2C_ADDRESS, reg_val)?;
+
+        // Switch to new address and verify by reading manufacturer ID.
+        let old_address = self.address;
+        self.address = new_address;
+
+        let id_lsb = match self.read_register(register::MANUFACTURER_ID_LSB) {
+            Ok(v) => v,
+            Err(_) => {
+                self.address = old_address;
+                return Err(Error::AddressChangeFailed { new_address });
+            }
+        };
+        let id_msb = match self.read_register(register::MANUFACTURER_ID_MSB) {
+            Ok(v) => v,
+            Err(_) => {
+                // Device responded to LSB but not MSB — address is changed
+                // but something else is wrong. Don't revert.
+                return Err(Error::AddressChangeFailed { new_address });
+            }
+        };
+
+        let id = u16::from(id_msb) << 8 | u16::from(id_lsb);
+        if id == register::MANUFACTURER_ID_EXPECTED {
+            Ok(())
+        } else {
+            Err(Error::AddressChangeFailed { new_address })
+        }
+    }
+
     /// Put the sensor into sleep mode for power savings.
     ///
     /// # Errors
@@ -880,6 +946,58 @@ mod tests {
                 gain_channel: GainChannel::First,
             })
             .unwrap();
+
+        sensor.into_inner().done();
+    }
+
+    // -- I2C Address Change -------------------------------------------------
+
+    #[test]
+    fn change_address_writes_and_verifies() {
+        let old_addr = 0x22u8;
+        let new_addr = 0x30u8;
+        let mut expectations = init_expectations(old_addr);
+
+        // Write I2C_ADDRESS register (0x0C) at OLD address:
+        // bits [7:1] = new_addr, bit [0] = 1 (update enable)
+        let reg_val = (new_addr << 1) | 0x01;
+        expectations.push(I2cTransaction::write(old_addr, vec![0x0C, reg_val]));
+
+        // Verify at NEW address: read manufacturer ID
+        expectations.push(I2cTransaction::write_read(new_addr, vec![0x0E], vec![0x49]));
+        expectations.push(I2cTransaction::write_read(new_addr, vec![0x0F], vec![0x54]));
+
+        let i2c = I2cMock::new(&expectations);
+        let sensor = Tmag5273::new(i2c, DeviceVariant::B1);
+        let config = ConfigBuilder::new().build().unwrap();
+        let mut sensor = sensor.init(&config).unwrap();
+
+        sensor.change_address(new_addr).unwrap();
+
+        sensor.into_inner().done();
+    }
+
+    #[test]
+    fn change_address_verification_failure_returns_error() {
+        let old_addr = 0x22u8;
+        let new_addr = 0x30u8;
+        let mut expectations = init_expectations(old_addr);
+
+        // Write succeeds at old address
+        let reg_val = (new_addr << 1) | 0x01;
+        expectations.push(I2cTransaction::write(old_addr, vec![0x0C, reg_val]));
+
+        // Verify at new address: returns wrong manufacturer ID
+        expectations.push(I2cTransaction::write_read(new_addr, vec![0x0E], vec![0x00]));
+        expectations.push(I2cTransaction::write_read(new_addr, vec![0x0F], vec![0x00]));
+
+        let i2c = I2cMock::new(&expectations);
+        let sensor = Tmag5273::new(i2c, DeviceVariant::B1);
+        let config = ConfigBuilder::new().build().unwrap();
+        let mut sensor = sensor.init(&config).unwrap();
+
+        let err = sensor.change_address(new_addr).unwrap_err();
+        assert_eq!(err, Error::AddressChangeFailed { new_address: new_addr });
 
         sensor.into_inner().done();
     }
