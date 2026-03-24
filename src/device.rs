@@ -61,9 +61,8 @@ pub struct Tmag5273<I2C, State = Unconfigured> {
     channels: MagneticChannel,
     angle_enabled: bool,
     max_polls: u16,
-    /// Tracked for future read-mode guards (Phase 2+); currently always
-    /// [`I2cReadMode::Standard`].
-    #[allow(dead_code)]
+    /// Current I2C read mode — high-level reads guard against non-Standard
+    /// mode to prevent silent data corruption.
     read_mode: I2cReadMode,
     _state: PhantomData<State>,
 }
@@ -230,6 +229,12 @@ impl<I2C: I2c> Tmag5273<I2C, Configured> {
     ///
     /// Returns [`Error::I2c`] on bus communication failure.
     pub fn read_magnetic(&mut self) -> Result<MagneticReading, Error<I2C::Error>> {
+        if self.read_mode != I2cReadMode::Standard {
+            return Err(Error::NonStandardReadMode {
+                mode: self.read_mode as u8,
+            });
+        }
+
         // Burst read X/Y/Z: 6 bytes starting from X_MSB_RESULT (0x12)
         let mut buf = [0u8; 6];
         self.i2c
@@ -267,6 +272,12 @@ impl<I2C: I2c> Tmag5273<I2C, Configured> {
     ///
     /// Returns [`Error::I2c`] on bus communication failure.
     pub fn read_temperature(&mut self) -> Result<Celsius, Error<I2C::Error>> {
+        if self.read_mode != I2cReadMode::Standard {
+            return Err(Error::NonStandardReadMode {
+                mode: self.read_mode as u8,
+            });
+        }
+
         let buf = self.read_register_pair(register::T_MSB_RESULT)?;
         let raw = i16::from_be_bytes(buf);
         Ok(crate::types::raw_to_celsius(raw))
@@ -283,6 +294,12 @@ impl<I2C: I2c> Tmag5273<I2C, Configured> {
     /// not enabled during initialization.
     /// Returns [`Error::I2c`] on bus communication failure.
     pub fn read_angle(&mut self) -> Result<AngleReading, Error<I2C::Error>> {
+        if self.read_mode != I2cReadMode::Standard {
+            return Err(Error::NonStandardReadMode {
+                mode: self.read_mode as u8,
+            });
+        }
+
         if !self.angle_enabled {
             return Err(Error::AngleRequiresTwoChannels);
         }
@@ -355,6 +372,59 @@ impl<I2C: I2c> Tmag5273<I2C, Configured> {
     pub fn get_crc_enabled(&mut self) -> Result<bool, Error<I2C::Error>> {
         let raw = self.read_register(register::DEVICE_CONFIG_1)?;
         Ok(register::extract(raw, register::CRC_EN_MASK, register::CRC_EN_SHIFT) != 0)
+    }
+
+    /// Set the I2C read mode on the sensor.
+    ///
+    /// Controls how the sensor returns data: standard 3-byte reads, 1-byte
+    /// 16-bit, or 1-byte 8-bit. High-level read methods
+    /// ([`read_magnetic`](Self::read_magnetic),
+    /// [`read_temperature`](Self::read_temperature),
+    /// [`read_angle`](Self::read_angle)) require
+    /// [`Standard`](I2cReadMode::Standard) mode and will return
+    /// [`Error::NonStandardReadMode`] if another mode is active.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::I2c`] on bus communication failure.
+    pub fn set_read_mode(&mut self, mode: I2cReadMode) -> Result<(), Error<I2C::Error>> {
+        let current = self.read_register(register::DEVICE_CONFIG_1)?;
+        let updated = register::insert(
+            current,
+            register::I2C_RD_MASK,
+            register::I2C_RD_SHIFT,
+            mode as u8,
+        );
+        self.write_register(register::DEVICE_CONFIG_1, updated)?;
+        self.read_mode = mode;
+        Ok(())
+    }
+
+    /// Read the sensor's current I2C read mode from `DEVICE_CONFIG_1`.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::InvalidRegisterValue`] if the register contains an
+    /// unrecognized value.
+    /// Returns [`Error::I2c`] on bus communication failure.
+    pub fn get_read_mode(&mut self) -> Result<I2cReadMode, Error<I2C::Error>> {
+        let raw = self.read_register(register::DEVICE_CONFIG_1)?;
+        let val = register::extract(raw, register::I2C_RD_MASK, register::I2C_RD_SHIFT);
+        I2cReadMode::try_from(val).map_err(|_| Error::InvalidRegisterValue {
+            register: register::DEVICE_CONFIG_1,
+            value: val,
+        })
+    }
+
+    /// Read the current state of the INT pin from the `DEVICE_STATUS` register.
+    ///
+    /// Returns `true` when the interrupt pin is asserted (active).
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::I2c`] on bus communication failure.
+    pub fn is_interrupt_active(&mut self) -> Result<bool, Error<I2C::Error>> {
+        Ok(self.read_status()?.int_pin_active)
     }
 
     /// Switch the operating mode at runtime.
@@ -1294,6 +1364,125 @@ mod tests {
         let mut sensor = sensor.init(&config).unwrap();
 
         assert!(!sensor.get_crc_enabled().unwrap());
+
+        sensor.into_inner().done();
+    }
+
+    // -- I2C Read Mode -------------------------------------------------------
+
+    #[test]
+    fn set_read_mode_writes_correct_register_value() {
+        let address = 0x22u8;
+        let mut expectations = init_expectations(address);
+
+        // Read DEVICE_CONFIG_1, then write with I2C_RD=0x01 (OneByte16Bit).
+        expectations.push(I2cTransaction::write_read(address, vec![0x00], vec![0x00]));
+        expectations.push(I2cTransaction::write(address, vec![0x00, 0x01]));
+
+        let i2c = I2cMock::new(&expectations);
+        let sensor = Tmag5273::new(i2c, DeviceVariant::B1);
+        let config = ConfigBuilder::new().build().unwrap();
+        let mut sensor = sensor.init(&config).unwrap();
+
+        sensor.set_read_mode(I2cReadMode::OneByte16Bit).unwrap();
+
+        sensor.into_inner().done();
+    }
+
+    #[test]
+    fn get_read_mode_reads_back_correct_enum() {
+        let address = 0x22u8;
+        let mut expectations = init_expectations(address);
+
+        // Return DEVICE_CONFIG_1 with I2C_RD=0x02 (OneByte8Bit).
+        expectations.push(I2cTransaction::write_read(address, vec![0x00], vec![0x02]));
+
+        let i2c = I2cMock::new(&expectations);
+        let sensor = Tmag5273::new(i2c, DeviceVariant::B1);
+        let config = ConfigBuilder::new().build().unwrap();
+        let mut sensor = sensor.init(&config).unwrap();
+
+        assert_eq!(sensor.get_read_mode().unwrap(), I2cReadMode::OneByte8Bit);
+
+        sensor.into_inner().done();
+    }
+
+    #[test]
+    fn read_magnetic_returns_error_when_non_standard_mode() {
+        let address = 0x22u8;
+        let mut expectations = init_expectations(address);
+
+        // set_read_mode to OneByte16Bit: read-modify-write on DEVICE_CONFIG_1
+        expectations.push(I2cTransaction::write_read(address, vec![0x00], vec![0x00]));
+        expectations.push(I2cTransaction::write(address, vec![0x00, 0x01]));
+
+        let i2c = I2cMock::new(&expectations);
+        let sensor = Tmag5273::new(i2c, DeviceVariant::B1);
+        let config = ConfigBuilder::new().build().unwrap();
+        let mut sensor = sensor.init(&config).unwrap();
+
+        sensor.set_read_mode(I2cReadMode::OneByte16Bit).unwrap();
+        let err = sensor.read_magnetic().unwrap_err();
+        assert_eq!(err, Error::NonStandardReadMode { mode: 0x01 });
+
+        sensor.into_inner().done();
+    }
+
+    #[test]
+    fn read_temperature_returns_error_when_non_standard_mode() {
+        let address = 0x22u8;
+        let mut expectations = init_expectations(address);
+
+        // set_read_mode to OneByte8Bit
+        expectations.push(I2cTransaction::write_read(address, vec![0x00], vec![0x00]));
+        expectations.push(I2cTransaction::write(address, vec![0x00, 0x02]));
+
+        let i2c = I2cMock::new(&expectations);
+        let sensor = Tmag5273::new(i2c, DeviceVariant::B1);
+        let config = ConfigBuilder::new().build().unwrap();
+        let mut sensor = sensor.init(&config).unwrap();
+
+        sensor.set_read_mode(I2cReadMode::OneByte8Bit).unwrap();
+        let err = sensor.read_temperature().unwrap_err();
+        assert_eq!(err, Error::NonStandardReadMode { mode: 0x02 });
+
+        sensor.into_inner().done();
+    }
+
+    // -- INT Pin Readback ----------------------------------------------------
+
+    #[test]
+    fn is_interrupt_active_reads_intb_rb_bit() {
+        let address = 0x22u8;
+        let mut expectations = init_expectations(address);
+
+        // Return DEVICE_STATUS with INTB_RB=1 (bit 4 set) and no faults.
+        expectations.push(I2cTransaction::write_read(address, vec![0x1C], vec![0x10]));
+
+        let i2c = I2cMock::new(&expectations);
+        let sensor = Tmag5273::new(i2c, DeviceVariant::B1);
+        let config = ConfigBuilder::new().build().unwrap();
+        let mut sensor = sensor.init(&config).unwrap();
+
+        assert!(sensor.is_interrupt_active().unwrap());
+
+        sensor.into_inner().done();
+    }
+
+    #[test]
+    fn is_interrupt_not_active_when_bit_clear() {
+        let address = 0x22u8;
+        let mut expectations = init_expectations(address);
+
+        // Return DEVICE_STATUS with INTB_RB=0, no faults.
+        expectations.push(I2cTransaction::write_read(address, vec![0x1C], vec![0x00]));
+
+        let i2c = I2cMock::new(&expectations);
+        let sensor = Tmag5273::new(i2c, DeviceVariant::B1);
+        let config = ConfigBuilder::new().build().unwrap();
+        let mut sensor = sensor.init(&config).unwrap();
+
+        assert!(!sensor.is_interrupt_active().unwrap());
 
         sensor.into_inner().done();
     }

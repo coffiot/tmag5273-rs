@@ -196,6 +196,8 @@ pub struct DeviceStatus {
     pub int_error: bool,
     /// Oscillator error detected.
     pub oscillator_error: bool,
+    /// Current state of the INT pin (true = asserted/active).
+    pub int_pin_active: bool,
 }
 
 /// Bit position of VCC undervoltage flag in `DEVICE_STATUS`.
@@ -206,6 +208,8 @@ const DEVICE_STATUS_OTP_CRC_BIT: u8 = 1;
 const DEVICE_STATUS_INT_ERR_BIT: u8 = 2;
 /// Bit position of oscillator error flag in `DEVICE_STATUS`.
 const DEVICE_STATUS_OSC_ERR_BIT: u8 = 3;
+/// Bit position of INT pin readback flag in `DEVICE_STATUS`.
+const DEVICE_STATUS_INTB_RB_BIT: u8 = 4;
 
 impl DeviceStatus {
     /// Returns `true` if no fault flags are set.
@@ -222,6 +226,7 @@ impl DeviceStatus {
             otp_crc_error: (reg >> DEVICE_STATUS_OTP_CRC_BIT) & 1 != 0,
             int_error: (reg >> DEVICE_STATUS_INT_ERR_BIT) & 1 != 0,
             oscillator_error: (reg >> DEVICE_STATUS_OSC_ERR_BIT) & 1 != 0,
+            int_pin_active: (reg >> DEVICE_STATUS_INTB_RB_BIT) & 1 != 0,
         }
     }
 }
@@ -545,15 +550,17 @@ mod tests {
         assert!(!s.otp_crc_error);
         assert!(!s.int_error);
         assert!(!s.oscillator_error);
+        assert!(!s.int_pin_active);
     }
 
     #[test]
     fn device_status_all_set() {
-        let s = DeviceStatus::from_reg(0x0F);
+        let s = DeviceStatus::from_reg(0x1F);
         assert!(s.vcc_undervoltage);
         assert!(s.otp_crc_error);
         assert!(s.int_error);
         assert!(s.oscillator_error);
+        assert!(s.int_pin_active);
     }
 
     #[test]
@@ -573,6 +580,13 @@ mod tests {
         let s = DeviceStatus::from_reg(0b0000_1000);
         assert!(!s.int_error);
         assert!(s.oscillator_error);
+    }
+
+    #[test]
+    fn device_status_int_pin_active() {
+        let s = DeviceStatus::from_reg(0b0001_0000);
+        assert!(s.int_pin_active);
+        assert!(s.is_ok()); // INT is not a fault
     }
 
     // -- ConversionStatus parsing --------------------------------------------
