@@ -28,9 +28,8 @@ embedded-hal-mock = { version = "0.11", default-features = false, features = [
 
 [features]
 default = []
-std = []                 # std::error::Error + Display impls on Error<E>
-crc = []                 # CRC-8 validation on I2C reads
-defmt-03 = ["dep:defmt"] # defmt::Format derives on all public types
+crc = []                # CRC-8 validation on I2C reads
+defmt = ["dep:defmt"]   # defmt::Format derives on all public types
 
 [lib]
 name = "tmag5273"

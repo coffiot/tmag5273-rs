@@ -10,9 +10,8 @@
 //!
 //! # Features
 //!
-//! - `std` — Enables `std::error::Error` and `Display` impls on [`Error`]
 //! - `crc` — Enables CRC-8 validation on I2C reads (disables burst reads)
-//! - `defmt-03` — Enables `defmt::Format` derives on all public types
+//! - `defmt` — Enables `defmt::Format` derives on all public types
 //!
 //! # Quick Start
 //!

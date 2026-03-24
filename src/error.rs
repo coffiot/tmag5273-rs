@@ -27,7 +27,7 @@ use embedded_hal::i2c::I2c;
 /// assert_eq!(err, Error::I2c(42));
 /// ```
 #[derive(Debug, Clone, Copy, PartialEq, thiserror::Error)]
-#[cfg_attr(feature = "defmt-03", derive(defmt::Format))]
+#[cfg_attr(feature = "defmt", derive(defmt::Format))]
 pub enum Error<E> {
     /// An I2C bus error occurred during communication with the sensor.
     #[error("I2C bus error: {0:?}")]

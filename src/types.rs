@@ -9,7 +9,7 @@
 
 /// Magnetic field measurement range.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[cfg_attr(feature = "defmt-03", derive(defmt::Format))]
+#[cfg_attr(feature = "defmt", derive(defmt::Format))]
 #[repr(u8)]
 pub enum Range {
     /// Low range (±40 mT for version 1, ±133 mT for version 2).
@@ -54,7 +54,7 @@ const RANGE_V2_HIGH_Z: f32 = 266.0;
 /// The letter (A–D) determines the default I2C address and the number (1/2)
 /// determines the magnetic sensitivity range (version).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[cfg_attr(feature = "defmt-03", derive(defmt::Format))]
+#[cfg_attr(feature = "defmt", derive(defmt::Format))]
 pub enum DeviceVariant {
     /// TMAG5273A1 — address 0x35, version 1.
     A1,
@@ -128,17 +128,17 @@ impl DeviceVariant {
 
 /// Magnetic flux density in millitesla.
 #[derive(Debug, Clone, Copy, PartialEq, PartialOrd)]
-#[cfg_attr(feature = "defmt-03", derive(defmt::Format))]
+#[cfg_attr(feature = "defmt", derive(defmt::Format))]
 pub struct MilliTesla(pub f32);
 
 /// Temperature in degrees Celsius.
 #[derive(Debug, Clone, Copy, PartialEq, PartialOrd)]
-#[cfg_attr(feature = "defmt-03", derive(defmt::Format))]
+#[cfg_attr(feature = "defmt", derive(defmt::Format))]
 pub struct Celsius(pub f32);
 
 /// Angle in degrees (0–360).
 #[derive(Debug, Clone, Copy, PartialEq, PartialOrd)]
-#[cfg_attr(feature = "defmt-03", derive(defmt::Format))]
+#[cfg_attr(feature = "defmt", derive(defmt::Format))]
 pub struct Degrees(pub f32);
 
 // ---------------------------------------------------------------------------
@@ -149,7 +149,7 @@ pub struct Degrees(pub f32);
 ///
 /// Disabled channels are represented as `None`.
 #[derive(Debug, Clone, Copy, PartialEq)]
-#[cfg_attr(feature = "defmt-03", derive(defmt::Format))]
+#[cfg_attr(feature = "defmt", derive(defmt::Format))]
 pub struct MagneticReading {
     /// X-axis magnetic flux density, or `None` if the channel is disabled.
     pub x: Option<MilliTesla>,
@@ -161,7 +161,7 @@ pub struct MagneticReading {
 
 /// Angle measurement result from the TMAG5273 angle engine.
 #[derive(Debug, Clone, Copy, PartialEq)]
-#[cfg_attr(feature = "defmt-03", derive(defmt::Format))]
+#[cfg_attr(feature = "defmt", derive(defmt::Format))]
 pub struct AngleReading {
     /// Computed angle in degrees (0–360).
     pub angle: Degrees,
@@ -175,7 +175,7 @@ pub struct AngleReading {
 
 /// Parsed contents of the `DEVICE_STATUS` register (0x1C).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[cfg_attr(feature = "defmt-03", derive(defmt::Format))]
+#[cfg_attr(feature = "defmt", derive(defmt::Format))]
 pub struct DeviceStatus {
     /// VCC supply is below the undervoltage threshold.
     pub vcc_undervoltage: bool,
@@ -211,7 +211,7 @@ impl DeviceStatus {
 
 /// Parsed contents of the `CONV_STATUS` register (0x18).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[cfg_attr(feature = "defmt-03", derive(defmt::Format))]
+#[cfg_attr(feature = "defmt", derive(defmt::Format))]
 pub struct ConversionStatus {
     /// Rolling conversion set counter (0–7).
     pub set_count: u8,

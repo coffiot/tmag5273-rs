@@ -13,7 +13,7 @@ pub use crate::types::Range;
 
 /// Operating mode for the TMAG5273.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[cfg_attr(feature = "defmt-03", derive(defmt::Format))]
+#[cfg_attr(feature = "defmt", derive(defmt::Format))]
 #[repr(u8)]
 pub enum OperatingMode {
     /// Stand-by mode — triggered by I2C command or INT pin.
@@ -28,7 +28,7 @@ pub enum OperatingMode {
 
 /// Magnetic channel selection.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[cfg_attr(feature = "defmt-03", derive(defmt::Format))]
+#[cfg_attr(feature = "defmt", derive(defmt::Format))]
 #[repr(u8)]
 pub enum MagneticChannel {
     /// All channels off.
@@ -95,7 +95,7 @@ impl MagneticChannel {
 
 /// Conversion averaging samples.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[cfg_attr(feature = "defmt-03", derive(defmt::Format))]
+#[cfg_attr(feature = "defmt", derive(defmt::Format))]
 #[repr(u8)]
 pub enum ConversionAverage {
     /// 1x (no averaging).
@@ -129,7 +129,7 @@ impl ConversionAverage {
 
 /// Sleep duration between measurements in wake-up-and-sleep mode.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[cfg_attr(feature = "defmt-03", derive(defmt::Format))]
+#[cfg_attr(feature = "defmt", derive(defmt::Format))]
 #[repr(u8)]
 pub enum SleepDuration {
     /// 1 ms.
@@ -162,7 +162,7 @@ pub enum SleepDuration {
 
 /// Power mode.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[cfg_attr(feature = "defmt-03", derive(defmt::Format))]
+#[cfg_attr(feature = "defmt", derive(defmt::Format))]
 #[repr(u8)]
 pub enum PowerMode {
     /// Low active current mode (default).
@@ -173,7 +173,7 @@ pub enum PowerMode {
 
 /// Trigger mode for standby conversions.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[cfg_attr(feature = "defmt-03", derive(defmt::Format))]
+#[cfg_attr(feature = "defmt", derive(defmt::Format))]
 #[repr(u8)]
 pub enum TriggerMode {
     /// I2C command triggers conversion.
@@ -184,7 +184,7 @@ pub enum TriggerMode {
 
 /// Magnetic temperature compensation coefficient.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[cfg_attr(feature = "defmt-03", derive(defmt::Format))]
+#[cfg_attr(feature = "defmt", derive(defmt::Format))]
 #[repr(u8)]
 pub enum TempCoefficient {
     /// No temperature compensation (0%).
@@ -197,7 +197,7 @@ pub enum TempCoefficient {
 
 /// Angle calculation axis pair.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[cfg_attr(feature = "defmt-03", derive(defmt::Format))]
+#[cfg_attr(feature = "defmt", derive(defmt::Format))]
 #[repr(u8)]
 pub enum AngleCalculation {
     /// Angle calculation disabled.
@@ -219,7 +219,7 @@ pub enum AngleCalculation {
 /// Construct via [`ConfigBuilder`]. The `#[non_exhaustive]` attribute allows
 /// pub field reads but prevents construction outside this crate.
 #[derive(Debug, Clone, Copy)]
-#[cfg_attr(feature = "defmt-03", derive(defmt::Format))]
+#[cfg_attr(feature = "defmt", derive(defmt::Format))]
 #[non_exhaustive]
 pub struct Config {
     /// Operating mode.
