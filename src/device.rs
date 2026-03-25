@@ -1,4 +1,4 @@
-// Rust guideline compliant 2026-03-24
+// Rust guideline compliant 2026-03-25
 
 //! Core driver implementation for the TMAG5273 sensor.
 //!
@@ -128,6 +128,8 @@ impl<I2C: I2c> Tmag5273<I2C, Unconfigured> {
     /// Initialize the sensor: verify identity, apply configuration, and
     /// transition to [`Configured`] state.
     ///
+    /// Wakes the device if it was left in sleep mode by previous firmware.
+    ///
     /// Takes `config` by reference so the same configuration can be reused
     /// across multiple sensors.
     ///
@@ -161,6 +163,15 @@ impl<I2C: I2c> Tmag5273<I2C, Unconfigured> {
     /// Inner init logic — returns `Error` for easier `?` usage, wrapped by
     /// `init()` into `InitError`.
     fn init_inner(&mut self, config: &Config) -> Result<(), Error<I2C::Error>> {
+        // 0a. Wake the device if it was left in SLEEP mode by previous firmware.
+        // Any I2C activity triggers wake-up; an empty write is the cheapest.
+        // Intentionally ignore errors — the device may NACK while waking.
+        let _ = self.i2c.write(self.address, &[]);
+
+        // 0b. Disable interrupts before applying new configuration to prevent
+        // spurious INT pin activity from stale settings.
+        self.write_register(register::INT_CONFIG_1, 0x00)?;
+
         // 1. Read and verify manufacturer ID (registers 0x0E + 0x0F) = 0x5449.
         // Single 2-byte burst read starting at MANUFACTURER_ID_LSB — the two
         // ID registers are consecutive, so this halves the I2C transactions.
@@ -205,6 +216,9 @@ impl<I2C: I2c> Tmag5273<I2C, Unconfigured> {
         // 4. Read device status — hardware faults are not driver errors.
         // The caller can inspect status via `read_status()` after init.
         let _status_byte = self.read_register(register::DEVICE_STATUS)?;
+
+        // 4b. Clear stale fault flags so subsequent read_status() returns fresh state.
+        self.write_register(register::DEVICE_STATUS, 0x0F)?;
 
         // 5. Clear POR flag by reading CONV_STATUS
         let _ = self.read_register(register::CONV_STATUS)?;
@@ -1311,6 +1325,10 @@ mod tests {
         let dc1: u8 = 0x00;
 
         vec![
+            // Wake-up: empty write (device may NACK — ignored by driver)
+            I2cTransaction::write(address, vec![]),
+            // Disable interrupts before config (INT_CONFIG_1 = 0x00)
+            I2cTransaction::write(address, vec![0x08, 0x00]),
             // Burst read manufacturer ID (0x0E..=0x0F) → [LSB=0x49, MSB=0x54]
             I2cTransaction::write_read(address, vec![0x0E], vec![0x49, 0x54]),
             // Read device ID (0x0D) → version 1
@@ -1321,6 +1339,8 @@ mod tests {
             I2cTransaction::write(address, vec![0x07, 0x01]),
             // Read device status
             I2cTransaction::write_read(address, vec![0x1C], vec![0x00]),
+            // Clear stale fault flags (DEVICE_STATUS = 0x0F)
+            I2cTransaction::write(address, vec![0x1C, 0x0F]),
             // Read conv status (clear POR)
             I2cTransaction::write_read(address, vec![0x18], vec![0x00]),
         ]
@@ -1338,6 +1358,10 @@ mod tests {
     #[test]
     fn init_wrong_manufacturer_id_returns_bus() {
         let expectations = vec![
+            // Wake-up: empty write
+            I2cTransaction::write(0x22, vec![]),
+            // Disable interrupts before config
+            I2cTransaction::write(0x22, vec![0x08, 0x00]),
             // Burst read manufacturer ID — return wrong ID
             I2cTransaction::write_read(0x22, vec![0x0E], vec![0x00, 0x00]),
         ];
@@ -1354,6 +1378,10 @@ mod tests {
     #[test]
     fn init_wrong_version_returns_bus() {
         let expectations = vec![
+            // Wake-up: empty write
+            I2cTransaction::write(0x22, vec![]),
+            // Disable interrupts before config
+            I2cTransaction::write(0x22, vec![0x08, 0x00]),
             // Burst read manufacturer ID — correct
             I2cTransaction::write_read(0x22, vec![0x0E], vec![0x49, 0x54]),
             // Return version 2 when B1 expects version 1
@@ -1443,6 +1471,10 @@ mod tests {
         // Build init expectations dynamically from config
         let writes = config.to_register_writes();
         let mut expectations = vec![
+            // Wake-up: empty write
+            I2cTransaction::write(address, vec![]),
+            // Disable interrupts before config
+            I2cTransaction::write(address, vec![0x08, 0x00]),
             // Burst manufacturer ID read
             I2cTransaction::write_read(address, vec![0x0E], vec![0x49, 0x54]),
             I2cTransaction::write_read(address, vec![0x0D], vec![0x01]),
@@ -1454,6 +1486,8 @@ mod tests {
             // Separate T_CONFIG write
             I2cTransaction::write(address, vec![writes[4].0, writes[4].1]),
             I2cTransaction::write_read(address, vec![0x1C], vec![0x00]),
+            // Clear stale fault flags
+            I2cTransaction::write(address, vec![0x1C, 0x0F]),
             I2cTransaction::write_read(address, vec![0x18], vec![0x00]),
         ];
 
