@@ -1,4 +1,4 @@
-// Rust guideline compliant 2026-03-24
+// Rust guideline compliant 2026-03-25
 
 //! Error types for the TMAG5273 driver.
 //!
@@ -96,6 +96,16 @@ pub enum Error<E> {
         /// The current I2C read mode that is incompatible.
         mode: u8,
     },
+
+    /// `read_temperature()` was called but the temperature channel is disabled
+    /// in the configuration.
+    ///
+    /// Enable the channel via
+    /// [`ConfigBuilder::temperature_enabled(true)`](crate::ConfigBuilder) and
+    /// re-initialize, or use [`Tmag5273::read_all`](crate::Tmag5273) which
+    /// returns `None` for the temperature field when the channel is disabled.
+    #[error("temperature channel is disabled; enable it in ConfigBuilder")]
+    TemperatureDisabled,
 }
 
 // ---------------------------------------------------------------------------
@@ -250,6 +260,12 @@ mod tests {
     fn variant_non_standard_read_mode() {
         let err: Error<FakeI2cError> = Error::NonStandardReadMode { mode: 0x01 };
         assert_eq!(err, Error::NonStandardReadMode { mode: 0x01 });
+    }
+
+    #[test]
+    fn variant_temperature_disabled() {
+        let err: Error<FakeI2cError> = Error::TemperatureDisabled;
+        assert_eq!(err, Error::TemperatureDisabled);
     }
 
     #[test]

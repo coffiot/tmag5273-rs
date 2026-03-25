@@ -304,8 +304,21 @@ impl<I2C: I2c> Tmag5273<I2C, Configured> {
     ///
     /// # Errors
     ///
+    /// Returns [`Error::TemperatureDisabled`] if the temperature channel was
+    /// disabled in the configuration passed to [`Tmag5273::init`]. Per the TI
+    /// datasheet, the `T_MSB_RESULT` / `T_LSB_RESULT` registers contain
+    /// *undefined data* when the channel is off — calling this method in that
+    /// state would return garbage silently.
+    ///
+    /// Returns [`Error::NonStandardReadMode`] if the I2C read mode is not
+    /// [`I2cReadMode::Standard`](crate::I2cReadMode).
+    ///
     /// Returns [`Error::I2c`] on bus communication failure.
     pub fn read_temperature(&mut self) -> Result<Celsius, Error<I2C::Error>> {
+        if !self.temperature_enabled {
+            return Err(Error::TemperatureDisabled);
+        }
+
         if self.read_mode != I2cReadMode::Standard {
             return Err(Error::NonStandardReadMode {
                 mode: self.read_mode as u8,

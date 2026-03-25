@@ -284,6 +284,7 @@ sensor.change_address(0x30).unwrap();
 | `AddressChangeFailed { new_address }` | Device did not respond at new address |
 | `InvalidRegisterValue { register, value }` | Unknown enum value in register |
 | `NonStandardReadMode { mode }` | High-level read called in non-Standard I2C mode |
+| `TemperatureDisabled` | `read_temperature()` called with temperature channel disabled in config |
 
 `InitError<I2C>` wraps `Error` together with the I2C bus so callers can
 recover the peripheral on initialization failure.
