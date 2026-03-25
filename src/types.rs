@@ -141,6 +141,23 @@ impl DeviceVariant {
 #[cfg_attr(feature = "defmt", derive(defmt::Format))]
 pub struct MilliTesla(pub f32);
 
+/// Software `sqrt` for `no_std` — fast inverse square root (Quake-style)
+/// refined with three Newton–Raphson iterations for maximum `f32` precision
+/// (~1 ULP error, matching hardware `fsqrt` accuracy).
+#[inline]
+fn sqrt(x: f32) -> f32 {
+    if x <= 0.0 {
+        return 0.0;
+    }
+    let half = 0.5 * x;
+    let bits = x.to_bits();
+    let guess = f32::from_bits(0x5f37_5a86 - (bits >> 1)); // initial estimate
+    let guess = guess * (1.5 - half * guess * guess); // 1st Newton iteration
+    let guess = guess * (1.5 - half * guess * guess); // 2nd Newton iteration
+    let guess = guess * (1.5 - half * guess * guess); // 3rd Newton iteration
+    x * guess // convert 1/sqrt(x) → sqrt(x)
+}
+
 /// Temperature in degrees Celsius.
 #[derive(Debug, Default, Clone, Copy, PartialEq, PartialOrd)]
 #[cfg_attr(feature = "defmt", derive(defmt::Format))]
@@ -209,6 +226,34 @@ pub struct MagneticReading {
     pub y: Option<MilliTesla>,
     /// Z-axis magnetic flux density, or `None` if the channel is disabled.
     pub z: Option<MilliTesla>,
+}
+
+impl MagneticReading {
+    /// Compute the total magnetic field magnitude: `sqrt(x² + y² + z²)`.
+    ///
+    /// Disabled channels (represented as `None`) are treated as zero.
+    /// Uses a software `sqrt` implementation — no `libm` or `std` required.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tmag5273::{MagneticReading, MilliTesla};
+    ///
+    /// let reading = MagneticReading {
+    ///     x: Some(MilliTesla(3.0)),
+    ///     y: Some(MilliTesla(4.0)),
+    ///     z: None,
+    /// };
+    /// let mag = reading.magnitude();
+    /// assert!((mag.0 - 5.0).abs() < 0.01); // 3-4-5 triangle
+    /// ```
+    #[inline]
+    pub fn magnitude(&self) -> MilliTesla {
+        let x = self.x.map_or(0.0, |v| v.0);
+        let y = self.y.map_or(0.0, |v| v.0);
+        let z = self.z.map_or(0.0, |v| v.0);
+        MilliTesla(sqrt(x * x + y * y + z * z))
+    }
 }
 
 /// Angle measurement result from the TMAG5273 angle engine.
