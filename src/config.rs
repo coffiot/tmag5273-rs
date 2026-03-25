@@ -134,13 +134,33 @@ impl TryFrom<u8> for MagneticChannel {
 }
 
 impl MagneticChannel {
-    /// Returns the number of distinct axes enabled.
+    /// Returns the number of distinct physical axes enabled.
+    ///
+    /// Pseudo-simultaneous modes (XYX, YXY, YZY, XZX) measure 2 distinct
+    /// axes even though they perform 3 measurement slots. Use
+    /// [`measurement_slots`](Self::measurement_slots) for conversion time
+    /// calculations.
     pub(crate) const fn axis_count(self) -> u8 {
         match self {
             Self::Off => 0,
             Self::X | Self::Y | Self::Z => 1,
             Self::XY | Self::ZX | Self::YZ | Self::XYX | Self::YXY | Self::YZY | Self::XZX => 2,
             Self::XYZ => 3,
+        }
+    }
+
+    /// Returns the number of measurement slots per conversion cycle.
+    ///
+    /// Pseudo-simultaneous modes perform 3 measurements (e.g., XYX = X, Y, X).
+    /// This is the value used by [`ConversionAverage::conversion_time`] since
+    /// the sensor's conversion duration depends on measurement slots, not
+    /// distinct axes.
+    pub(crate) const fn measurement_slots(self) -> u8 {
+        match self {
+            Self::Off => 0,
+            Self::X | Self::Y | Self::Z => 1,
+            Self::XY | Self::ZX | Self::YZ => 2,
+            Self::XYZ | Self::XYX | Self::YXY | Self::YZY | Self::XZX => 3,
         }
     }
 
@@ -223,7 +243,7 @@ impl ConversionAverage {
         temperature_enabled: bool,
     ) -> Micros {
         let temp_channel: u32 = if temperature_enabled { 1 } else { 0 };
-        let num_channels = channels.axis_count() as u32 + temp_channel;
+        let num_channels = channels.measurement_slots() as u32 + temp_channel;
         let samples_per_channel = 1u32 << (self as u32);
         let us = samples_per_channel * 25 * num_channels + 25;
         Micros(us)
@@ -1061,17 +1081,49 @@ mod tests {
         assert_eq!(MagneticChannel::X.axis_count(), 1);
         assert_eq!(MagneticChannel::XY.axis_count(), 2);
         assert_eq!(MagneticChannel::XYZ.axis_count(), 3);
+        // Pseudo-sim: 2 distinct axes even though 3 measurement slots
         assert_eq!(MagneticChannel::XYX.axis_count(), 2);
+        assert_eq!(MagneticChannel::YXY.axis_count(), 2);
+        assert_eq!(MagneticChannel::YZY.axis_count(), 2);
+        assert_eq!(MagneticChannel::XZX.axis_count(), 2);
     }
 
     #[test]
-    fn magnetic_channel_has_axes() {
-        assert!(MagneticChannel::XYZ.has_x());
-        assert!(MagneticChannel::XYZ.has_y());
-        assert!(MagneticChannel::XYZ.has_z());
-        assert!(!MagneticChannel::YZ.has_x());
-        assert!(MagneticChannel::YZ.has_y());
-        assert!(MagneticChannel::YZ.has_z());
+    fn magnetic_channel_measurement_slots() {
+        assert_eq!(MagneticChannel::Off.measurement_slots(), 0);
+        assert_eq!(MagneticChannel::X.measurement_slots(), 1);
+        assert_eq!(MagneticChannel::XY.measurement_slots(), 2);
+        assert_eq!(MagneticChannel::XYZ.measurement_slots(), 3);
+        // Pseudo-sim: 3 measurement slots (e.g. X, Y, X)
+        assert_eq!(MagneticChannel::XYX.measurement_slots(), 3);
+        assert_eq!(MagneticChannel::YXY.measurement_slots(), 3);
+        assert_eq!(MagneticChannel::YZY.measurement_slots(), 3);
+        assert_eq!(MagneticChannel::XZX.measurement_slots(), 3);
+    }
+
+    #[test]
+    fn magnetic_channel_has_axes_all_variants() {
+        //                          has_x  has_y  has_z
+        let cases: &[(MagneticChannel, bool, bool, bool)] = &[
+            (MagneticChannel::Off, false, false, false),
+            (MagneticChannel::X, true, false, false),
+            (MagneticChannel::Y, false, true, false),
+            (MagneticChannel::XY, true, true, false),
+            (MagneticChannel::Z, false, false, true),
+            (MagneticChannel::ZX, true, false, true),
+            (MagneticChannel::YZ, false, true, true),
+            (MagneticChannel::XYZ, true, true, true),
+            // Pseudo-simultaneous: physical axes measured, not register layout
+            (MagneticChannel::XYX, true, true, false), // measures X, Y
+            (MagneticChannel::YXY, true, true, false), // measures Y, X
+            (MagneticChannel::YZY, false, true, true), // measures Y, Z
+            (MagneticChannel::XZX, true, false, true), // measures X, Z
+        ];
+        for &(ch, x, y, z) in cases {
+            assert_eq!(ch.has_x(), x, "{ch:?}.has_x()");
+            assert_eq!(ch.has_y(), y, "{ch:?}.has_y()");
+            assert_eq!(ch.has_z(), z, "{ch:?}.has_z()");
+        }
     }
 
     #[test]

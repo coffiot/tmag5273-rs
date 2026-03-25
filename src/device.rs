@@ -518,18 +518,21 @@ impl<I2C: I2c, D: DelayNs> Tmag5273<I2C, Configured, D> {
     /// `DEVICE_CONFIG_1` bit 7). It does NOT control driver-side CRC
     /// validation — that is controlled by the `crc` Cargo feature.
     ///
-    /// # CRC Layer Interaction
+    /// # Feature Guard
     ///
-    /// | `crc` feature | Sensor CRC | Behavior |
-    /// |---|---|---|
-    /// | OFF | OFF | Normal reads (default) |
-    /// | OFF | ON | **Reads fail** — sensor sends extra CRC byte |
-    /// | ON | OFF | **CRC mismatch** — driver expects CRC sensor omits |
-    /// | ON | ON | Full CRC protection (correct) |
+    /// Enabling sensor CRC without the `crc` Cargo feature would cause
+    /// the sensor to append CRC bytes that the driver does not expect,
+    /// silently corrupting all subsequent reads. To prevent this, the
+    /// method only accepts `enabled = true` when the `crc` feature is
+    /// compiled in. Calling `set_crc_enabled(true)` without the feature
+    /// is a compile error.
+    ///
+    /// Disabling sensor CRC (`set_crc_enabled(false)`) is always allowed.
     ///
     /// # Errors
     ///
     /// Returns [`Error::I2c`] on bus communication failure.
+    #[cfg(feature = "crc")]
     pub fn set_crc_enabled(&mut self, enabled: bool) -> Result<(), Error<I2C::Error>> {
         let current = self.read_register(register::DEVICE_CONFIG_1)?;
         let updated = register::insert(
@@ -538,6 +541,26 @@ impl<I2C: I2c, D: DelayNs> Tmag5273<I2C, Configured, D> {
             register::CRC_EN_SHIFT,
             u8::from(enabled),
         );
+        self.write_register(register::DEVICE_CONFIG_1, updated)?;
+        Ok(())
+    }
+
+    /// Disable CRC-8 on the sensor's I2C interface.
+    ///
+    /// When the `crc` Cargo feature is not enabled, only disabling sensor
+    /// CRC is allowed. See the `crc`-gated version for full enable/disable.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::I2c`] on bus communication failure.
+    #[cfg(not(feature = "crc"))]
+    pub fn set_crc_enabled(&mut self, enabled: bool) -> Result<(), Error<I2C::Error>> {
+        assert!(
+            !enabled,
+            "enabling sensor CRC requires the `crc` Cargo feature"
+        );
+        let current = self.read_register(register::DEVICE_CONFIG_1)?;
+        let updated = register::insert(current, register::CRC_EN_MASK, register::CRC_EN_SHIFT, 0);
         self.write_register(register::DEVICE_CONFIG_1, updated)?;
         Ok(())
     }
@@ -620,6 +643,10 @@ impl<I2C: I2c, D: DelayNs> Tmag5273<I2C, Configured, D> {
     ///
     /// Returns [`Error::I2c`] on bus communication failure.
     pub fn set_mode(&mut self, mode: OperatingMode) -> Result<(), Error<I2C::Error>> {
+        // Wake the sensor if it may be sleeping — any I2C activity wakes
+        // the device (TI datasheet §7.5.1). Without this, the register read
+        // below can NACK when transitioning from Sleep mode.
+        let _ = self.i2c.write(self.address, &[]);
         let current = self.read_register(register::DEVICE_CONFIG_2)?;
         let updated = register::insert(
             current,
@@ -932,6 +959,7 @@ impl<I2C: I2c, D: DelayNs> Tmag5273<I2C, Configured, D> {
                 if id == register::MANUFACTURER_ID_EXPECTED {
                     Ok(())
                 } else {
+                    self.address = old_address;
                     Err(Error::AddressChangeFailed { new_address })
                 }
             }
@@ -2003,6 +2031,7 @@ mod tests {
     // -- Runtime CRC toggle ---------------------------------------------------
 
     #[test]
+    #[cfg(feature = "crc")]
     fn set_crc_enabled_writes_bit7() {
         let address = 0x22u8;
         let mut expectations = init_expectations(address, &default_config());
@@ -2681,6 +2710,8 @@ mod tests {
         let dc2 = config.to_register_writes()[1].1;
 
         let mut expectations = init_expectations(address, &config);
+        // Wake-up write before set_mode
+        expectations.push(I2cTransaction::write(address, vec![]));
         // Read DEVICE_CONFIG_2 → current value
         expectations.push(I2cTransaction::write_read(address, vec![0x01], vec![dc2]));
         // Write back with mode bits [1:0] changed to Standby (0x00)
@@ -2702,6 +2733,8 @@ mod tests {
         let dc2 = config.to_register_writes()[1].1;
 
         let mut expectations = init_expectations(address, &config);
+        // Wake-up write before set_mode (via sleep())
+        expectations.push(I2cTransaction::write(address, vec![]));
         // Read DEVICE_CONFIG_2 → current value
         expectations.push(I2cTransaction::write_read(address, vec![0x01], vec![dc2]));
         // Write back with mode bits [1:0] = 0x01 (Sleep)
@@ -2910,6 +2943,8 @@ mod tests {
         let dc2 = config.to_register_writes()[1].1;
 
         let mut i2c_expectations = init_expectations(address, &config);
+        // Wake-up write before set_mode
+        i2c_expectations.push(I2cTransaction::write(address, vec![]));
         // set_mode(Standby): read DEVICE_CONFIG_2 → current value
         i2c_expectations.push(I2cTransaction::write_read(address, vec![0x01], vec![dc2]));
         // Write back with mode bits [1:0] = Standby (0x00)
@@ -2939,6 +2974,8 @@ mod tests {
         let dc2 = config.to_register_writes()[1].1;
 
         let mut i2c_expectations = init_expectations(address, &config);
+        // Wake-up write before set_mode (via sleep())
+        i2c_expectations.push(I2cTransaction::write(address, vec![]));
         // sleep() → set_mode(Sleep): read DEVICE_CONFIG_2
         i2c_expectations.push(I2cTransaction::write_read(address, vec![0x01], vec![dc2]));
         // Write back with mode bits [1:0] = Sleep (0x01)
