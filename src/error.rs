@@ -118,6 +118,42 @@ pub enum Error<E> {
 }
 
 // ---------------------------------------------------------------------------
+// ConfigError
+// ---------------------------------------------------------------------------
+
+/// Errors that can occur during [`ConfigBuilder::build()`](crate::ConfigBuilder::build).
+///
+/// Unlike [`Error<E>`], this type is *not* generic — configuration validation
+/// never touches the I2C bus, so there is no transport error to propagate.
+///
+/// # Examples
+///
+/// ```
+/// use tmag5273::ConfigError;
+///
+/// let err = ConfigError::AngleRequiresTwoChannels;
+/// assert_eq!(err, ConfigError::AngleRequiresTwoChannels);
+/// ```
+#[derive(Debug, Clone, Copy, PartialEq, thiserror::Error)]
+#[cfg_attr(feature = "defmt", derive(defmt::Format))]
+pub enum ConfigError {
+    /// Angle calculation requires at least two magnetic channels to be
+    /// enabled.
+    #[error("angle calculation requires at least two magnetic channels")]
+    AngleRequiresTwoChannels,
+
+    /// Sleep duration is shorter than the conversion time for the configured
+    /// averaging and channels.
+    #[error("sleep duration ({sleep} µs) < conversion time ({conversion} µs)")]
+    SleepShorterThanConversion {
+        /// Sleep duration.
+        sleep: Micros,
+        /// Required conversion time.
+        conversion: Micros,
+    },
+}
+
+// ---------------------------------------------------------------------------
 // From<E> — enables `?` on raw I2C calls
 // ---------------------------------------------------------------------------
 
@@ -302,5 +338,35 @@ mod tests {
         #[expect(clippy::clone_on_copy, reason = "explicitly testing Clone impl")]
         let cloned = err.clone();
         assert_eq!(err, cloned);
+    }
+
+    // -- ConfigError tests --------------------------------------------------
+
+    #[test]
+    fn config_error_angle_requires_two_channels() {
+        let err = ConfigError::AngleRequiresTwoChannels;
+        assert_eq!(err, ConfigError::AngleRequiresTwoChannels);
+    }
+
+    #[test]
+    fn config_error_sleep_shorter_than_conversion() {
+        let err = ConfigError::SleepShorterThanConversion {
+            sleep: Micros(1_000),
+            conversion: Micros(3_225),
+        };
+        assert_eq!(
+            err,
+            ConfigError::SleepShorterThanConversion {
+                sleep: Micros(1_000),
+                conversion: Micros(3_225),
+            }
+        );
+    }
+
+    #[test]
+    fn config_error_is_copy() {
+        let err = ConfigError::AngleRequiresTwoChannels;
+        let copy = err;
+        assert_eq!(err, copy);
     }
 }

@@ -5,7 +5,7 @@
 //! Use [`ConfigBuilder`] to construct a validated [`Config`], then pass it to
 //! [`Tmag5273::init`](crate::Tmag5273).
 
-use crate::error::Error;
+use crate::error::ConfigError;
 use crate::register;
 use crate::types::{Micros, Range};
 
@@ -612,18 +612,18 @@ impl ConfigBuilder {
     ///
     /// # Errors
     ///
-    /// Returns [`Error::AngleRequiresTwoChannels`](crate::Error::AngleRequiresTwoChannels)
+    /// Returns [`ConfigError::AngleRequiresTwoChannels`]
     /// if angle calculation is enabled with fewer than two magnetic channels.
     ///
-    /// Returns [`Error::SleepShorterThanConversion`](crate::Error::SleepShorterThanConversion)
+    /// Returns [`ConfigError::SleepShorterThanConversion`]
     /// if the sleep duration is shorter than the conversion time for the
     /// configured averaging and channels.
-    pub fn build(self) -> Result<Config, Error<core::convert::Infallible>> {
+    pub fn build(self) -> Result<Config, ConfigError> {
         // Angle calculation requires at least two axes.
         if !matches!(self.angle_calculation, AngleCalculation::None)
             && self.magnetic_channels.axis_count() < 2
         {
-            return Err(Error::AngleRequiresTwoChannels);
+            return Err(ConfigError::AngleRequiresTwoChannels);
         }
 
         // Sleep must be long enough for at least one full conversion.
@@ -633,7 +633,7 @@ impl ConfigBuilder {
                 .conversion_average
                 .conversion_time(self.magnetic_channels, self.temperature_enabled);
             if sleep_us.0 < conversion_us.0 {
-                return Err(Error::SleepShorterThanConversion {
+                return Err(ConfigError::SleepShorterThanConversion {
                     sleep: sleep_us,
                     conversion: conversion_us,
                 });
@@ -997,7 +997,7 @@ mod tests {
             .magnetic_channels(MagneticChannel::X)
             .angle_calculation(AngleCalculation::XY)
             .build();
-        assert_eq!(result.unwrap_err(), Error::AngleRequiresTwoChannels);
+        assert_eq!(result.unwrap_err(), ConfigError::AngleRequiresTwoChannels);
     }
 
     #[test]
@@ -1382,7 +1382,7 @@ mod tests {
             .build();
         assert_eq!(
             result.unwrap_err(),
-            Error::SleepShorterThanConversion {
+            ConfigError::SleepShorterThanConversion {
                 sleep: Micros(1_000),
                 conversion: Micros(3_225),
             },
