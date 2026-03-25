@@ -31,12 +31,12 @@ tmag5273 = "0.1"
 ## Quick Start
 
 ```rust,no_run
-use tmag5273::{Tmag5273, DeviceVariant, ConfigBuilder};
+use tmag5273::{Tmag5273, ConfigBuilder};
 
-// 1. Create driver (no I2C activity yet — address derived from variant)
-let sensor = Tmag5273::new(i2c, DeviceVariant::B1);
+// 1. Plug-and-play: scan the I2C bus, auto-detect variant and address
+let sensor = Tmag5273::scan(i2c).expect("no TMAG5273 found");
 
-// 2. Build a validated configuration (defaults: continuous, XYZ, temp enabled, ±80 mT)
+// 2. Build a validated configuration (defaults: continuous, XYZ, temp enabled)
 let config = ConfigBuilder::new().build()?;
 
 // 3. Initialize: verifies manufacturer ID, applies config → Configured state
@@ -54,6 +54,14 @@ let temp = sensor.read_temperature()?;
 
 // 6. Coherent T+XYZ burst read (single 8-byte I2C transaction)
 let all = sensor.read_all()?;
+```
+
+If you already know the variant, you can skip the scan:
+
+```rust,no_run
+use tmag5273::{Tmag5273, DeviceVariant, ConfigBuilder};
+
+let sensor = Tmag5273::new(i2c, DeviceVariant::B1);
 ```
 
 ## Cargo Commands

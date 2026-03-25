@@ -115,12 +115,16 @@ impl<I2C: I2c> Tmag5273<I2C, Unconfigured> {
     /// given `address`, and resolves the [`DeviceVariant`] from the address
     /// and version. Returns the constructed driver in `Unconfigured` state.
     ///
+    /// On failure, the I2C bus is returned alongside the error so the caller
+    /// can retry at a different address or reuse the bus. This follows the
+    /// same bus-recovery pattern as [`init()`](Self::init).
+    ///
     /// # Errors
     ///
     /// Returns [`Error::I2c`] if the sensor does not respond.
     /// Returns [`Error::InvalidRegisterValue`] if the version byte is not
     /// 1 or 2, or the address does not match any known family (A–D).
-    pub fn detect(mut i2c: I2C, address: u8) -> Result<Self, Error<I2C::Error>> {
+    pub fn detect(mut i2c: I2C, address: u8) -> Result<Self, (Error<I2C::Error>, I2C)> {
         let address = address & 0x7F;
 
         // Wake the sensor (may NACK if already awake — that's fine).
@@ -128,17 +132,63 @@ impl<I2C: I2c> Tmag5273<I2C, Unconfigured> {
 
         // Read DEVICE_ID register to get the version field.
         let mut buf = [0u8];
-        i2c.write_read(address, &[register::DEVICE_ID], &mut buf)?;
+        if let Err(e) = i2c.write_read(address, &[register::DEVICE_ID], &mut buf) {
+            return Err((Error::I2c(e), i2c));
+        }
         let version = register::extract(buf[0], register::VERSION_MASK, register::VERSION_SHIFT);
 
-        let variant = DeviceVariant::from_address_version(address, version).ok_or(
-            Error::InvalidRegisterValue {
-                register: register::DEVICE_ID,
-                value: version,
-            },
-        )?;
+        match DeviceVariant::from_address_version(address, version) {
+            Some(variant) => Ok(Self::new_with_address(i2c, variant, address)),
+            None => Err((
+                Error::InvalidRegisterValue {
+                    register: register::DEVICE_ID,
+                    value: version,
+                },
+                i2c,
+            )),
+        }
+    }
 
-        Ok(Self::new_with_address(i2c, variant, address))
+    /// Scan all known TMAG5273 addresses and auto-detect the variant.
+    ///
+    /// Tries each address in [`DeviceVariant::KNOWN_ADDRESSES`] (0x22, 0x35,
+    /// 0x44, 0x78). Returns the first sensor that responds with a valid
+    /// `DEVICE_ID`. No knowledge of the hardware is required — true
+    /// plug-and-play.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # use embedded_hal_mock::eh1::i2c::{Mock as I2cMock, Transaction};
+    /// # let i2c = I2cMock::new(&[]);
+    /// use tmag5273::{Tmag5273, ConfigBuilder};
+    ///
+    /// let sensor = Tmag5273::scan(i2c).expect("no TMAG5273 found on bus");
+    /// let config = ConfigBuilder::new().build().unwrap();
+    /// // let mut sensor = sensor.init(&config).unwrap();
+    /// ```
+    ///
+    /// # Errors
+    ///
+    /// Returns the last [`Error`] and the I2C bus if no sensor responds at
+    /// any known address.
+    pub fn scan(i2c: I2C) -> Result<Self, (Error<I2C::Error>, I2C)> {
+        let mut bus = i2c;
+        let mut last_err = None;
+
+        for &address in &DeviceVariant::KNOWN_ADDRESSES {
+            match Self::detect(bus, address) {
+                Ok(sensor) => return Ok(sensor),
+                Err((err, recovered_bus)) => {
+                    last_err = Some(err);
+                    bus = recovered_bus;
+                }
+            }
+        }
+
+        // All addresses failed — return last error with the bus.
+        // SAFETY: last_err is always Some because KNOWN_ADDRESSES is non-empty.
+        Err((last_err.unwrap(), bus))
     }
 
     /// Create a new driver instance with a custom I2C address.
@@ -1652,14 +1702,109 @@ mod tests {
     }
 
     #[test]
-    fn detect_unknown_address_returns_error() {
-        assert!(DeviceVariant::from_address_version(0x30, 1).is_none());
+    fn detect_nack_returns_bus() {
+        let address = 0x22u8;
+        let expectations = [
+            // Wake-up write
+            I2cTransaction::write(address, vec![]),
+            // DEVICE_ID read NACKs
+            I2cTransaction::write_read(address, vec![0x0D], vec![0x00]).with_error(
+                embedded_hal::i2c::ErrorKind::NoAcknowledge(
+                    embedded_hal::i2c::NoAcknowledgeSource::Address,
+                ),
+            ),
+        ];
+        let i2c = I2cMock::new(&expectations);
+
+        let (err, mut bus) = Tmag5273::detect(i2c, address).unwrap_err();
+        assert!(matches!(err, Error::I2c(_)));
+        bus.done(); // bus recovered, mock expectations met
     }
 
     #[test]
-    fn detect_unknown_version_returns_error() {
-        assert!(DeviceVariant::from_address_version(0x22, 3).is_none());
-        assert!(DeviceVariant::from_address_version(0x22, 0).is_none());
+    fn detect_unknown_version_returns_bus() {
+        let address = 0x22u8;
+        let expectations = [
+            I2cTransaction::write(address, vec![]),
+            // Returns version 3 — not a valid TMAG5273 version
+            I2cTransaction::write_read(address, vec![0x0D], vec![0x03]),
+        ];
+        let i2c = I2cMock::new(&expectations);
+
+        let (err, mut bus) = Tmag5273::detect(i2c, address).unwrap_err();
+        assert!(matches!(err, Error::InvalidRegisterValue { .. }));
+        bus.done();
+    }
+
+    #[test]
+    fn detect_unknown_address_returns_bus() {
+        let address = 0x30u8;
+        let expectations = [
+            I2cTransaction::write(address, vec![]),
+            I2cTransaction::write_read(address, vec![0x0D], vec![0x01]),
+        ];
+        let i2c = I2cMock::new(&expectations);
+
+        let (err, mut bus) = Tmag5273::detect(i2c, address).unwrap_err();
+        assert!(matches!(err, Error::InvalidRegisterValue { .. }));
+        bus.done();
+    }
+
+    // -- scan() --------------------------------------------------------------
+
+    /// Helper: mock expectations for a NACK at a given address (wake + failed read).
+    fn nack_at(address: u8) -> Vec<I2cTransaction> {
+        vec![
+            I2cTransaction::write(address, vec![]),
+            I2cTransaction::write_read(address, vec![0x0D], vec![0x00]).with_error(
+                embedded_hal::i2c::ErrorKind::NoAcknowledge(
+                    embedded_hal::i2c::NoAcknowledgeSource::Address,
+                ),
+            ),
+        ]
+    }
+
+    /// Helper: mock expectations for a successful detect at a given address.
+    fn respond_at(address: u8, version: u8) -> Vec<I2cTransaction> {
+        vec![
+            I2cTransaction::write(address, vec![]),
+            I2cTransaction::write_read(address, vec![0x0D], vec![version]),
+        ]
+    }
+
+    #[test]
+    fn scan_finds_first_address() {
+        // B-family (0x22) responds first — scan should stop immediately
+        let mut expectations = respond_at(0x22, 0x01);
+        let i2c = I2cMock::new(&expectations);
+
+        let sensor = Tmag5273::scan(i2c).unwrap();
+        sensor.into_inner().done();
+    }
+
+    #[test]
+    fn scan_finds_third_address() {
+        // B(0x22) NACKs, A(0x35) NACKs, D(0x44) responds
+        let mut expectations = nack_at(0x22);
+        expectations.extend(nack_at(0x35));
+        expectations.extend(respond_at(0x44, 0x02)); // D2
+        let i2c = I2cMock::new(&expectations);
+
+        let sensor = Tmag5273::scan(i2c).unwrap();
+        sensor.into_inner().done();
+    }
+
+    #[test]
+    fn scan_all_nack_returns_error() {
+        let mut expectations = nack_at(0x22);
+        expectations.extend(nack_at(0x35));
+        expectations.extend(nack_at(0x44));
+        expectations.extend(nack_at(0x78));
+        let i2c = I2cMock::new(&expectations);
+
+        let (err, mut bus) = Tmag5273::scan(i2c).unwrap_err();
+        assert!(matches!(err, Error::I2c(_)));
+        bus.done();
     }
 
     /// Default config used by most tests: ContinuousMeasure, XYZ, temp on,

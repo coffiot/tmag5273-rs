@@ -78,6 +78,12 @@ pub enum DeviceVariant {
 }
 
 impl DeviceVariant {
+    /// Factory-default I2C addresses for all TMAG5273 families.
+    ///
+    /// Ordered B, A, D, C — B-family (0x22, SparkFun default) first since
+    /// it's the most common breakout board.
+    pub const KNOWN_ADDRESSES: [u8; 4] = [I2C_ADDR_B, I2C_ADDR_A, I2C_ADDR_D, I2C_ADDR_C];
+
     /// Resolve the device variant from a known I2C address and version byte.
     ///
     /// Returns `None` if the address does not match any known family (A–D)
