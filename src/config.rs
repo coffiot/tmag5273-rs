@@ -75,13 +75,13 @@ pub enum MagneticChannel {
     YZ = 0x6,
     /// X, Y, and Z axes.
     XYZ = 0x7,
-    /// Pseudo-simultaneous X-Y-X (for angle calculation).
+    /// Pseudo-simultaneous X-Y-X — use with [`AngleCalculation::XY`].
     XYX = 0x8,
-    /// Pseudo-simultaneous Y-X-Y.
+    /// Pseudo-simultaneous Y-X-Y — use with [`AngleCalculation::XY`].
     YXY = 0x9,
-    /// Pseudo-simultaneous Y-Z-Y.
+    /// Pseudo-simultaneous Y-Z-Y — use with [`AngleCalculation::YZ`].
     YZY = 0xA,
-    /// Pseudo-simultaneous X-Z-X.
+    /// Pseudo-simultaneous X-Z-X — use with [`AngleCalculation::XZ`].
     XZX = 0xB,
 }
 
@@ -185,7 +185,8 @@ impl_try_from_u8!(ConversionAverage {
 });
 
 impl ConversionAverage {
-    /// Returns the expected conversion time for the given channel configuration.
+    /// Returns the expected conversion time in microseconds for the given
+    /// channel configuration.
     ///
     /// Formula from TI datasheet (SBASAI4 Rev C, Table 7-5):
     /// `((1 << avg) * 25) * num_channels + 25` microseconds,
@@ -589,8 +590,6 @@ impl ConfigBuilder {
 impl Config {
     /// Returns the expected conversion time in microseconds for this
     /// configuration.
-    ///
-    /// Returns the expected conversion time for this configuration.
     #[must_use]
     pub const fn conversion_time(&self) -> Micros {
         self.conversion_average
@@ -727,24 +726,26 @@ impl_try_from_u8!(ThresholdDirection {
 
 /// Per-axis threshold configuration for magnetic field and temperature.
 ///
-/// Threshold values are signed 8-bit integers representing the crossing
-/// point in sensor-native units. Use with
+/// Threshold values are signed 8-bit integers in sensor-native units.
+/// Each LSB corresponds to `full_scale_range / 128` mT (e.g., for ±80 mT
+/// range, 1 LSB ≈ 0.625 mT). Use with
 /// [`set_thresholds`](crate::Tmag5273::set_thresholds).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 #[cfg_attr(feature = "defmt", derive(defmt::Format))]
 pub struct ThresholdConfig {
-    /// X-axis threshold (signed, sensor-native units).
+    /// X-axis threshold in sensor-native units (each LSB ≈ range / 128 mT).
     pub x: i8,
-    /// Y-axis threshold (signed, sensor-native units).
+    /// Y-axis threshold in sensor-native units (each LSB ≈ range / 128 mT).
     pub y: i8,
-    /// Z-axis threshold (signed, sensor-native units).
+    /// Z-axis threshold in sensor-native units (each LSB ≈ range / 128 mT).
     pub z: i8,
-    /// Temperature threshold (signed, upper 7 bits of T_CONFIG).
+    /// Temperature threshold in sensor-native units (each LSB ≈ 1 °C).
     pub temperature: i8,
-    /// Hysteresis level (3-bit field). Higher values reduce noise sensitivity.
+    /// Hysteresis level (0–7). Higher values widen the dead-band around the
+    /// threshold to reduce false triggers from noise.
     ///
-    /// Valid range: 0--7. Values above 7 are silently clamped to 3 bits
-    /// (`& 0x07`) when written to the device register.
+    /// Values above 7 are silently clamped to 3 bits (`& 0x07`) when
+    /// written to the device register.
     pub hysteresis: u8,
     /// Whether to trigger on field above or below the threshold.
     pub direction: ThresholdDirection,
@@ -835,19 +836,17 @@ impl_try_from_u8!(GainChannel {
 
 /// Magnetic gain and offset calibration configuration.
 ///
-/// Use with [`set_calibration`](crate::Tmag5273::set_calibration).
-///
-/// **Note:** The SparkFun Arduino library has a known copy-paste bug where
-/// `config_mag_offset_2()` writes to register 0x0A instead of 0x0B.
-/// This driver writes to the correct registers.
+/// Gain and offset corrections are applied by the sensor hardware to
+/// improve measurement accuracy. Use with
+/// [`set_calibration`](crate::Tmag5273::set_calibration).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 #[cfg_attr(feature = "defmt", derive(defmt::Format))]
 pub struct CalibrationConfig {
-    /// Magnetic gain adjustment (raw 8-bit value, register 0x09).
+    /// Magnetic gain adjustment (raw 8-bit value written to register 0x09).
     pub gain: u8,
-    /// Magnetic offset for axis 1 (signed, register 0x0A).
+    /// Magnetic offset for axis 1 (signed 8-bit, register 0x0A).
     pub offset_1: i8,
-    /// Magnetic offset for axis 2 (signed, register 0x0B).
+    /// Magnetic offset for axis 2 (signed 8-bit, register 0x0B).
     pub offset_2: i8,
     /// Which axis pair receives the gain adjustment.
     pub gain_channel: GainChannel,

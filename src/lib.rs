@@ -8,23 +8,43 @@
 //! All eight TMAG5273 variants are supported (A1, A2, B1, B2, C1, C2, D1, D2),
 //! differing in default I2C address and magnetic field sensitivity range.
 //!
-//! # Features
-//!
-//! - `crc` — Enables CRC-8 validation on I2C reads (disables burst reads)
-//! - `defmt` — Enables `defmt::Format` derives on all public types
+//! | Variant | Address | XY range (low / high) | Z range (low / high) |
+//! |---------|---------|----------------------|---------------------|
+//! | A1, B1, C1, D1 | 0x35, 0x22, 0x78, 0x44 | ±40 / ±80 mT | ±40 / ±80 mT |
+//! | A2, B2, C2, D2 | 0x35, 0x22, 0x78, 0x44 | ±133 / ±266 mT | ±133 / ±266 mT |
 //!
 //! # Quick Start
+//!
+//! Three ways to construct the driver (simplest first):
 //!
 //! ```no_run
 //! # use embedded_hal_mock::eh1::i2c::{Mock as I2cMock, Transaction};
 //! # let i2c = I2cMock::new(&[]);
 //! use tmag5273::{Tmag5273, DeviceVariant, ConfigBuilder};
 //!
+//! // Option 1: Plug-and-play — scans all known addresses, auto-detects variant
+//! // let sensor = Tmag5273::scan(i2c).expect("no TMAG5273 found");
+//!
+//! // Option 2: Known address, auto-detect variant
+//! // let sensor = Tmag5273::detect(i2c, 0x22).expect("no sensor at 0x22");
+//!
+//! // Option 3: Fully explicit — no I2C activity until init()
 //! let sensor = Tmag5273::new(i2c, DeviceVariant::B1);
+//!
+//! // Configure and initialize
 //! let config = ConfigBuilder::new().build().unwrap();
 //! // let mut sensor = sensor.init(&config).unwrap();
-//! // let reading = sensor.read_magnetic().unwrap();
+//!
+//! // Read measurements
+//! // let mag = sensor.read_magnetic().unwrap();
+//! // let temp = sensor.read_temperature().unwrap();
+//! // let all = sensor.read_all().unwrap(); // coherent temp + mag in one burst
 //! ```
+//!
+//! # Features
+//!
+//! - `crc` — Enables CRC-8 validation on I2C reads (disables burst reads)
+//! - `defmt` — Enables `defmt::Format` derives on all public types
 //!
 //! [`embedded-hal`]: https://docs.rs/embedded-hal/1.0
 

@@ -1,5 +1,3 @@
-// Fixes: temperature gating, burst read in change_address, structured wake-sleep config, sign extension
-
 //! Core driver implementation for the TMAG5273 sensor.
 //!
 //! Uses a typestate pattern with [`Unconfigured`] and [`Configured`] markers
@@ -40,6 +38,19 @@ pub struct Configured;
 // ---------------------------------------------------------------------------
 
 /// Driver for the TI TMAG5273 3-axis Hall-effect sensor.
+///
+/// # Construction
+///
+/// Three ways to create the driver (simplest first):
+///
+/// 1. **[`scan()`](Self::scan)** — tries all known addresses, auto-detects variant.
+///    Zero hardware knowledge required.
+/// 2. **[`detect()`](Self::detect)** — auto-detects variant at a known address.
+/// 3. **[`new()`](Self::new)** — explicit variant, no I2C activity until [`init()`](Self::init).
+///
+/// After construction, call [`init()`](Self::init) with a [`Config`] to
+/// transition from [`Unconfigured`] to [`Configured`] and unlock measurement
+/// methods.
 ///
 /// # Type Parameters
 ///
@@ -1589,6 +1600,10 @@ impl<I2C: I2c, State, D> Tmag5273<I2C, State, D> {
     }
 
     /// Consume the driver, returning the I2C bus and delay backend.
+    ///
+    /// Use this when you need both the bus and delay back — for example,
+    /// to re-initialize with a different configuration or to reuse the
+    /// peripherals with another device.
     pub fn into_parts(self) -> (I2C, D) {
         (self.i2c, self.delay)
     }

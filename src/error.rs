@@ -1,9 +1,15 @@
 //! Error types for the TMAG5273 driver.
 //!
-//! [`Error`] is generic over the I2C bus error type `E`, allowing callers to
-//! propagate transport errors through the `?` operator.  [`InitError`] wraps
-//! an [`Error`] together with the I2C bus so callers can recover the bus on
-//! initialization failure.
+//! Three error types, each for a different phase:
+//!
+//! - [`ConfigError`] — returned by [`ConfigBuilder::build()`](crate::ConfigBuilder::build)
+//!   when configuration validation fails. Not generic — no I2C involved.
+//! - [`Error<E>`] — returned by all driver methods after initialization.
+//!   Generic over the I2C bus error type `E`; supports the `?` operator
+//!   via a blanket `From<E>` impl.
+//! - [`InitError`] — returned by [`Tmag5273::init()`](crate::Tmag5273::init).
+//!   Wraps an [`Error`] together with the I2C bus and delay backend so the
+//!   caller can recover the peripherals on initialization failure.
 
 use core::fmt;
 use embedded_hal::i2c::I2c;
