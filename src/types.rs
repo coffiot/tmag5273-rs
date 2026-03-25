@@ -78,6 +78,25 @@ pub enum DeviceVariant {
 }
 
 impl DeviceVariant {
+    /// Resolve the device variant from a known I2C address and version byte.
+    ///
+    /// Returns `None` if the address does not match any known family (A–D)
+    /// or the version is not 1 or 2.
+    #[inline]
+    pub const fn from_address_version(address: u8, version: u8) -> Option<Self> {
+        match (address, version) {
+            (I2C_ADDR_A, 1) => Some(Self::A1),
+            (I2C_ADDR_A, 2) => Some(Self::A2),
+            (I2C_ADDR_B, 1) => Some(Self::B1),
+            (I2C_ADDR_B, 2) => Some(Self::B2),
+            (I2C_ADDR_C, 1) => Some(Self::C1),
+            (I2C_ADDR_C, 2) => Some(Self::C2),
+            (I2C_ADDR_D, 1) => Some(Self::D1),
+            (I2C_ADDR_D, 2) => Some(Self::D2),
+            _ => None,
+        }
+    }
+
     /// Returns the factory-default I2C address for this variant.
     #[inline]
     pub const fn default_address(&self) -> u8 {
@@ -526,6 +545,55 @@ mod tests {
         assert_eq!(DeviceVariant::B2.version(), 2);
         assert_eq!(DeviceVariant::C2.version(), 2);
         assert_eq!(DeviceVariant::D2.version(), 2);
+    }
+
+    // -- DeviceVariant: from_address_version ----------------------------------
+
+    #[test]
+    fn from_address_version_all_variants() {
+        assert_eq!(
+            DeviceVariant::from_address_version(0x35, 1),
+            Some(DeviceVariant::A1)
+        );
+        assert_eq!(
+            DeviceVariant::from_address_version(0x35, 2),
+            Some(DeviceVariant::A2)
+        );
+        assert_eq!(
+            DeviceVariant::from_address_version(0x22, 1),
+            Some(DeviceVariant::B1)
+        );
+        assert_eq!(
+            DeviceVariant::from_address_version(0x22, 2),
+            Some(DeviceVariant::B2)
+        );
+        assert_eq!(
+            DeviceVariant::from_address_version(0x78, 1),
+            Some(DeviceVariant::C1)
+        );
+        assert_eq!(
+            DeviceVariant::from_address_version(0x78, 2),
+            Some(DeviceVariant::C2)
+        );
+        assert_eq!(
+            DeviceVariant::from_address_version(0x44, 1),
+            Some(DeviceVariant::D1)
+        );
+        assert_eq!(
+            DeviceVariant::from_address_version(0x44, 2),
+            Some(DeviceVariant::D2)
+        );
+    }
+
+    #[test]
+    fn from_address_version_unknown_address() {
+        assert_eq!(DeviceVariant::from_address_version(0x30, 1), None);
+    }
+
+    #[test]
+    fn from_address_version_unknown_version() {
+        assert_eq!(DeviceVariant::from_address_version(0x22, 3), None);
+        assert_eq!(DeviceVariant::from_address_version(0x22, 0), None);
     }
 
     // -- DeviceVariant: range tables -----------------------------------------

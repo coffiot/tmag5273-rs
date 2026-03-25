@@ -109,6 +109,38 @@ impl<I2C: I2c> Tmag5273<I2C, Unconfigured> {
         Self::new_with_address(i2c, variant, variant.default_address())
     }
 
+    /// Auto-detect the device variant by reading the `DEVICE_ID` register.
+    ///
+    /// Sends a wake-up write, reads the version field from the sensor at the
+    /// given `address`, and resolves the [`DeviceVariant`] from the address
+    /// and version. Returns the constructed driver in `Unconfigured` state.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::I2c`] if the sensor does not respond.
+    /// Returns [`Error::InvalidRegisterValue`] if the version byte is not
+    /// 1 or 2, or the address does not match any known family (A–D).
+    pub fn detect(mut i2c: I2C, address: u8) -> Result<Self, Error<I2C::Error>> {
+        let address = address & 0x7F;
+
+        // Wake the sensor (may NACK if already awake — that's fine).
+        let _ = i2c.write(address, &[]);
+
+        // Read DEVICE_ID register to get the version field.
+        let mut buf = [0u8];
+        i2c.write_read(address, &[register::DEVICE_ID], &mut buf)?;
+        let version = register::extract(buf[0], register::VERSION_MASK, register::VERSION_SHIFT);
+
+        let variant = DeviceVariant::from_address_version(address, version).ok_or(
+            Error::InvalidRegisterValue {
+                register: register::DEVICE_ID,
+                value: version,
+            },
+        )?;
+
+        Ok(Self::new_with_address(i2c, variant, address))
+    }
+
     /// Create a new driver instance with a custom I2C address.
     ///
     /// Use this when the sensor's address has been changed from the factory
@@ -1453,11 +1485,16 @@ impl<I2C: I2c, D: DelayNs> Tmag5273<I2C, Configured, D> {
         let raw = self.read_register(register::CONV_STATUS)?;
         Ok(ConversionStatus::from_reg(raw))
     }
+}
 
+// ---------------------------------------------------------------------------
+// Private I2C helpers (shared across both states)
+// ---------------------------------------------------------------------------
+
+impl<I2C: I2c, State, D> Tmag5273<I2C, State, D> {
     /// Release the I2C bus, consuming the driver.
     ///
-    /// The sensor is left in whatever operating mode it was in. Call
-    /// [`sleep`](Self::sleep) before this if you want to minimize power draw.
+    /// The sensor is left in whatever state it was in.
     ///
     /// See also [`into_parts()`](Self::into_parts) to recover both the I2C
     /// bus and the delay backend.
@@ -1466,20 +1503,10 @@ impl<I2C: I2c, D: DelayNs> Tmag5273<I2C, Configured, D> {
     }
 
     /// Consume the driver, returning the I2C bus and delay backend.
-    ///
-    /// Unlike [`into_inner()`](Self::into_inner), this returns the delay
-    /// backend as well, which is useful when the delay type holds resources
-    /// (e.g., an RTOS timer handle).
     pub fn into_parts(self) -> (I2C, D) {
         (self.i2c, self.delay)
     }
-}
 
-// ---------------------------------------------------------------------------
-// Private I2C helpers (shared across both states)
-// ---------------------------------------------------------------------------
-
-impl<I2C: I2c, State, D> Tmag5273<I2C, State, D> {
     /// Read a single register byte.
     fn read_register(&mut self, register: u8) -> Result<u8, I2C::Error> {
         let mut buf = [0u8];
@@ -1583,6 +1610,57 @@ mod tests {
             _assert_copy::<Config>();
         }
     };
+
+    // -- detect() -----------------------------------------------------------
+
+    #[test]
+    fn detect_b1_succeeds() {
+        let address = 0x22u8;
+        let expectations = [
+            I2cTransaction::write(address, vec![]),
+            I2cTransaction::write_read(address, vec![0x0D], vec![0x01]),
+        ];
+        let i2c = I2cMock::new(&expectations);
+
+        let sensor = Tmag5273::detect(i2c, address).unwrap();
+        sensor.into_inner().done();
+    }
+
+    #[test]
+    fn detect_b2_succeeds() {
+        let address = 0x22u8;
+        let expectations = [
+            I2cTransaction::write(address, vec![]),
+            I2cTransaction::write_read(address, vec![0x0D], vec![0x02]),
+        ];
+        let i2c = I2cMock::new(&expectations);
+
+        let sensor = Tmag5273::detect(i2c, address).unwrap();
+        sensor.into_inner().done();
+    }
+
+    #[test]
+    fn detect_a1_succeeds() {
+        let expectations = [
+            I2cTransaction::write(0x35, vec![]),
+            I2cTransaction::write_read(0x35, vec![0x0D], vec![0x01]),
+        ];
+        let i2c = I2cMock::new(&expectations);
+
+        let sensor = Tmag5273::detect(i2c, 0x35).unwrap();
+        sensor.into_inner().done();
+    }
+
+    #[test]
+    fn detect_unknown_address_returns_error() {
+        assert!(DeviceVariant::from_address_version(0x30, 1).is_none());
+    }
+
+    #[test]
+    fn detect_unknown_version_returns_error() {
+        assert!(DeviceVariant::from_address_version(0x22, 3).is_none());
+        assert!(DeviceVariant::from_address_version(0x22, 0).is_none());
+    }
 
     /// Default config used by most tests: ContinuousMeasure, XYZ, temp on,
     /// High range, no angle, X1 averaging — matches `ConfigBuilder::new()`.
