@@ -129,11 +129,10 @@ impl<I2C: I2c> Tmag5273<I2C, Unconfigured> {
     /// Initialize the sensor: verify identity, apply configuration, and
     /// transition to [`Configured`] state.
     ///
-    /// Wakes the device if it was left in sleep mode by previous firmware.
-    /// After the wake-up write, two dummy `DEVICE_ID` reads provide ~100 us
-    /// of I2C bus activity as a timing substitute for the 80 us wake-up
-    /// delay specified in the TI datasheet (Linux kernel uses
-    /// `usleep_range(80, 200)`).
+    /// Sends a wake-up write in case the device was left in sleep mode by
+    /// previous firmware. The subsequent I2C transactions (interrupt
+    /// disable, manufacturer ID read) provide implicit wake-up time
+    /// (>100 us at 400 kHz), satisfying the 80 us datasheet requirement.
     ///
     /// Takes `config` by reference so the same configuration can be reused
     /// across multiple sensors.
@@ -171,14 +170,15 @@ impl<I2C: I2c> Tmag5273<I2C, Unconfigured> {
         // 0a. Wake the device if it was left in SLEEP mode by previous firmware.
         // Any I2C activity triggers wake-up; an empty write is the cheapest.
         // Intentionally ignore errors — the device may NACK while waking.
+        //
+        // NOTE: The device needs ~80us to fully wake (TI datasheet; Linux
+        // kernel uses usleep_range(80, 200), Zephyr uses k_usleep). This
+        // driver has no Delay trait, so the caller must ensure sufficient
+        // time has elapsed since the last sleep if calling init() on a
+        // previously-sleeping device. In practice, the I2C transactions
+        // that follow (interrupt disable + manufacturer ID read) take
+        // >100us at 400kHz, providing implicit wake-up time.
         let _ = self.i2c.write(self.address, &[]);
-
-        // The device needs ~80us to wake. Without a Delay trait, perform
-        // dummy register reads as a timing substitute — each I2C read at
-        // 400kHz takes ~50us minimum (start + addr + reg + restart + data + stop).
-        // Two reads ≈ 100us, sufficient for the 80us wake-up requirement.
-        let _ = self.read_register(register::DEVICE_ID);
-        let _ = self.read_register(register::DEVICE_ID);
 
         // 0b. Disable interrupts before applying new configuration to prevent
         // spurious INT pin activity from stale settings.
@@ -533,10 +533,13 @@ impl<I2C: I2c> Tmag5273<I2C, Configured> {
 
     /// Switch the operating mode at runtime.
     ///
-    /// When transitioning to an active mode the device may need ~80 us to
-    /// wake from sleep (TI datasheet; Linux kernel uses
-    /// `usleep_range(80, 200)`). Two dummy `DEVICE_ID` reads provide the
-    /// required delay without a `Delay` trait.
+    /// # Wake-up timing
+    ///
+    /// When transitioning from [`Sleep`](OperatingMode::Sleep) to an active
+    /// mode, the device needs ~80 us to wake (TI datasheet; Linux kernel
+    /// uses `usleep_range(80, 200)`). This driver does not inject a delay —
+    /// the caller should wait at least 80 us before the next I2C read if
+    /// the device was in sleep mode.
     ///
     /// # Errors
     ///
@@ -550,15 +553,6 @@ impl<I2C: I2c> Tmag5273<I2C, Configured> {
             mode as u8,
         );
         self.write_register(register::DEVICE_CONFIG_2, updated)?;
-
-        // If switching to an active mode, the device may need wake-up time
-        // (80us per datasheet). Dummy reads provide the delay without
-        // requiring a Delay trait.
-        if !matches!(mode, OperatingMode::Sleep) {
-            let _ = self.read_register(register::DEVICE_ID);
-            let _ = self.read_register(register::DEVICE_ID);
-        }
-
         Ok(())
     }
 
@@ -1448,9 +1442,6 @@ mod tests {
         vec![
             // Wake-up: empty write (device may NACK — ignored by driver)
             I2cTransaction::write(address, vec![]),
-            // Wake-up delay: 2 dummy DEVICE_ID reads (~100us at 400kHz)
-            I2cTransaction::write_read(address, vec![0x0D], vec![0x01]),
-            I2cTransaction::write_read(address, vec![0x0D], vec![0x01]),
             // Disable interrupts before config (INT_CONFIG_1 = 0x00)
             I2cTransaction::write(address, vec![0x08, 0x00]),
             // Burst read manufacturer ID (0x0E..=0x0F) → [LSB=0x49, MSB=0x54]
@@ -1484,9 +1475,6 @@ mod tests {
         let expectations = vec![
             // Wake-up: empty write
             I2cTransaction::write(0x22, vec![]),
-            // Wake-up delay: 2 dummy DEVICE_ID reads
-            I2cTransaction::write_read(0x22, vec![0x0D], vec![0x01]),
-            I2cTransaction::write_read(0x22, vec![0x0D], vec![0x01]),
             // Disable interrupts before config
             I2cTransaction::write(0x22, vec![0x08, 0x00]),
             // Burst read manufacturer ID — return wrong ID
@@ -1507,9 +1495,6 @@ mod tests {
         let expectations = vec![
             // Wake-up: empty write
             I2cTransaction::write(0x22, vec![]),
-            // Wake-up delay: 2 dummy DEVICE_ID reads
-            I2cTransaction::write_read(0x22, vec![0x0D], vec![0x01]),
-            I2cTransaction::write_read(0x22, vec![0x0D], vec![0x01]),
             // Disable interrupts before config
             I2cTransaction::write(0x22, vec![0x08, 0x00]),
             // Burst read manufacturer ID — correct
@@ -1603,9 +1588,6 @@ mod tests {
         let mut expectations = vec![
             // Wake-up: empty write
             I2cTransaction::write(address, vec![]),
-            // Wake-up delay: 2 dummy DEVICE_ID reads
-            I2cTransaction::write_read(address, vec![0x0D], vec![0x01]),
-            I2cTransaction::write_read(address, vec![0x0D], vec![0x01]),
             // Disable interrupts before config
             I2cTransaction::write(address, vec![0x08, 0x00]),
             // Burst manufacturer ID read
