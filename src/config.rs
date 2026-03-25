@@ -514,6 +514,12 @@ pub struct ConfigBuilder {
     temp_coefficient: TempCoefficient,
 }
 
+impl Default for ConfigBuilder {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl ConfigBuilder {
     /// Create a new builder with defaults matching the SparkFun `begin()`
     /// production configuration.

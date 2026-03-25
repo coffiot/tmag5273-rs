@@ -19,9 +19,8 @@ use crate::config::{
 use crate::error::{Error, InitError};
 use crate::register;
 use crate::types::{
-    AngleReading, Celsius, ConversionStatus, Degrees, DeviceStatus, DeviceVariant, MagneticReading,
-    Micros, MilliTesla, NoDelay, Range, SensorReading, WAKE_DELAY, raw_to_celsius, raw_to_degrees,
-    raw_to_millitesla,
+    AngleReading, Celsius, ConversionStatus, DeviceStatus, DeviceVariant, MagneticReading, Micros,
+    NoDelay, Range, SensorReading, WAKE_DELAY, raw_to_celsius, raw_to_degrees, raw_to_millitesla,
 };
 
 // ---------------------------------------------------------------------------
@@ -1580,6 +1579,7 @@ mod tests {
 
     use super::*;
     use crate::config::ConfigBuilder;
+    use crate::types::{Degrees, MilliTesla};
     use embedded_hal_mock::eh1::delay::{CheckedDelay, Transaction as DelayTransaction};
     use embedded_hal_mock::eh1::i2c::{Mock as I2cMock, Transaction as I2cTransaction};
 
