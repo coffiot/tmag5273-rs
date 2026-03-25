@@ -114,16 +114,10 @@ impl<I2C: I2c> Tmag5273<I2C, Unconfigured> {
     /// Use this when the sensor's address has been changed from the factory
     /// default. Uses [`NoDelay`] as the delay backend.
     ///
-    /// # Panics
-    ///
-    /// Panics in debug mode if `address > 0x7F` (I2C addresses are 7-bit).
+    /// The address is masked to 7 bits (`address & 0x7F`).
     pub fn new_with_address(i2c: I2C, variant: DeviceVariant, address: u8) -> Self {
-        debug_assert!(
-            address <= 0x7F,
-            "I2C address must be 7-bit (0x00-0x7F), got 0x{address:02X}"
-        );
         Self {
-            address,
+            address: address & 0x7F,
             i2c,
             variant,
             xy_range: Range::Low,
@@ -153,21 +147,15 @@ impl<I2C: I2c, D: DelayNs> Tmag5273<I2C, Unconfigured, D> {
 
     /// Create with delay backend and custom I2C address.
     ///
-    /// # Panics
-    ///
-    /// Panics in debug mode if `address > 0x7F` (I2C addresses are 7-bit).
+    /// The address is masked to 7 bits (`address & 0x7F`).
     pub fn new_with_delay_and_address(
         i2c: I2C,
         variant: DeviceVariant,
         address: u8,
         delay: D,
     ) -> Self {
-        debug_assert!(
-            address <= 0x7F,
-            "I2C address must be 7-bit (0x00-0x7F), got 0x{address:02X}"
-        );
         Self {
-            address,
+            address: address & 0x7F,
             i2c,
             variant,
             xy_range: Range::Low,

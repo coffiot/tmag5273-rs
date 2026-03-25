@@ -67,17 +67,6 @@ pub enum Error<E> {
     #[error("angle calculation requires at least two magnetic channels")]
     AngleRequiresTwoChannels,
 
-    /// Sleep duration is shorter than the conversion time for the configured
-    /// averaging and channels. The sensor would wake, fail to complete a
-    /// conversion, and immediately re-sleep.
-    #[error("sleep duration ({sleep} µs) < conversion time ({conversion} µs)")]
-    SleepShorterThanConversion {
-        /// Sleep duration.
-        sleep: Micros,
-        /// Required conversion time.
-        conversion: Micros,
-    },
-
     /// I2C address change could not be verified at the new address.
     ///
     /// The device may have already changed its address — the caller must
@@ -273,21 +262,6 @@ mod tests {
     fn variant_angle_requires_two_channels() {
         let err: Error<FakeI2cError> = Error::AngleRequiresTwoChannels;
         assert_eq!(err, Error::AngleRequiresTwoChannels);
-    }
-
-    #[test]
-    fn variant_sleep_shorter_than_conversion() {
-        let err: Error<FakeI2cError> = Error::SleepShorterThanConversion {
-            sleep: Micros(1_000),
-            conversion: Micros(3_225),
-        };
-        assert_eq!(
-            err,
-            Error::SleepShorterThanConversion {
-                sleep: Micros(1_000),
-                conversion: Micros(3_225),
-            }
-        );
     }
 
     #[test]

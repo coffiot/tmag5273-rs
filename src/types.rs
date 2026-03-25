@@ -145,7 +145,7 @@ pub struct MilliTesla(pub f32);
 /// refined with three Newton–Raphson iterations for maximum `f32` precision
 /// (~1 ULP error, matching hardware `fsqrt` accuracy).
 #[inline]
-fn sqrt(x: f32) -> f32 {
+pub(crate) fn sqrt(x: f32) -> f32 {
     if x <= 0.0 {
         return 0.0;
     }
@@ -461,7 +461,7 @@ pub(crate) fn raw_to_degrees(raw: u16) -> Degrees {
 /// This follows the Zephyr RTOS driver's `tmag5273_magnitude_convert()` pattern.
 #[inline]
 pub fn magnitude_to_millitesla(raw_magnitude: u8, range_mt: f32) -> MilliTesla {
-    raw_to_millitesla((raw_magnitude as i16) << 8, range_mt)
+    raw_to_millitesla(((raw_magnitude as u16) << 8) as i16, range_mt)
 }
 
 // ---------------------------------------------------------------------------
@@ -794,5 +794,195 @@ mod tests {
     fn wake_delay_constants() {
         assert_eq!(WAKE_DELAY.0.0, 80);
         assert_eq!(WAKE_DELAY.1.0, 200);
+    }
+
+    // -- sqrt edge cases -------------------------------------------------
+
+    // Note: sqrt is a crate-private function, imported via `use super::*`
+
+    #[test]
+    fn sqrt_zero() {
+        assert_eq!(sqrt(0.0), 0.0);
+    }
+
+    #[test]
+    fn sqrt_negative_returns_zero() {
+        assert_eq!(sqrt(-1.0), 0.0);
+        assert_eq!(sqrt(-100.0), 0.0);
+        assert_eq!(sqrt(f32::NEG_INFINITY), 0.0);
+    }
+
+    #[test]
+    fn sqrt_perfect_squares() {
+        assert!((sqrt(1.0) - 1.0).abs() < 0.001);
+        assert!((sqrt(4.0) - 2.0).abs() < 0.001);
+        assert!((sqrt(9.0) - 3.0).abs() < 0.001);
+        assert!((sqrt(25.0) - 5.0).abs() < 0.001);
+        assert!((sqrt(100.0) - 10.0).abs() < 0.001);
+    }
+
+    #[test]
+    fn sqrt_non_perfect() {
+        assert!((sqrt(2.0) - 1.41421).abs() < 0.001);
+        assert!((sqrt(3.0) - 1.73205).abs() < 0.001);
+        assert!((sqrt(0.5) - 0.70711).abs() < 0.001);
+    }
+
+    #[test]
+    fn sqrt_very_small() {
+        assert!((sqrt(1e-6) - 1e-3).abs() < 1e-5);
+    }
+
+    #[test]
+    fn sqrt_large_values() {
+        assert!((sqrt(10000.0) - 100.0).abs() < 0.01);
+        assert!((sqrt(1e10) - 1e5).abs() < 1.0);
+    }
+
+    #[test]
+    fn sqrt_sensor_typical_values() {
+        // Typical magnitude_squared values from TMAG5273 readings
+        assert!((sqrt(0.1) - 0.31623).abs() < 0.001); // ~0.3 mT ambient
+        assert!((sqrt(6400.0) - 80.0).abs() < 0.01); // full-scale v1
+        assert!((sqrt(70756.0) - 266.0).abs() < 0.1); // full-scale v2
+    }
+
+    // -- MagneticReading::magnitude edge cases --------------------------------
+
+    #[test]
+    fn magnitude_all_none() {
+        let r = MagneticReading {
+            x: None,
+            y: None,
+            z: None,
+        };
+        assert_eq!(r.magnitude().0, 0.0);
+    }
+
+    #[test]
+    fn magnitude_single_axis() {
+        let r = MagneticReading {
+            x: Some(MilliTesla(5.0)),
+            y: None,
+            z: None,
+        };
+        assert!((r.magnitude().0 - 5.0).abs() < 0.01);
+    }
+
+    #[test]
+    fn magnitude_negative_fields() {
+        let r = MagneticReading {
+            x: Some(MilliTesla(-3.0)),
+            y: Some(MilliTesla(-4.0)),
+            z: None,
+        };
+        // sqrt(9 + 16) = 5, sign doesn't matter
+        assert!((r.magnitude().0 - 5.0).abs() < 0.01);
+    }
+
+    #[test]
+    fn magnitude_all_axes() {
+        let r = MagneticReading {
+            x: Some(MilliTesla(1.0)),
+            y: Some(MilliTesla(2.0)),
+            z: Some(MilliTesla(2.0)),
+        };
+        // sqrt(1 + 4 + 4) = 3
+        assert!((r.magnitude().0 - 3.0).abs() < 0.01);
+    }
+
+    #[test]
+    fn magnitude_zero_fields() {
+        let r = MagneticReading {
+            x: Some(MilliTesla(0.0)),
+            y: Some(MilliTesla(0.0)),
+            z: Some(MilliTesla(0.0)),
+        };
+        assert_eq!(r.magnitude().0, 0.0);
+    }
+
+    // -- magnitude_to_millitesla overflow edge cases --------------------------
+
+    #[test]
+    fn magnitude_raw_128_no_overflow() {
+        // This was the overflow bug: (128_i16) << 8 = 32768 > i16::MAX
+        // Fixed by casting through u16: ((128_u16) << 8) as i16 = -32768
+        let m = magnitude_to_millitesla(128, 80.0);
+        // (128 << 8) as i16 = -32768, then raw_to_millitesla(-(-32768) * 80 / 32768) = 80.0
+        assert!(approx_eq(m.0, 80.0), "expected ~80.0, got {}", m.0);
+    }
+
+    #[test]
+    fn magnitude_raw_255_no_overflow() {
+        // Maximum raw value: ((255_u16) << 8) as i16 = -256
+        let m = magnitude_to_millitesla(255, 80.0);
+        assert!(m.0.is_finite(), "expected finite, got {}", m.0);
+    }
+
+    #[test]
+    fn magnitude_raw_0() {
+        let m = magnitude_to_millitesla(0, 80.0);
+        assert_eq!(m.0, 0.0);
+    }
+
+    // -- raw_to_millitesla boundary values ------------------------------------
+
+    #[test]
+    fn millitesla_max_positive_raw() {
+        // i16::MAX = 32767 → -(32767) * 80 / 32768 ≈ -79.9976 mT
+        let m = raw_to_millitesla(i16::MAX, 80.0);
+        assert!(m.0 < 0.0, "max positive raw should give negative mT");
+        assert!(approx_eq(m.0, -80.0), "expected ~-80.0, got {}", m.0);
+    }
+
+    #[test]
+    fn millitesla_min_negative_raw() {
+        // i16::MIN = -32768 → -(-32768) * 80 / 32768 = 80.0 mT
+        let m = raw_to_millitesla(i16::MIN, 80.0);
+        assert!(m.0 > 0.0, "min negative raw should give positive mT");
+        assert!(approx_eq(m.0, 80.0), "expected ~80.0, got {}", m.0);
+    }
+
+    #[test]
+    fn millitesla_zero_raw() {
+        let m = raw_to_millitesla(0, 80.0);
+        assert_eq!(m.0, 0.0);
+    }
+
+    #[test]
+    fn millitesla_zero_range() {
+        let m = raw_to_millitesla(16384, 0.0);
+        assert_eq!(m.0, 0.0);
+    }
+
+    // -- raw_to_celsius boundary values ---------------------------------------
+
+    #[test]
+    fn celsius_reference_point() {
+        // At raw = TADC_T25 (17508), temperature should be 25.0°C
+        let t = raw_to_celsius(17508);
+        assert!(approx_eq(t.0, 25.0), "expected 25.0, got {}", t.0);
+    }
+
+    #[test]
+    fn celsius_zero_raw() {
+        // raw = 0 → 25.0 + (0 - 17508) / 60.1 ≈ -266.4°C
+        let t = raw_to_celsius(0);
+        assert!(t.0 < -200.0, "expected very negative, got {}", t.0);
+    }
+
+    // -- raw_to_degrees boundary values ---------------------------------------
+
+    #[test]
+    fn degrees_zero() {
+        let d = raw_to_degrees(0);
+        assert_eq!(d.0, 0.0);
+    }
+
+    #[test]
+    fn degrees_full_scale() {
+        // 0x0B40 → 180.0° per datasheet
+        let d = raw_to_degrees(0x0B40);
+        assert!(approx_eq(d.0, 180.0), "expected ~180.0, got {}", d.0);
     }
 }
