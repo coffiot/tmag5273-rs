@@ -59,13 +59,16 @@ let all = sensor.read_all()?;
 ## Cargo Commands
 
 ```bash
-# Run all unit tests (no hardware required)
+# Run all unit tests (no hardware required, 185 tests)
 cargo test -p tmag5273
 
-# Run tests with the CRC feature enabled
+# Verify feature gates are additive (same 185 tests)
+cargo test -p tmag5273 --no-default-features
+
+# Run tests with CRC feature (190 tests — adds CRC read-path + mismatch tests)
 cargo test -p tmag5273 --features crc
 
-# Run tests with all features
+# Run tests with all features (190 tests — crc + defmt)
 cargo test -p tmag5273 --all-features
 
 # Build docs locally (with feature annotations)
