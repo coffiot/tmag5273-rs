@@ -33,6 +33,29 @@
 #![deny(missing_docs)]
 #![cfg_attr(docsrs, feature(doc_auto_cfg))]
 
+/// Generates a `TryFrom<u8>` impl for a `#[repr(u8)]` enum.
+///
+/// Each variant is mapped from its discriminant value. Unknown values return
+/// `Err(value)` and emit a `defmt::warn!` when the `defmt` feature is active.
+macro_rules! impl_try_from_u8 {
+    ($enum:ty { $($val:expr => $variant:ident),+ $(,)? }) => {
+        impl TryFrom<u8> for $enum {
+            type Error = u8;
+
+            fn try_from(val: u8) -> Result<Self, u8> {
+                match val {
+                    $($val => Ok(Self::$variant),)+
+                    other => {
+                        #[cfg(feature = "defmt")]
+                        defmt::warn!("invalid register value: 0x{:02X}", other);
+                        Err(other)
+                    }
+                }
+            }
+        }
+    };
+}
+
 mod config;
 mod device;
 mod error;

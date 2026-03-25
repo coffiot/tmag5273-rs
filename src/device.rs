@@ -302,40 +302,15 @@ impl<I2C: I2c, D: DelayNs> Tmag5273<I2C, Configured, D> {
             .conversion_time(self.channels, self.temperature_enabled)
     }
 
-    /// Read magnetic field for all enabled channels.
+    /// Decode raw X/Y/Z register values into a [`MagneticReading`].
     ///
-    /// Uses a burst read (6 bytes) for data coherence and speed.
-    /// Disabled channels return `None`.
-    ///
-    /// **CRC limitation:** Even when the `crc` feature is enabled, this
-    /// method does **not** validate CRC on the magnetic burst read. The
-    /// TMAG5273 CRC scheme operates on 2-byte register-pair reads, not
-    /// 6-byte bursts. CRC validation covers temperature and angle reads
-    /// only (via [`read_register_pair`](Self::read_temperature)).
-    ///
-    /// # Errors
-    ///
-    /// Returns [`Error::I2c`] on bus communication failure.
-    pub fn read_magnetic(&mut self) -> Result<MagneticReading, Error<I2C::Error>> {
-        if self.read_mode != I2cReadMode::Standard {
-            return Err(Error::NonStandardReadMode {
-                mode: self.read_mode as u8,
-            });
-        }
-
-        // Burst read X/Y/Z: 6 bytes starting from X_MSB_RESULT (0x12)
-        let mut buf = [0u8; 6];
-        self.i2c
-            .write_read(self.address, &[register::X_MSB_RESULT], &mut buf)?;
-
-        let raw_x = i16::from_be_bytes([buf[0], buf[1]]);
-        let raw_y = i16::from_be_bytes([buf[2], buf[3]]);
-        let raw_z = i16::from_be_bytes([buf[4], buf[5]]);
-
+    /// Applies the correct range conversion per axis and suppresses disabled
+    /// channels as `None`.
+    #[inline]
+    fn decode_magnetic(&self, raw_x: i16, raw_y: i16, raw_z: i16) -> MagneticReading {
         let xy_range = self.variant.range_mt_xy(self.xy_range);
         let z_range = self.variant.range_mt_z(self.z_range);
-
-        Ok(MagneticReading {
+        MagneticReading {
             x: if self.channels.has_x() {
                 Some(raw_to_millitesla(raw_x, xy_range))
             } else {
@@ -351,7 +326,65 @@ impl<I2C: I2c, D: DelayNs> Tmag5273<I2C, Configured, D> {
             } else {
                 None
             },
+        }
+    }
+
+    /// Guard that the sensor is in Standard I2C read mode.
+    ///
+    /// High-level read methods require Standard mode; other modes change the
+    /// response format and would silently corrupt parsed data.
+    #[inline]
+    fn require_standard_mode(&self) -> Result<(), Error<I2C::Error>> {
+        if self.read_mode != I2cReadMode::Standard {
+            return Err(Error::NonStandardReadMode {
+                mode: self.read_mode as u8,
+            });
+        }
+        Ok(())
+    }
+
+    /// Read a register field and decode it into a typed enum.
+    fn read_field<T: TryFrom<u8, Error = u8>>(
+        &mut self,
+        reg: u8,
+        mask: u8,
+        shift: u8,
+    ) -> Result<T, Error<I2C::Error>> {
+        let raw = self.read_register(reg)?;
+        let val = register::extract(raw, mask, shift);
+        T::try_from(val).map_err(|_| Error::InvalidRegisterValue {
+            register: reg,
+            value: val,
         })
+    }
+
+    /// Read magnetic field for all enabled channels.
+    ///
+    /// Uses a burst read (6 bytes) for data coherence and speed.
+    /// Disabled channels return `None`.
+    ///
+    /// **CRC limitation:** Even when the `crc` feature is enabled, this
+    /// method does **not** validate CRC on the magnetic burst read. The
+    /// TMAG5273 CRC scheme operates on 2-byte register-pair reads, not
+    /// 6-byte bursts. CRC validation covers temperature and angle reads
+    /// only (via [`read_register_pair`](Self::read_temperature)).
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::I2c`] on bus communication failure.
+    pub fn read_magnetic(&mut self) -> Result<MagneticReading, Error<I2C::Error>> {
+        self.require_standard_mode()?;
+
+        // Burst read X/Y/Z: 6 bytes starting from X_MSB_RESULT (0x12)
+        let mut buf = [0u8; 6];
+        self.i2c
+            .write_read(self.address, &[register::X_MSB_RESULT], &mut buf)?;
+
+        let raw_x = i16::from_be_bytes([buf[0], buf[1]]);
+        let raw_y = i16::from_be_bytes([buf[2], buf[3]]);
+        let raw_z = i16::from_be_bytes([buf[4], buf[5]]);
+
+        Ok(self.decode_magnetic(raw_x, raw_y, raw_z))
     }
 
     /// Read temperature from the sensor.
@@ -373,11 +406,7 @@ impl<I2C: I2c, D: DelayNs> Tmag5273<I2C, Configured, D> {
             return Err(Error::TemperatureDisabled);
         }
 
-        if self.read_mode != I2cReadMode::Standard {
-            return Err(Error::NonStandardReadMode {
-                mode: self.read_mode as u8,
-            });
-        }
+        self.require_standard_mode()?;
 
         let buf = self.read_register_pair(register::T_MSB_RESULT)?;
         let raw = i16::from_be_bytes(buf);
@@ -395,11 +424,7 @@ impl<I2C: I2c, D: DelayNs> Tmag5273<I2C, Configured, D> {
     /// not enabled during initialization.
     /// Returns [`Error::I2c`] on bus communication failure.
     pub fn read_angle(&mut self) -> Result<AngleReading, Error<I2C::Error>> {
-        if self.read_mode != I2cReadMode::Standard {
-            return Err(Error::NonStandardReadMode {
-                mode: self.read_mode as u8,
-            });
-        }
+        self.require_standard_mode()?;
 
         if !self.angle_enabled {
             return Err(Error::AngleRequiresTwoChannels);
@@ -460,11 +485,7 @@ impl<I2C: I2c, D: DelayNs> Tmag5273<I2C, Configured, D> {
     /// Returns [`Error::NonStandardReadMode`] if the sensor is not in
     /// Standard I2C read mode. Returns [`Error::I2c`] on bus failure.
     pub fn read_all(&mut self) -> Result<SensorReading, Error<I2C::Error>> {
-        if self.read_mode != I2cReadMode::Standard {
-            return Err(Error::NonStandardReadMode {
-                mode: self.read_mode as u8,
-            });
-        }
+        self.require_standard_mode()?;
 
         // 8-byte burst: T_MSB(0x10), T_LSB(0x11), X_MSB(0x12), X_LSB(0x13),
         //               Y_MSB(0x14), Y_LSB(0x15), Z_MSB(0x16), Z_LSB(0x17)
@@ -477,38 +498,15 @@ impl<I2C: I2c, D: DelayNs> Tmag5273<I2C, Configured, D> {
         let raw_y = i16::from_be_bytes([buf[4], buf[5]]);
         let raw_z = i16::from_be_bytes([buf[6], buf[7]]);
 
-        let xy_range = self.variant.range_mt_xy(self.xy_range);
-        let z_range = self.variant.range_mt_z(self.z_range);
-
-        // Only convert temperature when the channel is enabled — when disabled,
-        // the T_MSB/T_LSB registers contain undefined data per TI datasheet.
         let temperature = if self.temperature_enabled {
             Some(raw_to_celsius(raw_t))
         } else {
             None
         };
 
-        let magnetic = MagneticReading {
-            x: if self.channels.has_x() {
-                Some(raw_to_millitesla(raw_x, xy_range))
-            } else {
-                None
-            },
-            y: if self.channels.has_y() {
-                Some(raw_to_millitesla(raw_y, xy_range))
-            } else {
-                None
-            },
-            z: if self.channels.has_z() {
-                Some(raw_to_millitesla(raw_z, z_range))
-            } else {
-                None
-            },
-        };
-
         Ok(SensorReading {
             temperature,
-            magnetic,
+            magnetic: self.decode_magnetic(raw_x, raw_y, raw_z),
         })
     }
 
@@ -609,12 +607,11 @@ impl<I2C: I2c, D: DelayNs> Tmag5273<I2C, Configured, D> {
     /// unrecognized value.
     /// Returns [`Error::I2c`] on bus communication failure.
     pub fn get_read_mode(&mut self) -> Result<I2cReadMode, Error<I2C::Error>> {
-        let raw = self.read_register(register::DEVICE_CONFIG_1)?;
-        let val = register::extract(raw, register::I2C_RD_MASK, register::I2C_RD_SHIFT);
-        I2cReadMode::try_from(val).map_err(|_| Error::InvalidRegisterValue {
-            register: register::DEVICE_CONFIG_1,
-            value: val,
-        })
+        self.read_field(
+            register::DEVICE_CONFIG_1,
+            register::I2C_RD_MASK,
+            register::I2C_RD_SHIFT,
+        )
     }
 
     /// Read the current state of the INT pin from the `DEVICE_STATUS` register.
@@ -1059,12 +1056,11 @@ impl<I2C: I2c, D: DelayNs> Tmag5273<I2C, Configured, D> {
     /// unrecognized value.
     /// Returns [`Error::I2c`] on bus communication failure.
     pub fn get_temp_coefficient(&mut self) -> Result<TempCoefficient, Error<I2C::Error>> {
-        let raw = self.read_register(register::DEVICE_CONFIG_1)?;
-        let val = register::extract(raw, register::MAG_TEMPCO_MASK, register::MAG_TEMPCO_SHIFT);
-        TempCoefficient::try_from(val).map_err(|_| Error::InvalidRegisterValue {
-            register: register::DEVICE_CONFIG_1,
-            value: val,
-        })
+        self.read_field(
+            register::DEVICE_CONFIG_1,
+            register::MAG_TEMPCO_MASK,
+            register::MAG_TEMPCO_SHIFT,
+        )
     }
 
     /// Read the conversion averaging mode from register `DEVICE_CONFIG_1`.
@@ -1075,12 +1071,11 @@ impl<I2C: I2c, D: DelayNs> Tmag5273<I2C, Configured, D> {
     /// unrecognized value.
     /// Returns [`Error::I2c`] on bus communication failure.
     pub fn get_conversion_average(&mut self) -> Result<ConversionAverage, Error<I2C::Error>> {
-        let raw = self.read_register(register::DEVICE_CONFIG_1)?;
-        let val = register::extract(raw, register::CONV_AVG_MASK, register::CONV_AVG_SHIFT);
-        ConversionAverage::try_from(val).map_err(|_| Error::InvalidRegisterValue {
-            register: register::DEVICE_CONFIG_1,
-            value: val,
-        })
+        self.read_field(
+            register::DEVICE_CONFIG_1,
+            register::CONV_AVG_MASK,
+            register::CONV_AVG_SHIFT,
+        )
     }
 
     /// Read the current operating mode from register `DEVICE_CONFIG_2`.
@@ -1091,16 +1086,11 @@ impl<I2C: I2c, D: DelayNs> Tmag5273<I2C, Configured, D> {
     /// unrecognized value.
     /// Returns [`Error::I2c`] on bus communication failure.
     pub fn get_operating_mode(&mut self) -> Result<OperatingMode, Error<I2C::Error>> {
-        let raw = self.read_register(register::DEVICE_CONFIG_2)?;
-        let val = register::extract(
-            raw,
+        self.read_field(
+            register::DEVICE_CONFIG_2,
             register::OPERATING_MODE_MASK,
             register::OPERATING_MODE_SHIFT,
-        );
-        OperatingMode::try_from(val).map_err(|_| Error::InvalidRegisterValue {
-            register: register::DEVICE_CONFIG_2,
-            value: val,
-        })
+        )
     }
 
     /// Read the power mode from register `DEVICE_CONFIG_2`.
@@ -1111,12 +1101,11 @@ impl<I2C: I2c, D: DelayNs> Tmag5273<I2C, Configured, D> {
     /// unrecognized value.
     /// Returns [`Error::I2c`] on bus communication failure.
     pub fn get_power_mode(&mut self) -> Result<PowerMode, Error<I2C::Error>> {
-        let raw = self.read_register(register::DEVICE_CONFIG_2)?;
-        let val = register::extract(raw, register::LP_LN_MASK, register::LP_LN_SHIFT);
-        PowerMode::try_from(val).map_err(|_| Error::InvalidRegisterValue {
-            register: register::DEVICE_CONFIG_2,
-            value: val,
-        })
+        self.read_field(
+            register::DEVICE_CONFIG_2,
+            register::LP_LN_MASK,
+            register::LP_LN_SHIFT,
+        )
     }
 
     /// Read the trigger mode from register `DEVICE_CONFIG_2`.
@@ -1127,16 +1116,11 @@ impl<I2C: I2c, D: DelayNs> Tmag5273<I2C, Configured, D> {
     /// unrecognized value.
     /// Returns [`Error::I2c`] on bus communication failure.
     pub fn get_trigger_mode(&mut self) -> Result<TriggerMode, Error<I2C::Error>> {
-        let raw = self.read_register(register::DEVICE_CONFIG_2)?;
-        let val = register::extract(
-            raw,
+        self.read_field(
+            register::DEVICE_CONFIG_2,
             register::TRIGGER_MODE_MASK,
             register::TRIGGER_MODE_SHIFT,
-        );
-        TriggerMode::try_from(val).map_err(|_| Error::InvalidRegisterValue {
-            register: register::DEVICE_CONFIG_2,
-            value: val,
-        })
+        )
     }
 
     /// Read whether the I2C glitch filter is enabled from register
@@ -1181,12 +1165,11 @@ impl<I2C: I2c, D: DelayNs> Tmag5273<I2C, Configured, D> {
     /// unrecognized value.
     /// Returns [`Error::I2c`] on bus communication failure.
     pub fn get_magnetic_channels(&mut self) -> Result<MagneticChannel, Error<I2C::Error>> {
-        let raw = self.read_register(register::SENSOR_CONFIG_1)?;
-        let val = register::extract(raw, register::MAG_CH_EN_MASK, register::MAG_CH_EN_SHIFT);
-        MagneticChannel::try_from(val).map_err(|_| Error::InvalidRegisterValue {
-            register: register::SENSOR_CONFIG_1,
-            value: val,
-        })
+        self.read_field(
+            register::SENSOR_CONFIG_1,
+            register::MAG_CH_EN_MASK,
+            register::MAG_CH_EN_SHIFT,
+        )
     }
 
     /// Read the sleep duration from register `SENSOR_CONFIG_1`.
@@ -1197,12 +1180,11 @@ impl<I2C: I2c, D: DelayNs> Tmag5273<I2C, Configured, D> {
     /// unrecognized value.
     /// Returns [`Error::I2c`] on bus communication failure.
     pub fn get_sleep_duration(&mut self) -> Result<SleepDuration, Error<I2C::Error>> {
-        let raw = self.read_register(register::SENSOR_CONFIG_1)?;
-        let val = register::extract(raw, register::SLEEPTIME_MASK, register::SLEEPTIME_SHIFT);
-        SleepDuration::try_from(val).map_err(|_| Error::InvalidRegisterValue {
-            register: register::SENSOR_CONFIG_1,
-            value: val,
-        })
+        self.read_field(
+            register::SENSOR_CONFIG_1,
+            register::SLEEPTIME_MASK,
+            register::SLEEPTIME_SHIFT,
+        )
     }
 
     /// Read the angle calculation mode from register `SENSOR_CONFIG_2`.
@@ -1213,12 +1195,11 @@ impl<I2C: I2c, D: DelayNs> Tmag5273<I2C, Configured, D> {
     /// unrecognized value.
     /// Returns [`Error::I2c`] on bus communication failure.
     pub fn get_angle_calculation(&mut self) -> Result<AngleCalculation, Error<I2C::Error>> {
-        let raw = self.read_register(register::SENSOR_CONFIG_2)?;
-        let val = register::extract(raw, register::ANGLE_EN_MASK, register::ANGLE_EN_SHIFT);
-        AngleCalculation::try_from(val).map_err(|_| Error::InvalidRegisterValue {
-            register: register::SENSOR_CONFIG_2,
-            value: val,
-        })
+        self.read_field(
+            register::SENSOR_CONFIG_2,
+            register::ANGLE_EN_MASK,
+            register::ANGLE_EN_SHIFT,
+        )
     }
 
     /// Read the X/Y axis measurement range from register `SENSOR_CONFIG_2`.
@@ -1229,12 +1210,11 @@ impl<I2C: I2c, D: DelayNs> Tmag5273<I2C, Configured, D> {
     /// unrecognized value.
     /// Returns [`Error::I2c`] on bus communication failure.
     pub fn get_xy_range(&mut self) -> Result<Range, Error<I2C::Error>> {
-        let raw = self.read_register(register::SENSOR_CONFIG_2)?;
-        let val = register::extract(raw, register::X_Y_RANGE_MASK, register::X_Y_RANGE_SHIFT);
-        Range::try_from(val).map_err(|_| Error::InvalidRegisterValue {
-            register: register::SENSOR_CONFIG_2,
-            value: val,
-        })
+        self.read_field(
+            register::SENSOR_CONFIG_2,
+            register::X_Y_RANGE_MASK,
+            register::X_Y_RANGE_SHIFT,
+        )
     }
 
     /// Read the Z axis measurement range from register `SENSOR_CONFIG_2`.
@@ -1245,12 +1225,11 @@ impl<I2C: I2c, D: DelayNs> Tmag5273<I2C, Configured, D> {
     /// unrecognized value.
     /// Returns [`Error::I2c`] on bus communication failure.
     pub fn get_z_range(&mut self) -> Result<Range, Error<I2C::Error>> {
-        let raw = self.read_register(register::SENSOR_CONFIG_2)?;
-        let val = register::extract(raw, register::Z_RANGE_MASK, register::Z_RANGE_SHIFT);
-        Range::try_from(val).map_err(|_| Error::InvalidRegisterValue {
-            register: register::SENSOR_CONFIG_2,
-            value: val,
-        })
+        self.read_field(
+            register::SENSOR_CONFIG_2,
+            register::Z_RANGE_MASK,
+            register::Z_RANGE_SHIFT,
+        )
     }
 
     /// Read the threshold crossing direction from register `SENSOR_CONFIG_2`.
@@ -1261,12 +1240,11 @@ impl<I2C: I2c, D: DelayNs> Tmag5273<I2C, Configured, D> {
     /// unrecognized value.
     /// Returns [`Error::I2c`] on bus communication failure.
     pub fn get_threshold_direction(&mut self) -> Result<ThresholdDirection, Error<I2C::Error>> {
-        let raw = self.read_register(register::SENSOR_CONFIG_2)?;
-        let val = register::extract(raw, register::MAG_THR_DIR_MASK, register::MAG_THR_DIR_SHIFT);
-        ThresholdDirection::try_from(val).map_err(|_| Error::InvalidRegisterValue {
-            register: register::SENSOR_CONFIG_2,
-            value: val,
-        })
+        self.read_field(
+            register::SENSOR_CONFIG_2,
+            register::MAG_THR_DIR_MASK,
+            register::MAG_THR_DIR_SHIFT,
+        )
     }
 
     /// Read the gain channel selection from register `SENSOR_CONFIG_2`.
@@ -1277,12 +1255,11 @@ impl<I2C: I2c, D: DelayNs> Tmag5273<I2C, Configured, D> {
     /// unrecognized value.
     /// Returns [`Error::I2c`] on bus communication failure.
     pub fn get_gain_channel(&mut self) -> Result<GainChannel, Error<I2C::Error>> {
-        let raw = self.read_register(register::SENSOR_CONFIG_2)?;
-        let val = register::extract(raw, register::MAG_GAIN_CH_MASK, register::MAG_GAIN_CH_SHIFT);
-        GainChannel::try_from(val).map_err(|_| Error::InvalidRegisterValue {
-            register: register::SENSOR_CONFIG_2,
-            value: val,
-        })
+        self.read_field(
+            register::SENSOR_CONFIG_2,
+            register::MAG_GAIN_CH_MASK,
+            register::MAG_GAIN_CH_SHIFT,
+        )
     }
 
     /// Read whether the temperature channel is enabled from register
@@ -1331,12 +1308,11 @@ impl<I2C: I2c, D: DelayNs> Tmag5273<I2C, Configured, D> {
     /// unrecognized value.
     /// Returns [`Error::I2c`] on bus communication failure.
     pub fn get_interrupt_mode(&mut self) -> Result<InterruptMode, Error<I2C::Error>> {
-        let raw = self.read_register(register::INT_CONFIG_1)?;
-        let val = register::extract(raw, register::INT_MODE_MASK, register::INT_MODE_SHIFT);
-        InterruptMode::try_from(val).map_err(|_| Error::InvalidRegisterValue {
-            register: register::INT_CONFIG_1,
-            value: val,
-        })
+        self.read_field(
+            register::INT_CONFIG_1,
+            register::INT_MODE_MASK,
+            register::INT_MODE_SHIFT,
+        )
     }
 
     /// Read whether the interrupt-on-conversion-complete flag is set from

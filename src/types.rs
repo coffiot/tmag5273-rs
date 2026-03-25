@@ -16,21 +16,10 @@ pub enum Range {
     High = 1,
 }
 
-impl TryFrom<u8> for Range {
-    type Error = u8;
-
-    fn try_from(val: u8) -> Result<Self, u8> {
-        match val {
-            0 => Ok(Self::Low),
-            1 => Ok(Self::High),
-            other => {
-                #[cfg(feature = "defmt")]
-                defmt::warn!("invalid register value: 0x{:02X}", other);
-                Err(other)
-            }
-        }
-    }
-}
+impl_try_from_u8!(Range {
+    0 => Low,
+    1 => High,
+});
 
 // ---------------------------------------------------------------------------
 // Device variant

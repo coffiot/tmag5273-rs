@@ -26,22 +26,11 @@ pub enum I2cReadMode {
     OneByte8Bit = 0x02,
 }
 
-impl TryFrom<u8> for I2cReadMode {
-    type Error = u8;
-
-    fn try_from(val: u8) -> Result<Self, u8> {
-        match val {
-            0x00 => Ok(Self::Standard),
-            0x01 => Ok(Self::OneByte16Bit),
-            0x02 => Ok(Self::OneByte8Bit),
-            other => {
-                #[cfg(feature = "defmt")]
-                defmt::warn!("invalid register value: 0x{:02X}", other);
-                Err(other)
-            }
-        }
-    }
-}
+impl_try_from_u8!(I2cReadMode {
+    0x00 => Standard,
+    0x01 => OneByte16Bit,
+    0x02 => OneByte8Bit,
+});
 
 /// Operating mode for the TMAG5273.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -58,23 +47,12 @@ pub enum OperatingMode {
     WakeUpAndSleep = 0x03,
 }
 
-impl TryFrom<u8> for OperatingMode {
-    type Error = u8;
-
-    fn try_from(val: u8) -> Result<Self, u8> {
-        match val {
-            0x00 => Ok(Self::Standby),
-            0x01 => Ok(Self::Sleep),
-            0x02 => Ok(Self::ContinuousMeasure),
-            0x03 => Ok(Self::WakeUpAndSleep),
-            other => {
-                #[cfg(feature = "defmt")]
-                defmt::warn!("invalid register value: 0x{:02X}", other);
-                Err(other)
-            }
-        }
-    }
-}
+impl_try_from_u8!(OperatingMode {
+    0x00 => Standby,
+    0x01 => Sleep,
+    0x02 => ContinuousMeasure,
+    0x03 => WakeUpAndSleep,
+});
 
 /// Magnetic channel selection.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -107,31 +85,20 @@ pub enum MagneticChannel {
     XZX = 0xB,
 }
 
-impl TryFrom<u8> for MagneticChannel {
-    type Error = u8;
-
-    fn try_from(val: u8) -> Result<Self, u8> {
-        match val {
-            0x0 => Ok(Self::Off),
-            0x1 => Ok(Self::X),
-            0x2 => Ok(Self::Y),
-            0x3 => Ok(Self::XY),
-            0x4 => Ok(Self::Z),
-            0x5 => Ok(Self::ZX),
-            0x6 => Ok(Self::YZ),
-            0x7 => Ok(Self::XYZ),
-            0x8 => Ok(Self::XYX),
-            0x9 => Ok(Self::YXY),
-            0xA => Ok(Self::YZY),
-            0xB => Ok(Self::XZX),
-            other => {
-                #[cfg(feature = "defmt")]
-                defmt::warn!("invalid register value: 0x{:02X}", other);
-                Err(other)
-            }
-        }
-    }
-}
+impl_try_from_u8!(MagneticChannel {
+    0x0 => Off,
+    0x1 => X,
+    0x2 => Y,
+    0x3 => XY,
+    0x4 => Z,
+    0x5 => ZX,
+    0x6 => YZ,
+    0x7 => XYZ,
+    0x8 => XYX,
+    0x9 => YXY,
+    0xA => YZY,
+    0xB => XZX,
+});
 
 impl MagneticChannel {
     /// Returns the number of distinct physical axes enabled.
@@ -208,25 +175,14 @@ pub enum ConversionAverage {
     X32 = 0b101,
 }
 
-impl TryFrom<u8> for ConversionAverage {
-    type Error = u8;
-
-    fn try_from(val: u8) -> Result<Self, u8> {
-        match val {
-            0b000 => Ok(Self::X1),
-            0b001 => Ok(Self::X2),
-            0b010 => Ok(Self::X4),
-            0b011 => Ok(Self::X8),
-            0b100 => Ok(Self::X16),
-            0b101 => Ok(Self::X32),
-            other => {
-                #[cfg(feature = "defmt")]
-                defmt::warn!("invalid register value: 0x{:02X}", other);
-                Err(other)
-            }
-        }
-    }
-}
+impl_try_from_u8!(ConversionAverage {
+    0b000 => X1,
+    0b001 => X2,
+    0b010 => X4,
+    0b011 => X8,
+    0b100 => X16,
+    0b101 => X32,
+});
 
 impl ConversionAverage {
     /// Returns the expected conversion time for the given channel configuration.
@@ -296,32 +252,21 @@ pub enum SleepDuration {
     Ms20000 = 0xC,
 }
 
-impl TryFrom<u8> for SleepDuration {
-    type Error = u8;
-
-    fn try_from(val: u8) -> Result<Self, u8> {
-        match val {
-            0x0 => Ok(Self::Ms1),
-            0x1 => Ok(Self::Ms5),
-            0x2 => Ok(Self::Ms10),
-            0x3 => Ok(Self::Ms15),
-            0x4 => Ok(Self::Ms20),
-            0x5 => Ok(Self::Ms30),
-            0x6 => Ok(Self::Ms50),
-            0x7 => Ok(Self::Ms100),
-            0x8 => Ok(Self::Ms500),
-            0x9 => Ok(Self::Ms1000),
-            0xA => Ok(Self::Ms2000),
-            0xB => Ok(Self::Ms5000),
-            0xC => Ok(Self::Ms20000),
-            other => {
-                #[cfg(feature = "defmt")]
-                defmt::warn!("invalid register value: 0x{:02X}", other);
-                Err(other)
-            }
-        }
-    }
-}
+impl_try_from_u8!(SleepDuration {
+    0x0 => Ms1,
+    0x1 => Ms5,
+    0x2 => Ms10,
+    0x3 => Ms15,
+    0x4 => Ms20,
+    0x5 => Ms30,
+    0x6 => Ms50,
+    0x7 => Ms100,
+    0x8 => Ms500,
+    0x9 => Ms1000,
+    0xA => Ms2000,
+    0xB => Ms5000,
+    0xC => Ms20000,
+});
 
 impl SleepDuration {
     /// Returns the sleep duration in microseconds.
@@ -355,21 +300,10 @@ pub enum PowerMode {
     LowNoise = 1,
 }
 
-impl TryFrom<u8> for PowerMode {
-    type Error = u8;
-
-    fn try_from(val: u8) -> Result<Self, u8> {
-        match val {
-            0 => Ok(Self::LowActiveCurrent),
-            1 => Ok(Self::LowNoise),
-            other => {
-                #[cfg(feature = "defmt")]
-                defmt::warn!("invalid register value: 0x{:02X}", other);
-                Err(other)
-            }
-        }
-    }
-}
+impl_try_from_u8!(PowerMode {
+    0 => LowActiveCurrent,
+    1 => LowNoise,
+});
 
 /// Trigger mode for standby conversions.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -382,21 +316,10 @@ pub enum TriggerMode {
     IntPin = 1,
 }
 
-impl TryFrom<u8> for TriggerMode {
-    type Error = u8;
-
-    fn try_from(val: u8) -> Result<Self, u8> {
-        match val {
-            0 => Ok(Self::I2cCommand),
-            1 => Ok(Self::IntPin),
-            other => {
-                #[cfg(feature = "defmt")]
-                defmt::warn!("invalid register value: 0x{:02X}", other);
-                Err(other)
-            }
-        }
-    }
-}
+impl_try_from_u8!(TriggerMode {
+    0 => I2cCommand,
+    1 => IntPin,
+});
 
 /// Magnetic temperature compensation coefficient.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -411,22 +334,11 @@ pub enum TempCoefficient {
     Ceramic = 0b11,
 }
 
-impl TryFrom<u8> for TempCoefficient {
-    type Error = u8;
-
-    fn try_from(val: u8) -> Result<Self, u8> {
-        match val {
-            0b00 => Ok(Self::None),
-            0b01 => Ok(Self::NdBFe),
-            0b11 => Ok(Self::Ceramic),
-            other => {
-                #[cfg(feature = "defmt")]
-                defmt::warn!("invalid register value: 0x{:02X}", other);
-                Err(other)
-            }
-        }
-    }
-}
+impl_try_from_u8!(TempCoefficient {
+    0b00 => None,
+    0b01 => NdBFe,
+    0b11 => Ceramic,
+});
 
 /// Angle calculation axis pair.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -443,23 +355,12 @@ pub enum AngleCalculation {
     XZ = 0b11,
 }
 
-impl TryFrom<u8> for AngleCalculation {
-    type Error = u8;
-
-    fn try_from(val: u8) -> Result<Self, u8> {
-        match val {
-            0b00 => Ok(Self::None),
-            0b01 => Ok(Self::XY),
-            0b10 => Ok(Self::YZ),
-            0b11 => Ok(Self::XZ),
-            other => {
-                #[cfg(feature = "defmt")]
-                defmt::warn!("invalid register value: 0x{:02X}", other);
-                Err(other)
-            }
-        }
-    }
-}
+impl_try_from_u8!(AngleCalculation {
+    0b00 => None,
+    0b01 => XY,
+    0b10 => YZ,
+    0b11 => XZ,
+});
 
 // ---------------------------------------------------------------------------
 // Config
@@ -818,21 +719,10 @@ pub enum ThresholdDirection {
     Below = 1,
 }
 
-impl TryFrom<u8> for ThresholdDirection {
-    type Error = u8;
-
-    fn try_from(val: u8) -> Result<Self, u8> {
-        match val {
-            0 => Ok(Self::Above),
-            1 => Ok(Self::Below),
-            other => {
-                #[cfg(feature = "defmt")]
-                defmt::warn!("invalid register value: 0x{:02X}", other);
-                Err(other)
-            }
-        }
-    }
-}
+impl_try_from_u8!(ThresholdDirection {
+    0 => Above,
+    1 => Below,
+});
 
 /// Per-axis threshold configuration for magnetic field and temperature.
 ///
@@ -880,24 +770,13 @@ pub enum InterruptMode {
     SclLatched = 0b100,
 }
 
-impl TryFrom<u8> for InterruptMode {
-    type Error = u8;
-
-    fn try_from(val: u8) -> Result<Self, u8> {
-        match val {
-            0b000 => Ok(Self::None),
-            0b001 => Ok(Self::IntPin),
-            0b010 => Ok(Self::IntPinLatched),
-            0b011 => Ok(Self::Scl),
-            0b100 => Ok(Self::SclLatched),
-            other => {
-                #[cfg(feature = "defmt")]
-                defmt::warn!("invalid register value: 0x{:02X}", other);
-                Err(other)
-            }
-        }
-    }
-}
+impl_try_from_u8!(InterruptMode {
+    0b000 => None,
+    0b001 => IntPin,
+    0b010 => IntPinLatched,
+    0b011 => Scl,
+    0b100 => SclLatched,
+});
 
 /// INT pin assertion behavior.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -910,21 +789,10 @@ pub enum IntPinBehavior {
     Pulse10us = 1,
 }
 
-impl TryFrom<u8> for IntPinBehavior {
-    type Error = u8;
-
-    fn try_from(val: u8) -> Result<Self, u8> {
-        match val {
-            0 => Ok(Self::Latched),
-            1 => Ok(Self::Pulse10us),
-            other => {
-                #[cfg(feature = "defmt")]
-                defmt::warn!("invalid register value: 0x{:02X}", other);
-                Err(other)
-            }
-        }
-    }
-}
+impl_try_from_u8!(IntPinBehavior {
+    0 => Latched,
+    1 => Pulse10us,
+});
 
 /// Interrupt configuration for the TMAG5273.
 ///
@@ -959,21 +827,10 @@ pub enum GainChannel {
     Second = 1,
 }
 
-impl TryFrom<u8> for GainChannel {
-    type Error = u8;
-
-    fn try_from(val: u8) -> Result<Self, u8> {
-        match val {
-            0 => Ok(Self::First),
-            1 => Ok(Self::Second),
-            other => {
-                #[cfg(feature = "defmt")]
-                defmt::warn!("invalid register value: 0x{:02X}", other);
-                Err(other)
-            }
-        }
-    }
-}
+impl_try_from_u8!(GainChannel {
+    0 => First,
+    1 => Second,
+});
 
 /// Magnetic gain and offset calibration configuration.
 ///
