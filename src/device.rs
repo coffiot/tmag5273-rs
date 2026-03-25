@@ -1,4 +1,5 @@
 // Rust guideline compliant 2026-03-25
+// Fixes: temperature gating, burst read in change_address, structured wake-sleep config, sign extension
 
 //! Core driver implementation for the TMAG5273 sensor.
 //!
@@ -11,9 +12,9 @@ use core::marker::PhantomData;
 use embedded_hal::i2c::I2c;
 
 use crate::config::{
-    AngleCalculation, Config, ConversionAverage, GainChannel, I2cReadMode, InterruptMode,
-    MagneticChannel, OperatingMode, PowerMode, SleepDuration, TempCoefficient, ThresholdDirection,
-    TriggerMode,
+    AngleCalculation, Config, ConversionAverage, GainChannel, I2cReadMode, IntPinBehavior,
+    InterruptMode, MagneticChannel, OperatingMode, PowerMode, SleepDuration, TempCoefficient,
+    ThresholdDirection, TriggerMode,
 };
 use crate::error::{Error, InitError};
 use crate::register;
@@ -65,6 +66,7 @@ pub struct Tmag5273<I2C, State = Unconfigured> {
     z_range: Range,
     channels: MagneticChannel,
     angle_enabled: bool,
+    temperature_enabled: bool,
     max_polls: u16,
     /// Current I2C read mode — high-level reads guard against non-Standard
     /// mode to prevent silent data corruption.
@@ -81,10 +83,10 @@ impl<I2C, State> fmt::Debug for Tmag5273<I2C, State> {
     }
 }
 
-// Compile-time size assertion — should be ~15 bytes on ESP32 (I2C handle ~4 bytes + fields).
+// Compile-time size assertion — should be ~16 bytes on ESP32 (I2C handle ~4 bytes + fields).
 const _: () = assert!(
-    core::mem::size_of::<Tmag5273<[u8; 4], Configured>>() <= 20,
-    "Tmag5273 struct exceeds 20-byte budget (excluding I2C handle)"
+    core::mem::size_of::<Tmag5273<[u8; 4], Configured>>() <= 24,
+    "Tmag5273 struct exceeds 24-byte budget (excluding I2C handle)"
 );
 
 // ---------------------------------------------------------------------------
@@ -120,6 +122,7 @@ impl<I2C: I2c> Tmag5273<I2C, Unconfigured> {
             z_range: Range::Low,
             channels: MagneticChannel::Off,
             angle_enabled: false,
+            temperature_enabled: false,
             max_polls: 10,
             read_mode: I2cReadMode::Standard,
             _state: PhantomData,
@@ -158,6 +161,7 @@ impl<I2C: I2c> Tmag5273<I2C, Unconfigured> {
             z_range: config.z_range,
             channels: config.magnetic_channels,
             angle_enabled: !matches!(config.angle_calculation, AngleCalculation::None),
+            temperature_enabled: config.temperature_enabled,
             max_polls: config.max_polls,
             read_mode: I2cReadMode::Standard,
             _state: PhantomData,
@@ -409,10 +413,13 @@ impl<I2C: I2c> Tmag5273<I2C, Configured> {
         let xy_range = self.variant.range_mt_xy(self.xy_range);
         let z_range = self.variant.range_mt_z(self.z_range);
 
-        // Following the Linux kernel pattern: always include temperature.
-        // The caller can check their config if they need to know whether
-        // the temperature channel was enabled.
-        let temperature = Some(crate::types::raw_to_celsius(raw_t));
+        // Only convert temperature when the channel is enabled — when disabled,
+        // the T_MSB/T_LSB registers contain undefined data per TI datasheet.
+        let temperature = if self.temperature_enabled {
+            Some(crate::types::raw_to_celsius(raw_t))
+        } else {
+            None
+        };
 
         let magnetic = MagneticReading {
             x: if self.channels.has_x() {
@@ -825,31 +832,29 @@ impl<I2C: I2c> Tmag5273<I2C, Configured> {
         );
         self.write_register(register::I2C_ADDRESS, reg_val)?;
 
-        // Switch to new address and verify by reading manufacturer ID.
+        // Switch to new address and verify with a single 2-byte burst read
+        // of the manufacturer ID registers (LSB=0x0E, MSB=0x0F), matching the
+        // pattern used in `init_inner()`.
         let old_address = self.address;
         self.address = new_address;
 
-        let id_lsb = match self.read_register(register::MANUFACTURER_ID_LSB) {
-            Ok(v) => v,
+        let mut id_buf = [0u8; 2];
+        match self
+            .i2c
+            .write_read(self.address, &[register::MANUFACTURER_ID_LSB], &mut id_buf)
+        {
+            Ok(()) => {
+                let id = u16::from(id_buf[1]) << 8 | u16::from(id_buf[0]);
+                if id == register::MANUFACTURER_ID_EXPECTED {
+                    Ok(())
+                } else {
+                    Err(Error::AddressChangeFailed { new_address })
+                }
+            }
             Err(_) => {
                 self.address = old_address;
-                return Err(Error::AddressChangeFailed { new_address });
+                Err(Error::AddressChangeFailed { new_address })
             }
-        };
-        let id_msb = match self.read_register(register::MANUFACTURER_ID_MSB) {
-            Ok(v) => v,
-            Err(_) => {
-                // Device responded to LSB but not MSB — address is changed
-                // but something else is wrong. Don't revert.
-                return Err(Error::AddressChangeFailed { new_address });
-            }
-        };
-
-        let id = u16::from(id_msb) << 8 | u16::from(id_lsb);
-        if id == register::MANUFACTURER_ID_EXPECTED {
-            Ok(())
-        } else {
-            Err(Error::AddressChangeFailed { new_address })
         }
     }
 
@@ -857,38 +862,62 @@ impl<I2C: I2c> Tmag5273<I2C, Configured> {
     // Advanced: Wake-Up-and-Sleep Lifecycle
     // -----------------------------------------------------------------------
 
-    /// Configure the sensor for wake-up-and-sleep mode.
+    /// Configure the sensor for wake-up-and-sleep mode with recommended
+    /// TI datasheet settings (section 8.2.1.2).
     ///
-    /// This is a convenience method that writes the exact register values
-    /// documented in the TI datasheet (section 8.2.1.2) and verified in the
-    /// SparkFun Arduino `setupWakeUpAndSleep()` function:
+    /// This writes:
+    /// - `INT_CONFIG_1`: threshold interrupt enabled, INT pin mode, 10 us pulse
+    /// - `DEVICE_CONFIG_2`: wake-up-and-sleep operating mode, hysteresis = 1
+    ///   (preserves glitch filter and trigger mode via read-modify-write)
     ///
-    /// - `INT_CONFIG_1` = `0x64`: threshold interrupt enabled, INT pin pulsed,
-    ///   routed through INT pin
-    /// - `DEVICE_CONFIG_2` = `0x23`: 7-LSB hysteresis, low active current,
-    ///   glitch filter on, I2C trigger, wake-up-and-sleep mode
-    ///
-    /// After calling this, the sensor periodically wakes, measures, checks
-    /// thresholds, and asserts INT if crossed. Configure thresholds with
-    /// [`set_thresholds`](Self::set_thresholds) before calling this method.
+    /// **Warning:** This overwrites the interrupt configuration and operating
+    /// mode. Call this AFTER [`init`](crate::Tmag5273::init) and configure
+    /// thresholds with [`set_thresholds`](Self::set_thresholds) before calling
+    /// this method.
     ///
     /// # Errors
     ///
     /// Returns [`Error::I2c`] on bus communication failure.
     pub fn configure_wake_and_sleep(&mut self) -> Result<(), Error<I2C::Error>> {
-        // Hardcoded values from TI datasheet section 8.2.1.2:
-        //   INT_CONFIG_1 = 0x64 = 0b0110_0100
-        //     RSLT_INT=0, THRESHOLD_INT=1, INT_STATE=1(pulse),
-        //     INT_MODE=001(INT pin), MASK_INTB=0, INT_PINSTATE=0
-        const WAKE_SLEEP_INT_CONFIG: u8 = 0x64;
+        // INT_CONFIG_1: threshold crossing interrupt on INT pin, 10 us pulse.
+        // Decomposed from TI datasheet value 0x64 = 0b0110_0100:
+        //   RSLT_INT=0, THRESHOLD_INT=1, INT_STATE=1 (Pulse10us),
+        //   INT_MODE=001 (IntPin), MASK_INTB=0
+        let int_config = register::insert(
+            0,
+            register::THRESHOLD_INT_MASK,
+            register::THRESHOLD_INT_SHIFT,
+            1,
+        ) | register::insert(
+            0,
+            register::INT_STATE_MASK,
+            register::INT_STATE_SHIFT,
+            IntPinBehavior::Pulse10us as u8,
+        ) | register::insert(
+            0,
+            register::INT_MODE_MASK,
+            register::INT_MODE_SHIFT,
+            InterruptMode::IntPin as u8,
+        );
+        self.write_register(register::INT_CONFIG_1, int_config)?;
 
-        //   DEVICE_CONFIG_2 = 0x23 = 0b0010_0011
-        //     THR_HYST=001(7 LSB), LP_LN=0, GLITCH_FILTER=0(on),
-        //     TRIGGER=0(I2C), OPERATING_MODE=11(wake-up-and-sleep)
-        const WAKE_SLEEP_DEVICE_CONFIG: u8 = 0x23;
+        // DEVICE_CONFIG_2: wake-up-and-sleep mode + hysteresis = 1.
+        // Read-modify-write to preserve glitch filter and trigger mode settings.
+        let current = self.read_register(register::DEVICE_CONFIG_2)?;
+        let updated = register::insert(
+            current,
+            register::OPERATING_MODE_MASK,
+            register::OPERATING_MODE_SHIFT,
+            OperatingMode::WakeUpAndSleep as u8,
+        );
+        let updated = register::insert(
+            updated,
+            register::THR_HYST_MASK,
+            register::THR_HYST_SHIFT,
+            1, // TI datasheet recommended hysteresis of 1 (7 LSB)
+        );
+        self.write_register(register::DEVICE_CONFIG_2, updated)?;
 
-        self.write_register(register::INT_CONFIG_1, WAKE_SLEEP_INT_CONFIG)?;
-        self.write_register(register::DEVICE_CONFIG_2, WAKE_SLEEP_DEVICE_CONFIG)?;
         Ok(())
     }
 
@@ -1153,8 +1182,10 @@ impl<I2C: I2c> Tmag5273<I2C, Configured> {
 
     /// Read the temperature threshold value from register `T_CONFIG`.
     ///
-    /// Returns the signed 7-bit threshold occupying the upper bits of
-    /// `T_CONFIG`.
+    /// Returns the signed 7-bit threshold occupying bits \[7:1\] of
+    /// `T_CONFIG`. The 7-bit value is sign-extended to `i8` so negative
+    /// thresholds round-trip correctly through
+    /// [`set_thresholds`](Self::set_thresholds).
     ///
     /// # Errors
     ///
@@ -1166,7 +1197,14 @@ impl<I2C: I2c> Tmag5273<I2C, Configured> {
             register::T_THR_CONFIG_MASK,
             register::T_THR_CONFIG_SHIFT,
         );
-        Ok(val as i8)
+        // Sign-extend from 7 bits: if bit 6 is set, the value is negative
+        // in two's complement. Set bit 7 to propagate the sign into `i8`.
+        let signed = if val & 0x40 != 0 {
+            (val | 0x80) as i8
+        } else {
+            val as i8
+        };
+        Ok(signed)
     }
 
     /// Read the interrupt routing mode from register `INT_CONFIG_1`.
@@ -1813,9 +1851,12 @@ mod tests {
         let reg_val = (new_addr << 1) | 0x01;
         expectations.push(I2cTransaction::write(old_addr, vec![0x0C, reg_val]));
 
-        // Verify at NEW address: read manufacturer ID
-        expectations.push(I2cTransaction::write_read(new_addr, vec![0x0E], vec![0x49]));
-        expectations.push(I2cTransaction::write_read(new_addr, vec![0x0F], vec![0x54]));
+        // Verify at NEW address: burst read manufacturer ID [LSB=0x49, MSB=0x54]
+        expectations.push(I2cTransaction::write_read(
+            new_addr,
+            vec![0x0E],
+            vec![0x49, 0x54],
+        ));
 
         let i2c = I2cMock::new(&expectations);
         let sensor = Tmag5273::new(i2c, DeviceVariant::B1);
@@ -1837,9 +1878,12 @@ mod tests {
         let reg_val = (new_addr << 1) | 0x01;
         expectations.push(I2cTransaction::write(old_addr, vec![0x0C, reg_val]));
 
-        // Verify at new address: returns wrong manufacturer ID
-        expectations.push(I2cTransaction::write_read(new_addr, vec![0x0E], vec![0x00]));
-        expectations.push(I2cTransaction::write_read(new_addr, vec![0x0F], vec![0x00]));
+        // Verify at new address: burst read returns wrong manufacturer ID
+        expectations.push(I2cTransaction::write_read(
+            new_addr,
+            vec![0x0E],
+            vec![0x00, 0x00],
+        ));
 
         let i2c = I2cMock::new(&expectations);
         let sensor = Tmag5273::new(i2c, DeviceVariant::B1);
@@ -2256,6 +2300,138 @@ mod tests {
         sensor.set_read_mode(I2cReadMode::OneByte16Bit).unwrap();
         let err = sensor.read_all().unwrap_err();
         assert_eq!(err, Error::NonStandardReadMode { mode: 0x01 });
+
+        sensor.into_inner().done();
+    }
+
+    // -- read_all() temperature gating --------------------------------------
+
+    #[test]
+    fn read_all_returns_none_temperature_when_disabled() {
+        let address = 0x22u8;
+        let config = ConfigBuilder::new()
+            .temperature_enabled(false)
+            .build()
+            .unwrap();
+
+        let writes = config.to_register_writes();
+
+        #[cfg(feature = "crc")]
+        let dc1: u8 = 0x80 | writes[0].1;
+        #[cfg(not(feature = "crc"))]
+        let dc1: u8 = writes[0].1;
+
+        let mut expectations = vec![
+            I2cTransaction::write(address, vec![]),
+            I2cTransaction::write(address, vec![0x08, 0x00]),
+            I2cTransaction::write_read(address, vec![0x0E], vec![0x49, 0x54]),
+            I2cTransaction::write_read(address, vec![0x0D], vec![0x01]),
+            I2cTransaction::write(
+                address,
+                vec![0x00, dc1, writes[1].1, writes[2].1, writes[3].1],
+            ),
+            I2cTransaction::write(address, vec![writes[4].0, writes[4].1]),
+            I2cTransaction::write_read(address, vec![0x1C], vec![0x00]),
+            I2cTransaction::write(address, vec![0x1C, 0x0F]),
+            I2cTransaction::write_read(address, vec![0x18], vec![0x00]),
+        ];
+
+        // 8-byte burst read — temperature registers contain undefined data
+        expectations.push(I2cTransaction::write_read(
+            address,
+            vec![0x10],
+            vec![0xFF, 0xFF, 0x40, 0x00, 0x20, 0x00, 0x10, 0x00],
+        ));
+
+        let i2c = I2cMock::new(&expectations);
+        let sensor = Tmag5273::new(i2c, DeviceVariant::B1);
+        let mut sensor = sensor.init(&config).unwrap();
+
+        let reading = sensor.read_all().unwrap();
+        assert!(
+            reading.temperature.is_none(),
+            "temperature should be None when channel is disabled"
+        );
+        // Magnetic channels should still be present
+        assert!(reading.magnetic.x.is_some());
+
+        sensor.into_inner().done();
+    }
+
+    // -- configure_wake_and_sleep() structured writes -----------------------
+
+    #[test]
+    fn configure_wake_and_sleep_uses_structured_registers() {
+        let address = 0x22u8;
+        let mut expectations = init_expectations(address);
+
+        // INT_CONFIG_1 full write: threshold INT + Pulse10us + IntPin mode
+        // = 0b0110_0100 = 0x64 (same result as original magic value)
+        expectations.push(I2cTransaction::write(address, vec![0x08, 0x64]));
+
+        // DEVICE_CONFIG_2 read-modify-write:
+        // Read current value (e.g. 0x02 = ContinuousMeasure mode from init)
+        expectations.push(I2cTransaction::write_read(address, vec![0x01], vec![0x02]));
+        // Write back with OperatingMode=WakeUpAndSleep (0b11) + THR_HYST=1 (0b001 << 5)
+        // 0x02 & ~0b1110_0011 = 0x00, then | (1 << 5) | 0x03 = 0x23
+        expectations.push(I2cTransaction::write(address, vec![0x01, 0x23]));
+
+        let i2c = I2cMock::new(&expectations);
+        let sensor = Tmag5273::new(i2c, DeviceVariant::B1);
+        let config = ConfigBuilder::new().build().unwrap();
+        let mut sensor = sensor.init(&config).unwrap();
+
+        sensor.configure_wake_and_sleep().unwrap();
+
+        sensor.into_inner().done();
+    }
+
+    // -- Temperature threshold sign extension --------------------------------
+
+    #[test]
+    fn temperature_threshold_negative_round_trip() {
+        let address = 0x22u8;
+        let mut expectations = init_expectations(address);
+
+        // Write threshold -5 via set_thresholds, then read it back.
+        // -5i8 as u8 = 0xFB, insert into T_CONFIG bits [7:1]:
+        //   insert(current, 0xFE, 1, 0xFB) = (0xFB << 1) & 0xFE = 0xF6
+        // With T_CH_EN=1 preserved: 0xF6 | 0x01 = 0xF7.
+        // Read back: extract(0xF7, 0xFE, 1) = 0x7B = 123.
+        // Sign extend 7-bit: bit 6 set (0x40), so 123 | 0x80 = 0xFB as i8 = -5.
+
+        // Return T_CONFIG with threshold=-5 encoded: 0xF7
+        expectations.push(I2cTransaction::write_read(address, vec![0x07], vec![0xF7]));
+
+        let i2c = I2cMock::new(&expectations);
+        let sensor = Tmag5273::new(i2c, DeviceVariant::B1);
+        let config = ConfigBuilder::new().build().unwrap();
+        let mut sensor = sensor.init(&config).unwrap();
+
+        let threshold = sensor.get_temperature_threshold().unwrap();
+        assert_eq!(threshold, -5, "expected -5, got {threshold}");
+
+        sensor.into_inner().done();
+    }
+
+    #[test]
+    fn temperature_threshold_positive_value() {
+        let address = 0x22u8;
+        let mut expectations = init_expectations(address);
+
+        // Positive threshold = 10. Insert: (10 << 1) & 0xFE = 0x14.
+        // With T_CH_EN=1: 0x14 | 0x01 = 0x15.
+        // Extract: (0x15 & 0xFE) >> 1 = 0x0A = 10.
+        // Bit 6 clear, so no sign extension: result = 10.
+        expectations.push(I2cTransaction::write_read(address, vec![0x07], vec![0x15]));
+
+        let i2c = I2cMock::new(&expectations);
+        let sensor = Tmag5273::new(i2c, DeviceVariant::B1);
+        let config = ConfigBuilder::new().build().unwrap();
+        let mut sensor = sensor.init(&config).unwrap();
+
+        let threshold = sensor.get_temperature_threshold().unwrap();
+        assert_eq!(threshold, 10, "expected 10, got {threshold}");
 
         sensor.into_inner().done();
     }
