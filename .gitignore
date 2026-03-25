@@ -1,0 +1,52 @@
+# Rust build artifacts
+/target/
+**/target/
+Cargo.lock
+dist/
+build/
+
+# IDE and editor files
+.vscode/
+.zed/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+*.iml
+.claude.local.md
+# .cargo/
+.rustup/
+
+# Rust-specific
+**/*.rs.bk
+*.pdb
+.rls
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Temporary files
+*.tmp
+*.log
+
+.embuild/
+
+# Docs
+.full-review
+docs/bytebase
+docs/embedonomicon
+docs/esp*
+docs/rust-*
+
+docs/brainstorms
+docs/plans
+docs/solutions
+docs/ideation
+
+todos/
+compound-engineering.local.md
+
+# GSD
+.planning/
