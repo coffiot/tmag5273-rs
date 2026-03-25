@@ -628,17 +628,21 @@ impl<I2C: I2c, D: DelayNs> Tmag5273<I2C, Configured, D> {
     /// Disable CRC-8 on the sensor's I2C interface.
     ///
     /// When the `crc` Cargo feature is not enabled, only disabling sensor
-    /// CRC is allowed. See the `crc`-gated version for full enable/disable.
+    /// CRC is allowed. Attempting to enable CRC without the feature returns
+    /// [`Error::CrcFeatureRequired`].
+    ///
+    /// See the `crc`-gated version for full enable/disable.
     ///
     /// # Errors
     ///
+    /// Returns [`Error::CrcFeatureRequired`] if `enabled` is `true` without
+    /// the `crc` Cargo feature.
     /// Returns [`Error::I2c`] on bus communication failure.
     #[cfg(not(feature = "crc"))]
     pub fn set_crc_enabled(&mut self, enabled: bool) -> Result<(), Error<I2C::Error>> {
-        assert!(
-            !enabled,
-            "enabling sensor CRC requires the `crc` Cargo feature"
-        );
+        if enabled {
+            return Err(Error::CrcFeatureRequired);
+        }
         let current = self.read_register(register::DEVICE_CONFIG_1)?;
         let updated = register::insert(current, register::CRC_EN_MASK, register::CRC_EN_SHIFT, 0);
         self.write_register(register::DEVICE_CONFIG_1, updated)?;
@@ -1002,10 +1006,15 @@ impl<I2C: I2c, D: DelayNs> Tmag5273<I2C, Configured, D> {
     ///
     /// Returns [`Error::I2c`] if the initial write to register 0x0C fails.
     pub fn change_address(&mut self, new_address: u8) -> Result<(), Error<I2C::Error>> {
+        let old_address = self.address;
+
         // Reject addresses outside the usable 7-bit I2C range.
         // 0x00-0x07 and 0x78-0x7F are reserved by the I2C specification.
         if !(0x08..=0x77).contains(&new_address) {
-            return Err(Error::AddressChangeFailed { new_address });
+            return Err(Error::AddressChangeFailed {
+                old_address,
+                new_address,
+            });
         }
 
         // Write new address with update-enable bit set.
@@ -1025,7 +1034,6 @@ impl<I2C: I2c, D: DelayNs> Tmag5273<I2C, Configured, D> {
         // Switch to new address and verify with a single 2-byte burst read
         // of the manufacturer ID registers (LSB=0x0E, MSB=0x0F), matching the
         // pattern used in `init_inner()`.
-        let old_address = self.address;
         self.address = new_address;
 
         let mut id_buf = [0u8; 2];
@@ -1039,12 +1047,18 @@ impl<I2C: I2c, D: DelayNs> Tmag5273<I2C, Configured, D> {
                     Ok(())
                 } else {
                     self.address = old_address;
-                    Err(Error::AddressChangeFailed { new_address })
+                    Err(Error::AddressChangeFailed {
+                        old_address,
+                        new_address,
+                    })
                 }
             }
             Err(_) => {
                 self.address = old_address;
-                Err(Error::AddressChangeFailed { new_address })
+                Err(Error::AddressChangeFailed {
+                    old_address,
+                    new_address,
+                })
             }
         }
     }
@@ -2220,7 +2234,39 @@ mod tests {
         assert_eq!(
             err,
             Error::AddressChangeFailed {
-                new_address: new_addr
+                old_address: old_addr,
+                new_address: new_addr,
+            }
+        );
+
+        sensor.into_inner().done();
+    }
+
+    #[test]
+    fn change_address_reserved_range_rejected() {
+        let address = 0x22u8;
+        let i2c = I2cMock::new(&init_expectations(address, &default_config()));
+        let sensor = Tmag5273::new(i2c, DeviceVariant::B1);
+        let config = ConfigBuilder::new().build().unwrap();
+        let mut sensor = sensor.init(&config).unwrap();
+
+        // I2C reserved: 0x00-0x07
+        let err = sensor.change_address(0x03).unwrap_err();
+        assert_eq!(
+            err,
+            Error::AddressChangeFailed {
+                old_address: 0x22,
+                new_address: 0x03,
+            }
+        );
+
+        // I2C reserved: 0x78-0x7F
+        let err = sensor.change_address(0x7A).unwrap_err();
+        assert_eq!(
+            err,
+            Error::AddressChangeFailed {
+                old_address: 0x22,
+                new_address: 0x7A,
             }
         );
 
@@ -2264,6 +2310,22 @@ mod tests {
         let mut sensor = sensor.init(&config).unwrap();
 
         sensor.set_crc_enabled(false).unwrap();
+
+        sensor.into_inner().done();
+    }
+
+    #[test]
+    #[cfg(not(feature = "crc"))]
+    fn set_crc_enabled_true_without_feature_returns_error() {
+        let address = 0x22u8;
+        // No I2C operations expected — error returned before bus access
+        let i2c = I2cMock::new(&init_expectations(address, &default_config()));
+        let sensor = Tmag5273::new(i2c, DeviceVariant::B1);
+        let config = ConfigBuilder::new().build().unwrap();
+        let mut sensor = sensor.init(&config).unwrap();
+
+        let err = sensor.set_crc_enabled(true).unwrap_err();
+        assert_eq!(err, Error::CrcFeatureRequired);
 
         sensor.into_inner().done();
     }

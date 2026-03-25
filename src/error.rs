@@ -69,10 +69,14 @@ pub enum Error<E> {
 
     /// I2C address change could not be verified at the new address.
     ///
-    /// The device may have already changed its address — the caller must
-    /// decide whether to power-cycle or retry at the new address.
-    #[error("address change to 0x{new_address:02X} could not be verified")]
+    /// The device may have already changed its address — the caller should
+    /// try communicating at `new_address` first, then fall back to
+    /// `old_address`, or power-cycle the device to restore the factory
+    /// default.
+    #[error("address change from 0x{old_address:02X} to 0x{new_address:02X} could not be verified")]
     AddressChangeFailed {
+        /// The address the device was using before the change attempt.
+        old_address: u8,
         /// The new address that was written to the device.
         new_address: u8,
     },
@@ -102,6 +106,17 @@ pub enum Error<E> {
     /// returns `None` for the temperature field when the channel is disabled.
     #[error("temperature channel is disabled; enable it in ConfigBuilder")]
     TemperatureDisabled,
+
+    /// Enabling sensor CRC requires the `crc` Cargo feature.
+    ///
+    /// The driver was compiled without CRC support, so enabling the sensor's
+    /// hardware CRC would cause it to append CRC bytes that the driver cannot
+    /// validate, silently corrupting all subsequent reads.
+    ///
+    /// Either enable the `crc` feature in `Cargo.toml` and recompile, or only
+    /// call [`set_crc_enabled(false)`](crate::Tmag5273::set_crc_enabled).
+    #[error("enabling sensor CRC requires the `crc` Cargo feature")]
+    CrcFeatureRequired,
 }
 
 // ---------------------------------------------------------------------------
@@ -266,8 +281,17 @@ mod tests {
 
     #[test]
     fn variant_address_change_failed() {
-        let err: Error<FakeI2cError> = Error::AddressChangeFailed { new_address: 0x30 };
-        assert_eq!(err, Error::AddressChangeFailed { new_address: 0x30 });
+        let err: Error<FakeI2cError> = Error::AddressChangeFailed {
+            old_address: 0x22,
+            new_address: 0x30,
+        };
+        assert_eq!(
+            err,
+            Error::AddressChangeFailed {
+                old_address: 0x22,
+                new_address: 0x30,
+            }
+        );
     }
 
     #[test]
@@ -295,6 +319,12 @@ mod tests {
     fn variant_temperature_disabled() {
         let err: Error<FakeI2cError> = Error::TemperatureDisabled;
         assert_eq!(err, Error::TemperatureDisabled);
+    }
+
+    #[test]
+    fn variant_crc_feature_required() {
+        let err: Error<FakeI2cError> = Error::CrcFeatureRequired;
+        assert_eq!(err, Error::CrcFeatureRequired);
     }
 
     #[test]
