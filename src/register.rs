@@ -23,6 +23,14 @@ pub(crate) const fn insert(reg: u8, mask: u8, shift: u8, value: u8) -> u8 {
     (reg & !mask) | ((value << shift) & mask)
 }
 
+/// OR this bit into the register address of a read to simultaneously
+/// trigger a new conversion (standby/trigger mode only).
+///
+/// From TI datasheet SBASAI4 Rev C, Section 7.5.1.1: setting bit 7 of
+/// the register address during an I2C read initiates a conversion and
+/// returns the register value in a single transaction.
+pub(crate) const CONVERSION_START_BIT: u8 = 0x80;
+
 // ---------------------------------------------------------------------------
 // 0x00 — DEVICE_CONFIG_1
 // ---------------------------------------------------------------------------

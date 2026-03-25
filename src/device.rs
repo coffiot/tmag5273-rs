@@ -464,6 +464,11 @@ impl<I2C: I2c> Tmag5273<I2C, Configured> {
 
     /// Trigger a single conversion in standby or trigger mode.
     ///
+    /// Uses the conversion start bit (0x80) OR-ed into a register read,
+    /// which triggers a conversion and returns the register value in a
+    /// single I2C transaction. This is more efficient than a separate
+    /// read-modify-write cycle.
+    ///
     /// After calling this, use [`wait_for_conversion`](Self::wait_for_conversion)
     /// to poll for completion.
     ///
@@ -471,15 +476,9 @@ impl<I2C: I2c> Tmag5273<I2C, Configured> {
     ///
     /// Returns [`Error::I2c`] on bus communication failure.
     pub fn trigger_conversion(&mut self) -> Result<(), Error<I2C::Error>> {
-        // Writing operating mode = standby triggers a single conversion.
-        let current = self.read_register(register::DEVICE_CONFIG_2)?;
-        let trigger = register::insert(
-            current,
-            register::OPERATING_MODE_MASK,
-            register::OPERATING_MODE_SHIFT,
-            OperatingMode::Standby as u8,
-        );
-        self.write_register(register::DEVICE_CONFIG_2, trigger)?;
+        // Reading any register with bit 7 set triggers a conversion.
+        // We read CONV_STATUS to also get the current status.
+        let _ = self.read_register(register::CONV_STATUS | register::CONVERSION_START_BIT)?;
         Ok(())
     }
 
@@ -525,6 +524,28 @@ impl<I2C: I2c> Tmag5273<I2C, Configured> {
     pub fn read_status(&mut self) -> Result<DeviceStatus, Error<I2C::Error>> {
         let raw = self.read_register(register::DEVICE_STATUS)?;
         Ok(DeviceStatus::from_reg(raw))
+    }
+
+    /// Check sensor diagnostics by reading `CONV_STATUS` and, if needed,
+    /// `DEVICE_STATUS`.
+    ///
+    /// Reads the conversion status register. If the `DIAG_FAIL` flag is set,
+    /// reads `DEVICE_STATUS` for specific fault information. Returns the
+    /// device status (all flags clear if no diagnostic failure).
+    ///
+    /// Inspired by the Zephyr RTOS driver's per-sample diagnostic check.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::I2c`] on bus communication failure.
+    pub fn check_diagnostics(&mut self) -> Result<DeviceStatus, Error<I2C::Error>> {
+        let conv_raw = self.read_register(register::CONV_STATUS)?;
+        let conv = ConversionStatus::from_reg(conv_raw);
+        if conv.diag_fail {
+            self.read_status()
+        } else {
+            Ok(DeviceStatus::default())
+        }
     }
 
     // -----------------------------------------------------------------------
@@ -1491,19 +1512,12 @@ mod tests {
             I2cTransaction::write_read(address, vec![0x18], vec![0x00]),
         ];
 
-        // trigger_conversion: read-modify-write on DEVICE_CONFIG_2
-        let dc2_value = config
-            .to_register_writes()
-            .iter()
-            .find(|(a, _)| *a == 0x01)
-            .unwrap()
-            .1;
+        // trigger_conversion: read CONV_STATUS with bit 7 set (0x18 | 0x80 = 0x98)
         expectations.push(I2cTransaction::write_read(
             address,
-            vec![0x01],
-            vec![dc2_value],
+            vec![0x98],
+            vec![0x00],
         ));
-        expectations.push(I2cTransaction::write(address, vec![0x01, dc2_value]));
 
         // Poll max_polls times (10 for X1), all return not-ready
         for _ in 0..config.max_polls {
@@ -2043,6 +2057,55 @@ mod tests {
         assert!(status.power_on_reset);
         assert!(status.diag_fail);
         assert!(status.result_ready);
+
+        sensor.into_inner().done();
+    }
+
+    // -- check_diagnostics (Zephyr-inspired) --------------------------------
+
+    #[test]
+    fn check_diagnostics_no_fault() {
+        let address = 0x22u8;
+        let mut expectations = init_expectations(address);
+
+        // CONV_STATUS with DIAG_FAIL=0 (bit 1 clear)
+        expectations.push(I2cTransaction::write_read(address, vec![0x18], vec![0x00]));
+        // No DEVICE_STATUS read should follow.
+
+        let i2c = I2cMock::new(&expectations);
+        let sensor = Tmag5273::new(i2c, DeviceVariant::B1);
+        let config = ConfigBuilder::new().build().unwrap();
+        let mut sensor = sensor.init(&config).unwrap();
+
+        let status = sensor.check_diagnostics().unwrap();
+        assert!(status.is_ok());
+        assert_eq!(status, DeviceStatus::default());
+
+        sensor.into_inner().done();
+    }
+
+    #[test]
+    fn check_diagnostics_with_fault() {
+        let address = 0x22u8;
+        let mut expectations = init_expectations(address);
+
+        // CONV_STATUS with DIAG_FAIL=1 (bit 1 set) → 0x02
+        expectations.push(I2cTransaction::write_read(address, vec![0x18], vec![0x02]));
+        // Driver should then read DEVICE_STATUS (0x1C) to get fault details.
+        // Return VCC undervoltage (bit 0) + oscillator error (bit 3) = 0x09.
+        expectations.push(I2cTransaction::write_read(address, vec![0x1C], vec![0x09]));
+
+        let i2c = I2cMock::new(&expectations);
+        let sensor = Tmag5273::new(i2c, DeviceVariant::B1);
+        let config = ConfigBuilder::new().build().unwrap();
+        let mut sensor = sensor.init(&config).unwrap();
+
+        let status = sensor.check_diagnostics().unwrap();
+        assert!(!status.is_ok());
+        assert!(status.vcc_undervoltage);
+        assert!(status.oscillator_error);
+        assert!(!status.otp_crc_error);
+        assert!(!status.int_error);
 
         sensor.into_inner().done();
     }
