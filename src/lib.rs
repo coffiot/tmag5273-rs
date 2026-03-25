@@ -28,7 +28,6 @@
 //!
 //! [`embedded-hal`]: https://docs.rs/embedded-hal/1.0
 
-// Rust guideline compliant 2026-03-24
 #![no_std]
 #![forbid(unsafe_code)]
 #![deny(missing_docs)]

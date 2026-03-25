@@ -1,5 +1,3 @@
-// Rust guideline compliant 2026-03-24
-
 //! Public types, newtypes, and raw-to-physical conversion helpers for the
 //! TMAG5273 Hall-effect sensor driver.
 

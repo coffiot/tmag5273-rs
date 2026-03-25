@@ -71,6 +71,7 @@ This document explains where our Rust TMAG5273 driver differs from the [SparkFun
 **SparkFun:** `setCRCMode()` toggles the sensor's CRC register at runtime. CRC validation code is always compiled in.
 
 **Rust:** Two independent layers:
+
 - **Cargo feature `crc`** — controls whether CRC validation code is compiled. Without it, the driver reads 2 bytes (no CRC overhead).
 - **`set_crc_enabled()`** — controls the sensor's hardware CRC generation register.
 
@@ -88,13 +89,13 @@ When `crc` is off, the CRC-8 function and 3-byte read paths are completely elimi
 
 ## Summary
 
-| Aspect | SparkFun | Rust | Improvement |
-|--------|----------|------|-------------|
-| I2C reads per XYZ | 6+ transactions | 1 burst | 6x fewer |
-| Invalid config values | Runtime garbage | Compile error | Eliminated |
-| Error handling | Magic int8_t | Typed Result<T,E> | Explicit |
-| Read before init | Silent garbage | Compile error | Impossible |
-| Bus on init failure | Leaked | Returned | Recoverable |
-| CRC code size | Always compiled | Feature-gated | Zero-cost |
-| Division in hot path | Runtime /32768 | Const reciprocal | Faster |
-| Mode mismatch | Silent corruption | Error returned | Safe |
+| Aspect                | SparkFun          | Rust              | Improvement |
+| --------------------- | ----------------- | ----------------- | ----------- |
+| I2C reads per XYZ     | 6+ transactions   | 1 burst           | 6x fewer    |
+| Invalid config values | Runtime garbage   | Compile error     | Eliminated  |
+| Error handling        | Magic int8_t      | Typed Result<T,E> | Explicit    |
+| Read before init      | Silent garbage    | Compile error     | Impossible  |
+| Bus on init failure   | Leaked            | Returned          | Recoverable |
+| CRC code size         | Always compiled   | Feature-gated     | Zero-cost   |
+| Division in hot path  | Runtime /32768    | Const reciprocal  | Faster      |
+| Mode mismatch         | Silent corruption | Error returned    | Safe        |

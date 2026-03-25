@@ -1,5 +1,3 @@
-// Rust guideline compliant 2026-03-24
-//
 // TMAG5273 register addresses, bit-field masks/shifts, and helpers.
 // Reference: TI TMAG5273 datasheet SBASAI4 Rev C.
 //

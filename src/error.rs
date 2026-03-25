@@ -1,5 +1,3 @@
-// Rust guideline compliant 2026-03-25
-
 //! Error types for the TMAG5273 driver.
 //!
 //! [`Error`] is generic over the I2C bus error type `E`, allowing callers to

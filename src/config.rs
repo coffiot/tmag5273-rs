@@ -1,5 +1,3 @@
-// Rust guideline compliant 2026-03-24
-
 //! Configuration builder and enums for the TMAG5273 sensor.
 //!
 //! Use [`ConfigBuilder`] to construct a validated [`Config`], then pass it to

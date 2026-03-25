@@ -1,4 +1,3 @@
-// Rust guideline compliant 2026-03-25
 // Fixes: temperature gating, burst read in change_address, structured wake-sleep config, sign extension
 
 //! Core driver implementation for the TMAG5273 sensor.
