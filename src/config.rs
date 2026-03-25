@@ -193,22 +193,24 @@ impl TryFrom<u8> for ConversionAverage {
 }
 
 impl ConversionAverage {
-    /// Returns the expected conversion time in microseconds for the given
-    /// channel configuration.
+    /// Returns the expected conversion time for the given channel configuration.
     ///
     /// Formula from TI datasheet (SBASAI4 Rev C, Table 7-5):
-    /// `((1 << avg) * 25) * num_channels + 25`
+    /// `((1 << avg) * 25) * num_channels + 25` microseconds,
     /// where `avg` is the averaging exponent (0 for X1, 5 for X32) and
     /// `num_channels` includes magnetic axes plus temperature (if enabled).
     ///
     /// This follows the Zephyr RTOS driver's conversion time calculation.
-    pub const fn conversion_time_us(
+    pub const fn conversion_time(
         self,
         channels: MagneticChannel,
         temperature_enabled: bool,
-    ) -> u32 {
-        let nb = channels.axis_count() as u32 + temperature_enabled as u32;
-        ((1u32 << self as u32) * 25) * nb + 25
+    ) -> crate::types::Micros {
+        let temp_channel: u32 = if temperature_enabled { 1 } else { 0 };
+        let num_channels = channels.axis_count() as u32 + temp_channel;
+        let samples_per_channel = 1u32 << (self as u32);
+        let us = samples_per_channel * 25 * num_channels + 25;
+        crate::types::Micros(us)
     }
 
     /// Maximum poll count for conversion timeout (2x safety margin over
@@ -605,11 +607,10 @@ impl Config {
     /// Returns the expected conversion time in microseconds for this
     /// configuration.
     ///
-    /// Delegates to [`ConversionAverage::conversion_time_us`] using the
-    /// magnetic channel and temperature settings from this config.
-    pub const fn conversion_time_us(&self) -> u32 {
+    /// Returns the expected conversion time for this configuration.
+    pub const fn conversion_time(&self) -> crate::types::Micros {
         self.conversion_average
-            .conversion_time_us(self.magnetic_channels, self.temperature_enabled)
+            .conversion_time(self.magnetic_channels, self.temperature_enabled)
     }
 
     /// Serialize this configuration into register address/value pairs for
@@ -1249,28 +1250,28 @@ mod tests {
     #[test]
     fn conversion_time_x1_xyz_temp() {
         // X1 averaging, XYZ + temp = 4 channels: (1*25)*4 + 25 = 125 us
-        let t = ConversionAverage::X1.conversion_time_us(MagneticChannel::XYZ, true);
-        assert_eq!(t, 125);
+        let t = ConversionAverage::X1.conversion_time(MagneticChannel::XYZ, true);
+        assert_eq!(t.0, 125);
     }
 
     #[test]
     fn conversion_time_x32_xyz_temp() {
         // X32, 4 channels: (32*25)*4 + 25 = 3225 us
-        let t = ConversionAverage::X32.conversion_time_us(MagneticChannel::XYZ, true);
-        assert_eq!(t, 3225);
+        let t = ConversionAverage::X32.conversion_time(MagneticChannel::XYZ, true);
+        assert_eq!(t.0, 3225);
     }
 
     #[test]
     fn conversion_time_x1_single_axis() {
         // X1, X only, no temp: (1*25)*1 + 25 = 50 us
-        let t = ConversionAverage::X1.conversion_time_us(MagneticChannel::X, false);
-        assert_eq!(t, 50);
+        let t = ConversionAverage::X1.conversion_time(MagneticChannel::X, false);
+        assert_eq!(t.0, 50);
     }
 
     #[test]
     fn config_conversion_time_delegates() {
         let config = ConfigBuilder::new().build().unwrap();
         // Default: X1, XYZ, temp enabled → 125 us
-        assert_eq!(config.conversion_time_us(), 125);
+        assert_eq!(config.conversion_time().0, 125);
     }
 }

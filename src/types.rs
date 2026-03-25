@@ -149,6 +149,11 @@ pub struct Celsius(pub f32);
 #[cfg_attr(feature = "defmt", derive(defmt::Format))]
 pub struct Degrees(pub f32);
 
+/// Duration in microseconds.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[cfg_attr(feature = "defmt", derive(defmt::Format))]
+pub struct Micros(pub u32);
+
 // ---------------------------------------------------------------------------
 // Composite reading structs
 // ---------------------------------------------------------------------------
