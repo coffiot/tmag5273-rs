@@ -13,14 +13,14 @@
 
 /// Extract a field from a register value.
 #[inline]
-pub(crate) const fn extract(reg: u8, mask: u8, shift: u8) -> u8 {
-    (reg & mask) >> shift
+pub(crate) const fn extract(register: u8, mask: u8, shift: u8) -> u8 {
+    (register & mask) >> shift
 }
 
 /// Insert a field value into a register value, preserving other bits.
 #[inline]
-pub(crate) const fn insert(reg: u8, mask: u8, shift: u8, value: u8) -> u8 {
-    (reg & !mask) | ((value << shift) & mask)
+pub(crate) const fn insert(register: u8, mask: u8, shift: u8, value: u8) -> u8 {
+    (register & !mask) | ((value << shift) & mask)
 }
 
 /// OR this bit into the register address of a read to simultaneously
@@ -253,8 +253,8 @@ mod tests {
 
     fn round_trip(mask: u8, shift: u8, max_value: u8) {
         for v in 0..=max_value {
-            let reg = insert(0x00, mask, shift, v);
-            let got = extract(reg, mask, shift);
+            let register = insert(0x00, mask, shift, v);
+            let got = extract(register, mask, shift);
             assert_eq!(
                 got, v,
                 "round-trip failed for value {v} (mask=0x{mask:02X}, shift={shift})"

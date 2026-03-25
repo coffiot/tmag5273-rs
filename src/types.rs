@@ -276,13 +276,13 @@ impl DeviceStatus {
 
     /// Parses a raw `DEVICE_STATUS` register byte into structured flags.
     #[inline]
-    pub const fn from_reg(reg: u8) -> Self {
+    pub const fn from_reg(register: u8) -> Self {
         Self {
-            vcc_undervoltage: (reg >> DEVICE_STATUS_VCC_UV_BIT) & 1 != 0,
-            otp_crc_error: (reg >> DEVICE_STATUS_OTP_CRC_BIT) & 1 != 0,
-            int_error: (reg >> DEVICE_STATUS_INT_ERR_BIT) & 1 != 0,
-            oscillator_error: (reg >> DEVICE_STATUS_OSC_ERR_BIT) & 1 != 0,
-            int_pin_active: (reg >> DEVICE_STATUS_INTB_RB_BIT) & 1 != 0,
+            vcc_undervoltage: (register >> DEVICE_STATUS_VCC_UV_BIT) & 1 != 0,
+            otp_crc_error: (register >> DEVICE_STATUS_OTP_CRC_BIT) & 1 != 0,
+            int_error: (register >> DEVICE_STATUS_INT_ERR_BIT) & 1 != 0,
+            oscillator_error: (register >> DEVICE_STATUS_OSC_ERR_BIT) & 1 != 0,
+            int_pin_active: (register >> DEVICE_STATUS_INTB_RB_BIT) & 1 != 0,
         }
     }
 }
@@ -329,12 +329,12 @@ impl ConversionStatus {
 
     /// Parses a raw `CONV_STATUS` register byte into structured fields.
     #[inline]
-    pub const fn from_reg(reg: u8) -> Self {
+    pub const fn from_reg(register: u8) -> Self {
         Self {
-            set_count: (reg >> CONV_STATUS_SET_COUNT_SHIFT) & CONV_STATUS_SET_COUNT_MASK,
-            power_on_reset: (reg >> CONV_STATUS_POR_BIT) & 1 != 0,
-            diag_fail: (reg >> CONV_STATUS_DIAG_BIT) & 1 != 0,
-            result_ready: (reg >> CONV_STATUS_READY_BIT) & 1 != 0,
+            set_count: (register >> CONV_STATUS_SET_COUNT_SHIFT) & CONV_STATUS_SET_COUNT_MASK,
+            power_on_reset: (register >> CONV_STATUS_POR_BIT) & 1 != 0,
+            diag_fail: (register >> CONV_STATUS_DIAG_BIT) & 1 != 0,
+            result_ready: (register >> CONV_STATUS_READY_BIT) & 1 != 0,
         }
     }
 }

@@ -818,7 +818,7 @@ impl<I2C: I2c, D: DelayNs> Tmag5273<I2C, Configured, D> {
         config: &crate::config::InterruptConfig,
     ) -> Result<(), Error<I2C::Error>> {
         // INT_CONFIG_1 is a standalone register — full write, no read-modify-write.
-        let reg = register::insert(
+        let register = register::insert(
             0,
             register::RSLT_INT_MASK,
             register::RSLT_INT_SHIFT,
@@ -844,7 +844,7 @@ impl<I2C: I2c, D: DelayNs> Tmag5273<I2C, Configured, D> {
             register::MASK_INTB_SHIFT,
             u8::from(config.mask),
         );
-        self.write_register(register::INT_CONFIG_1, reg)?;
+        self.write_register(register::INT_CONFIG_1, register)?;
         Ok(())
     }
 
@@ -1490,15 +1490,15 @@ impl<I2C: I2c, D: DelayNs> Tmag5273<I2C, Configured, D> {
 
 impl<I2C: I2c, State, D> Tmag5273<I2C, State, D> {
     /// Read a single register byte.
-    fn read_register(&mut self, reg: u8) -> Result<u8, I2C::Error> {
+    fn read_register(&mut self, register: u8) -> Result<u8, I2C::Error> {
         let mut buf = [0u8];
-        self.i2c.write_read(self.address, &[reg], &mut buf)?;
+        self.i2c.write_read(self.address, &[register], &mut buf)?;
         Ok(buf[0])
     }
 
     /// Write a single register byte.
-    fn write_register(&mut self, reg: u8, value: u8) -> Result<(), I2C::Error> {
-        self.i2c.write(self.address, &[reg, value])?;
+    fn write_register(&mut self, register: u8, value: u8) -> Result<(), I2C::Error> {
+        self.i2c.write(self.address, &[register, value])?;
         Ok(())
     }
 
@@ -1507,26 +1507,26 @@ impl<I2C: I2c, State, D> Tmag5273<I2C, State, D> {
     /// When the `crc` feature is enabled, reads 3 bytes (MSB + LSB + CRC)
     /// and validates the CRC-8 checksum. Without the feature, reads 2 bytes.
     #[cfg(not(feature = "crc"))]
-    fn read_register_pair(&mut self, reg: u8) -> Result<[u8; 2], Error<I2C::Error>> {
+    fn read_register_pair(&mut self, register: u8) -> Result<[u8; 2], Error<I2C::Error>> {
         let mut buf = [0u8; 2];
-        self.i2c.write_read(self.address, &[reg], &mut buf)?;
+        self.i2c.write_read(self.address, &[register], &mut buf)?;
         Ok(buf)
     }
 
     /// Read a register pair with CRC-8 validation.
     ///
-    /// Reads 3 bytes: MSB, LSB, CRC. Validates the CRC over `[address_W, reg, address_R, MSB, LSB]`
+    /// Reads 3 bytes: MSB, LSB, CRC. Validates the CRC over `[address_W, register, address_R, MSB, LSB]`
     /// per TI datasheet Section 7.5.3.2.
     #[cfg(feature = "crc")]
-    fn read_register_pair(&mut self, reg: u8) -> Result<[u8; 2], Error<I2C::Error>> {
+    fn read_register_pair(&mut self, register: u8) -> Result<[u8; 2], Error<I2C::Error>> {
         let mut buf = [0u8; 3]; // MSB + LSB + CRC
-        self.i2c.write_read(self.address, &[reg], &mut buf)?;
+        self.i2c.write_read(self.address, &[register], &mut buf)?;
 
         // CRC is computed over the full I2C transaction bytes:
         // [device_addr << 1 | W, register_addr, device_addr << 1 | R, data_MSB, data_LSB]
         let crc_input = [
             self.address << 1,       // address + write bit
-            reg,                     // register address
+            register,                // register address
             (self.address << 1) | 1, // address + read bit
             buf[0],                  // data MSB
             buf[1],                  // data LSB
@@ -1706,7 +1706,7 @@ mod tests {
         ));
         #[cfg(feature = "crc")]
         {
-            // CRC input: [addr<<1|W=0x44, reg=0x10, addr<<1|R=0x45, MSB=0x44, LSB=0x64]
+            // CRC input: [addr<<1|W=0x44, register=0x10, addr<<1|R=0x45, MSB=0x44, LSB=0x64]
             let crc = super::crc8(&[0x44, 0x10, 0x45, 0x44, 0x64]);
             expectations.push(I2cTransaction::write_read(
                 0x22,
