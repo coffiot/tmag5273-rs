@@ -1580,6 +1580,7 @@ mod tests {
 
     use super::*;
     use crate::config::ConfigBuilder;
+    use embedded_hal_mock::eh1::delay::{CheckedDelay, Transaction as DelayTransaction};
     use embedded_hal_mock::eh1::i2c::{Mock as I2cMock, Transaction as I2cTransaction};
 
     // Compile-time assertion: Config must be Copy because to_register_writes()
@@ -2896,5 +2897,113 @@ mod tests {
         assert_eq!(err, Error::ConversionTimeout);
 
         sensor.into_inner().done();
+    }
+
+    // -- CheckedDelay timing verification -----------------------------------
+
+    #[test]
+    fn init_with_checked_delay_calls_wake_delay() {
+        let i2c = I2cMock::new(&init_expectations(0x22, &default_config()));
+        let delay = CheckedDelay::new(&[DelayTransaction::delay_us(80)]);
+
+        let sensor = Tmag5273::new_with_delay(i2c, DeviceVariant::B1, delay);
+        let config = ConfigBuilder::new().build().unwrap();
+        let sensor = sensor.init(&config).unwrap();
+
+        let (mut i2c, mut delay) = sensor.into_parts();
+        i2c.done();
+        delay.done();
+    }
+
+    #[test]
+    fn set_mode_with_checked_delay_wakes_on_active() {
+        let address = 0x22u8;
+        let config = default_config();
+        let dc2 = config.to_register_writes()[1].1;
+
+        let mut i2c_expectations = init_expectations(address, &config);
+        // set_mode(Standby): read DEVICE_CONFIG_2 → current value
+        i2c_expectations.push(I2cTransaction::write_read(address, vec![0x01], vec![dc2]));
+        // Write back with mode bits [1:0] = Standby (0x00)
+        i2c_expectations.push(I2cTransaction::write(address, vec![0x01, dc2 & !0x03]));
+
+        let i2c = I2cMock::new(&i2c_expectations);
+        // Two wake delays: one from init, one from set_mode(Standby)
+        let delay = CheckedDelay::new(&[
+            DelayTransaction::delay_us(80),
+            DelayTransaction::delay_us(80),
+        ]);
+
+        let sensor = Tmag5273::new_with_delay(i2c, DeviceVariant::B1, delay);
+        let mut sensor = sensor.init(&config).unwrap();
+
+        sensor.set_mode(OperatingMode::Standby).unwrap();
+
+        let (mut i2c, mut delay) = sensor.into_parts();
+        i2c.done();
+        delay.done();
+    }
+
+    #[test]
+    fn sleep_with_checked_delay_skips_wake() {
+        let address = 0x22u8;
+        let config = default_config();
+        let dc2 = config.to_register_writes()[1].1;
+
+        let mut i2c_expectations = init_expectations(address, &config);
+        // sleep() → set_mode(Sleep): read DEVICE_CONFIG_2
+        i2c_expectations.push(I2cTransaction::write_read(address, vec![0x01], vec![dc2]));
+        // Write back with mode bits [1:0] = Sleep (0x01)
+        i2c_expectations.push(I2cTransaction::write(
+            address,
+            vec![0x01, (dc2 & !0x03) | 0x01],
+        ));
+
+        let i2c = I2cMock::new(&i2c_expectations);
+        // Only one wake delay from init — sleep does NOT trigger wake delay
+        let delay = CheckedDelay::new(&[DelayTransaction::delay_us(80)]);
+
+        let sensor = Tmag5273::new_with_delay(i2c, DeviceVariant::B1, delay);
+        let mut sensor = sensor.init(&config).unwrap();
+
+        sensor.sleep().unwrap();
+
+        let (mut i2c, mut delay) = sensor.into_parts();
+        i2c.done();
+        delay.done();
+    }
+
+    #[test]
+    fn wait_for_conversion_with_checked_delay() {
+        let address = 0x22u8;
+        let config = ConfigBuilder::new()
+            .operating_mode(OperatingMode::Standby)
+            .build()
+            .unwrap();
+
+        let mut i2c_expectations = init_expectations(address, &config);
+        // trigger_conversion: read CONV_STATUS with start bit (0x98)
+        i2c_expectations.push(I2cTransaction::write_read(address, vec![0x98], vec![0x00]));
+        // wait_for_conversion: first poll returns ready (bit 0 set)
+        i2c_expectations.push(I2cTransaction::write_read(address, vec![0x18], vec![0x01]));
+
+        let i2c = I2cMock::new(&i2c_expectations);
+        // Two delays: 80 µs wake from init, 125 µs conversion time
+        // (X1 averaging, XYZ channels, temp enabled = (1×25)×4 + 25 = 125 µs)
+        let delay = CheckedDelay::new(&[
+            DelayTransaction::delay_us(80),
+            DelayTransaction::delay_us(125),
+        ]);
+
+        let sensor = Tmag5273::new_with_delay(i2c, DeviceVariant::B1, delay);
+        let mut sensor = sensor.init(&config).unwrap();
+
+        sensor.trigger_conversion().unwrap();
+        let status = sensor.wait_for_conversion().unwrap();
+        assert!(status.result_ready);
+
+        let (mut i2c, mut delay) = sensor.into_parts();
+        i2c.done();
+        delay.done();
     }
 }
