@@ -6,6 +6,7 @@
 //! [`Tmag5273::init`](crate::Tmag5273).
 
 use crate::error::Error;
+use crate::register;
 use crate::types::{Micros, Range};
 
 /// I2C read mode for the TMAG5273.
@@ -35,7 +36,11 @@ impl TryFrom<u8> for I2cReadMode {
             0x00 => Ok(Self::Standard),
             0x01 => Ok(Self::OneByte16Bit),
             0x02 => Ok(Self::OneByte8Bit),
-            other => Err(other),
+            other => {
+                #[cfg(feature = "defmt")]
+                defmt::warn!("invalid register value: 0x{:02X}", other);
+                Err(other)
+            }
         }
     }
 }
@@ -64,7 +69,11 @@ impl TryFrom<u8> for OperatingMode {
             0x01 => Ok(Self::Sleep),
             0x02 => Ok(Self::ContinuousMeasure),
             0x03 => Ok(Self::WakeUpAndSleep),
-            other => Err(other),
+            other => {
+                #[cfg(feature = "defmt")]
+                defmt::warn!("invalid register value: 0x{:02X}", other);
+                Err(other)
+            }
         }
     }
 }
@@ -117,7 +126,11 @@ impl TryFrom<u8> for MagneticChannel {
             0x9 => Ok(Self::YXY),
             0xA => Ok(Self::YZY),
             0xB => Ok(Self::XZX),
-            other => Err(other),
+            other => {
+                #[cfg(feature = "defmt")]
+                defmt::warn!("invalid register value: 0x{:02X}", other);
+                Err(other)
+            }
         }
     }
 }
@@ -188,7 +201,11 @@ impl TryFrom<u8> for ConversionAverage {
             0b011 => Ok(Self::X8),
             0b100 => Ok(Self::X16),
             0b101 => Ok(Self::X32),
-            other => Err(other),
+            other => {
+                #[cfg(feature = "defmt")]
+                defmt::warn!("invalid register value: 0x{:02X}", other);
+                Err(other)
+            }
         }
     }
 }
@@ -279,7 +296,11 @@ impl TryFrom<u8> for SleepDuration {
             0xA => Ok(Self::Ms2000),
             0xB => Ok(Self::Ms5000),
             0xC => Ok(Self::Ms20000),
-            other => Err(other),
+            other => {
+                #[cfg(feature = "defmt")]
+                defmt::warn!("invalid register value: 0x{:02X}", other);
+                Err(other)
+            }
         }
     }
 }
@@ -323,7 +344,11 @@ impl TryFrom<u8> for PowerMode {
         match val {
             0 => Ok(Self::LowActiveCurrent),
             1 => Ok(Self::LowNoise),
-            other => Err(other),
+            other => {
+                #[cfg(feature = "defmt")]
+                defmt::warn!("invalid register value: 0x{:02X}", other);
+                Err(other)
+            }
         }
     }
 }
@@ -346,7 +371,11 @@ impl TryFrom<u8> for TriggerMode {
         match val {
             0 => Ok(Self::I2cCommand),
             1 => Ok(Self::IntPin),
-            other => Err(other),
+            other => {
+                #[cfg(feature = "defmt")]
+                defmt::warn!("invalid register value: 0x{:02X}", other);
+                Err(other)
+            }
         }
     }
 }
@@ -372,7 +401,11 @@ impl TryFrom<u8> for TempCoefficient {
             0b00 => Ok(Self::None),
             0b01 => Ok(Self::NdBFe),
             0b11 => Ok(Self::Ceramic),
-            other => Err(other),
+            other => {
+                #[cfg(feature = "defmt")]
+                defmt::warn!("invalid register value: 0x{:02X}", other);
+                Err(other)
+            }
         }
     }
 }
@@ -401,7 +434,11 @@ impl TryFrom<u8> for AngleCalculation {
             0b01 => Ok(Self::XY),
             0b10 => Ok(Self::YZ),
             0b11 => Ok(Self::XZ),
-            other => Err(other),
+            other => {
+                #[cfg(feature = "defmt")]
+                defmt::warn!("invalid register value: 0x{:02X}", other);
+                Err(other)
+            }
         }
     }
 }
@@ -477,12 +514,6 @@ pub struct ConfigBuilder {
     trigger_mode: TriggerMode,
     glitch_filter: bool,
     temp_coefficient: TempCoefficient,
-}
-
-impl Default for ConfigBuilder {
-    fn default() -> Self {
-        Self::new()
-    }
 }
 
 impl ConfigBuilder {
@@ -643,8 +674,6 @@ impl Config {
     /// Serialize this configuration into register address/value pairs for
     /// writing to the device.
     pub(crate) fn to_register_writes(self) -> [(u8, u8); 5] {
-        use crate::register;
-
         // DEVICE_CONFIG_1 (0x00)
         //
         // CRC_EN (bit 7): set when the `crc` Cargo feature is active so the
@@ -772,7 +801,11 @@ impl TryFrom<u8> for ThresholdDirection {
         match val {
             0 => Ok(Self::Above),
             1 => Ok(Self::Below),
-            other => Err(other),
+            other => {
+                #[cfg(feature = "defmt")]
+                defmt::warn!("invalid register value: 0x{:02X}", other);
+                Err(other)
+            }
         }
     }
 }
@@ -833,7 +866,11 @@ impl TryFrom<u8> for InterruptMode {
             0b010 => Ok(Self::IntPinLatched),
             0b011 => Ok(Self::Scl),
             0b100 => Ok(Self::SclLatched),
-            other => Err(other),
+            other => {
+                #[cfg(feature = "defmt")]
+                defmt::warn!("invalid register value: 0x{:02X}", other);
+                Err(other)
+            }
         }
     }
 }
@@ -856,7 +893,11 @@ impl TryFrom<u8> for IntPinBehavior {
         match val {
             0 => Ok(Self::Latched),
             1 => Ok(Self::Pulse10us),
-            other => Err(other),
+            other => {
+                #[cfg(feature = "defmt")]
+                defmt::warn!("invalid register value: 0x{:02X}", other);
+                Err(other)
+            }
         }
     }
 }
@@ -901,7 +942,11 @@ impl TryFrom<u8> for GainChannel {
         match val {
             0 => Ok(Self::First),
             1 => Ok(Self::Second),
-            other => Err(other),
+            other => {
+                #[cfg(feature = "defmt")]
+                defmt::warn!("invalid register value: 0x{:02X}", other);
+                Err(other)
+            }
         }
     }
 }

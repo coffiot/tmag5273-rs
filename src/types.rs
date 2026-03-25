@@ -25,7 +25,11 @@ impl TryFrom<u8> for Range {
         match val {
             0 => Ok(Self::Low),
             1 => Ok(Self::High),
-            other => Err(other),
+            other => {
+                #[cfg(feature = "defmt")]
+                defmt::warn!("invalid register value: 0x{:02X}", other);
+                Err(other)
+            }
         }
     }
 }

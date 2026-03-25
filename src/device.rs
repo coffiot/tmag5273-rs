@@ -21,7 +21,7 @@ use crate::error::{Error, InitError};
 use crate::register;
 use crate::types::{
     AngleReading, Celsius, ConversionStatus, DeviceStatus, DeviceVariant, MagneticReading, Micros,
-    NoDelay, Range, SensorReading, WAKE_DELAY,
+    NoDelay, Range, SensorReading, WAKE_DELAY, raw_to_celsius, raw_to_degrees, raw_to_millitesla,
 };
 
 // ---------------------------------------------------------------------------
@@ -350,17 +350,17 @@ impl<I2C: I2c, D: DelayNs> Tmag5273<I2C, Configured, D> {
 
         Ok(MagneticReading {
             x: if self.channels.has_x() {
-                Some(crate::types::raw_to_millitesla(raw_x, xy_range))
+                Some(raw_to_millitesla(raw_x, xy_range))
             } else {
                 None
             },
             y: if self.channels.has_y() {
-                Some(crate::types::raw_to_millitesla(raw_y, xy_range))
+                Some(raw_to_millitesla(raw_y, xy_range))
             } else {
                 None
             },
             z: if self.channels.has_z() {
-                Some(crate::types::raw_to_millitesla(raw_z, z_range))
+                Some(raw_to_millitesla(raw_z, z_range))
             } else {
                 None
             },
@@ -394,7 +394,7 @@ impl<I2C: I2c, D: DelayNs> Tmag5273<I2C, Configured, D> {
 
         let buf = self.read_register_pair(register::T_MSB_RESULT)?;
         let raw = i16::from_be_bytes(buf);
-        Ok(crate::types::raw_to_celsius(raw))
+        Ok(raw_to_celsius(raw))
     }
 
     /// Read the CORDIC angle calculation result.
@@ -428,7 +428,7 @@ impl<I2C: I2c, D: DelayNs> Tmag5273<I2C, Configured, D> {
             let raw_angle = u16::from_be_bytes([buf[0], buf[1]]);
             let magnitude = buf[2];
             Ok(AngleReading {
-                angle: crate::types::raw_to_degrees(raw_angle),
+                angle: raw_to_degrees(raw_angle),
                 magnitude,
             })
         }
@@ -442,7 +442,7 @@ impl<I2C: I2c, D: DelayNs> Tmag5273<I2C, Configured, D> {
             let raw_angle = u16::from_be_bytes(angle_buf);
             let magnitude = self.read_register(register::MAGNITUDE_RESULT)?;
             Ok(AngleReading {
-                angle: crate::types::raw_to_degrees(raw_angle),
+                angle: raw_to_degrees(raw_angle),
                 magnitude,
             })
         }
@@ -496,24 +496,24 @@ impl<I2C: I2c, D: DelayNs> Tmag5273<I2C, Configured, D> {
         // Only convert temperature when the channel is enabled — when disabled,
         // the T_MSB/T_LSB registers contain undefined data per TI datasheet.
         let temperature = if self.temperature_enabled {
-            Some(crate::types::raw_to_celsius(raw_t))
+            Some(raw_to_celsius(raw_t))
         } else {
             None
         };
 
         let magnetic = MagneticReading {
             x: if self.channels.has_x() {
-                Some(crate::types::raw_to_millitesla(raw_x, xy_range))
+                Some(raw_to_millitesla(raw_x, xy_range))
             } else {
                 None
             },
             y: if self.channels.has_y() {
-                Some(crate::types::raw_to_millitesla(raw_y, xy_range))
+                Some(raw_to_millitesla(raw_y, xy_range))
             } else {
                 None
             },
             z: if self.channels.has_z() {
-                Some(crate::types::raw_to_millitesla(raw_z, z_range))
+                Some(raw_to_millitesla(raw_z, z_range))
             } else {
                 None
             },

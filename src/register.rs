@@ -184,18 +184,6 @@ pub(crate) const VERSION_SHIFT: u8 = 0;
 // ---------------------------------------------------------------------------
 pub(crate) const MANUFACTURER_ID_LSB: u8 = 0x0E;
 
-// ---------------------------------------------------------------------------
-// 0x0F — MANUFACTURER_ID_MSB (read-only)
-// ---------------------------------------------------------------------------
-// Not directly referenced — burst reads start at MANUFACTURER_ID_LSB and read
-// both bytes in one transaction. Kept for register map completeness and the
-// `all_29_register_addresses_are_unique` test.
-#[expect(
-    dead_code,
-    reason = "register map completeness; used in address uniqueness test"
-)]
-pub(crate) const MANUFACTURER_ID_MSB: u8 = 0x0F;
-
 /// Expected 16-bit manufacturer ID: ASCII "TI" = 0x5449.
 pub(crate) const MANUFACTURER_ID_EXPECTED: u16 = 0x5449;
 
@@ -613,7 +601,7 @@ mod tests {
             I2C_ADDRESS,         // 0x0C
             DEVICE_ID,           // 0x0D
             MANUFACTURER_ID_LSB, // 0x0E
-            MANUFACTURER_ID_MSB, // 0x0F
+            0x0F,                // MANUFACTURER_ID_MSB (burst read, no const)
             T_MSB_RESULT,        // 0x10
             0x11,                // T_LSB_RESULT (burst read, no const)
             X_MSB_RESULT,        // 0x12
