@@ -10,6 +10,8 @@
 use core::fmt;
 use embedded_hal::i2c::I2c;
 
+use crate::types::{Micros, NoDelay};
+
 // ---------------------------------------------------------------------------
 // Error
 // ---------------------------------------------------------------------------
@@ -67,9 +69,16 @@ pub enum Error<E> {
     #[error("angle calculation requires at least two magnetic channels")]
     AngleRequiresTwoChannels,
 
-    /// Wake-up-and-sleep operating mode requires a non-zero sleep duration.
-    #[error("wake-up-and-sleep mode requires a sleep duration")]
-    SleepDurationRequired,
+    /// Sleep duration is shorter than the conversion time for the configured
+    /// averaging and channels. The sensor would wake, fail to complete a
+    /// conversion, and immediately re-sleep.
+    #[error("sleep duration ({sleep} µs) < conversion time ({conversion} µs)")]
+    SleepShorterThanConversion {
+        /// Sleep duration.
+        sleep: Micros,
+        /// Required conversion time.
+        conversion: Micros,
+    },
 
     /// I2C address change could not be verified at the new address.
     ///
@@ -130,20 +139,23 @@ impl<E> From<E> for Error<E> {
 // InitError
 // ---------------------------------------------------------------------------
 
-/// Initialization failure that returns the I2C bus to the caller.
+/// Initialization failure that returns the I2C bus and delay backend to the caller.
 ///
 /// When [`Tmag5273::init`](crate::Tmag5273) fails, the bus is not consumed.
-/// `InitError` bundles the [`Error`] with the original `I2C` peripheral so
-/// the caller can retry or use the bus for another device.
-pub struct InitError<I2C: I2c> {
+/// `InitError` bundles the [`Error`] with the original `I2C` peripheral and
+/// delay backend so the caller can retry or use them for another device.
+#[non_exhaustive]
+pub struct InitError<I2C: I2c, D = NoDelay> {
     /// The error that caused initialization to fail.
     pub error: Error<I2C::Error>,
     /// The I2C bus, returned so the caller can reuse it.
     pub i2c: I2C,
+    /// The delay backend, returned so the caller can reuse it.
+    pub delay: D,
 }
 
-// Manual Debug impl — `I2C` itself may not implement `Debug`.
-impl<I2C: I2c> fmt::Debug for InitError<I2C>
+// Manual Debug impl — `I2C` and `D` themselves may not implement `Debug`.
+impl<I2C: I2c, D> fmt::Debug for InitError<I2C, D>
 where
     I2C::Error: fmt::Debug,
 {
@@ -151,7 +163,7 @@ where
         f.debug_struct("InitError")
             .field("error", &self.error)
             .field("i2c", &"<I2C bus>")
-            .finish()
+            .finish_non_exhaustive()
     }
 }
 
@@ -230,9 +242,18 @@ mod tests {
     }
 
     #[test]
-    fn variant_sleep_duration_required() {
-        let err: Error<FakeI2cError> = Error::SleepDurationRequired;
-        assert_eq!(err, Error::SleepDurationRequired);
+    fn variant_sleep_shorter_than_conversion() {
+        let err: Error<FakeI2cError> = Error::SleepShorterThanConversion {
+            sleep: Micros(1_000),
+            conversion: Micros(3_225),
+        };
+        assert_eq!(
+            err,
+            Error::SleepShorterThanConversion {
+                sleep: Micros(1_000),
+                conversion: Micros(3_225),
+            }
+        );
     }
 
     #[test]

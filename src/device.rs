@@ -9,6 +9,7 @@
 use core::fmt;
 use core::marker::PhantomData;
 
+use embedded_hal::delay::DelayNs;
 use embedded_hal::i2c::I2c;
 
 use crate::config::{
@@ -19,8 +20,8 @@ use crate::config::{
 use crate::error::{Error, InitError};
 use crate::register;
 use crate::types::{
-    AngleReading, Celsius, ConversionStatus, DeviceStatus, DeviceVariant, MagneticReading, Range,
-    SensorReading,
+    AngleReading, Celsius, ConversionStatus, DeviceStatus, DeviceVariant, MagneticReading, Micros,
+    NoDelay, Range, SensorReading, WAKE_DELAY,
 };
 
 // ---------------------------------------------------------------------------
@@ -45,6 +46,10 @@ pub struct Configured;
 ///
 /// - `I2C`: The I2C bus implementing [`embedded_hal::i2c::I2c`].
 /// - `State`: Either [`Unconfigured`] or [`Configured`] (typestate marker).
+/// - `D`: Delay backend implementing [`embedded_hal::delay::DelayNs`].
+///   Defaults to [`NoDelay`] — a zero-sized no-op that compiles to nothing.
+///   When a real delay is provided via [`new_with_delay`](Self::new_with_delay),
+///   the driver inserts precise timing for wake-up and conversion waits.
 ///
 /// # Examples
 ///
@@ -58,7 +63,7 @@ pub struct Configured;
 /// // let mut sensor = sensor.init(&config).unwrap();
 /// // let reading = sensor.read_magnetic().unwrap();
 /// ```
-pub struct Tmag5273<I2C, State = Unconfigured> {
+pub struct Tmag5273<I2C, State = Unconfigured, D = NoDelay> {
     i2c: I2C,
     variant: DeviceVariant,
     address: u8,
@@ -67,14 +72,15 @@ pub struct Tmag5273<I2C, State = Unconfigured> {
     channels: MagneticChannel,
     angle_enabled: bool,
     temperature_enabled: bool,
-    max_polls: u16,
+    conversion_average: ConversionAverage,
     /// Current I2C read mode — high-level reads guard against non-Standard
     /// mode to prevent silent data corruption.
     read_mode: I2cReadMode,
+    delay: D,
     _state: PhantomData<State>,
 }
 
-impl<I2C, State> fmt::Debug for Tmag5273<I2C, State> {
+impl<I2C, State, D> fmt::Debug for Tmag5273<I2C, State, D> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("Tmag5273")
             .field("variant", &self.variant)
@@ -84,8 +90,9 @@ impl<I2C, State> fmt::Debug for Tmag5273<I2C, State> {
 }
 
 // Compile-time size assertion — should be ~16 bytes on ESP32 (I2C handle ~4 bytes + fields).
+// NoDelay is a ZST, so adding D = NoDelay has zero size impact.
 const _: () = assert!(
-    core::mem::size_of::<Tmag5273<[u8; 4], Configured>>() <= 24,
+    core::mem::size_of::<Tmag5273<[u8; 4], Configured, NoDelay>>() <= 24,
     "Tmag5273 struct exceeds 24-byte budget (excluding I2C handle)"
 );
 
@@ -97,6 +104,8 @@ impl<I2C: I2c> Tmag5273<I2C, Unconfigured> {
     /// Create a new driver instance without performing any I2C operations.
     ///
     /// The I2C address is derived from the [`DeviceVariant`].
+    /// Uses [`NoDelay`] as the delay backend — wake-up and conversion timing
+    /// rely on bounded I2C polling.
     pub fn new(i2c: I2C, variant: DeviceVariant) -> Self {
         Self::new_with_address(i2c, variant, variant.default_address())
     }
@@ -104,7 +113,7 @@ impl<I2C: I2c> Tmag5273<I2C, Unconfigured> {
     /// Create a new driver instance with a custom I2C address.
     ///
     /// Use this when the sensor's address has been changed from the factory
-    /// default.
+    /// default. Uses [`NoDelay`] as the delay backend.
     ///
     /// # Panics
     ///
@@ -123,8 +132,53 @@ impl<I2C: I2c> Tmag5273<I2C, Unconfigured> {
             channels: MagneticChannel::Off,
             angle_enabled: false,
             temperature_enabled: false,
-            max_polls: 10,
+            conversion_average: ConversionAverage::X1,
             read_mode: I2cReadMode::Standard,
+            delay: NoDelay,
+            _state: PhantomData,
+        }
+    }
+}
+
+impl<I2C: I2c, D: DelayNs> Tmag5273<I2C, Unconfigured, D> {
+    /// Create a driver instance with a delay backend for precise timing.
+    ///
+    /// When a real [`DelayNs`] is provided:
+    /// - [`wait_for_conversion()`](Tmag5273::wait_for_conversion) sleeps the exact conversion
+    ///   time before polling
+    /// - [`set_mode()`](Tmag5273::set_mode) automatically inserts an 80 us wake-up delay
+    ///   after non-sleep mode changes
+    pub fn new_with_delay(i2c: I2C, variant: DeviceVariant, delay: D) -> Self {
+        Self::new_with_delay_and_address(i2c, variant, variant.default_address(), delay)
+    }
+
+    /// Create with delay backend and custom I2C address.
+    ///
+    /// # Panics
+    ///
+    /// Panics in debug mode if `address > 0x7F` (I2C addresses are 7-bit).
+    pub fn new_with_delay_and_address(
+        i2c: I2C,
+        variant: DeviceVariant,
+        address: u8,
+        delay: D,
+    ) -> Self {
+        debug_assert!(
+            address <= 0x7F,
+            "I2C address must be 7-bit (0x00-0x7F), got 0x{address:02X}"
+        );
+        Self {
+            address,
+            i2c,
+            variant,
+            xy_range: Range::Low,
+            z_range: Range::Low,
+            channels: MagneticChannel::Off,
+            angle_enabled: false,
+            temperature_enabled: false,
+            conversion_average: ConversionAverage::X1,
+            read_mode: I2cReadMode::Standard,
+            delay,
             _state: PhantomData,
         }
     }
@@ -133,23 +187,28 @@ impl<I2C: I2c> Tmag5273<I2C, Unconfigured> {
     /// transition to [`Configured`] state.
     ///
     /// Sends a wake-up write in case the device was left in sleep mode by
-    /// previous firmware. The subsequent I2C transactions (interrupt
-    /// disable, manufacturer ID read) provide implicit wake-up time
-    /// (>100 us at 400 kHz), satisfying the 80 us datasheet requirement.
+    /// previous firmware. When a real delay backend is provided, the driver
+    /// inserts an 80 us wake-up delay after the empty write. With [`NoDelay`],
+    /// the subsequent I2C transactions (interrupt disable, manufacturer ID
+    /// read) provide implicit wake-up time (>100 us at 400 kHz).
     ///
     /// Takes `config` by reference so the same configuration can be reused
     /// across multiple sensors.
     ///
     /// # Errors
     ///
-    /// Returns [`InitError`] (containing the I2C bus) if initialization fails.
-    /// This allows the caller to recover the bus and retry or use it for
-    /// another device.
-    pub fn init(mut self, config: &Config) -> Result<Tmag5273<I2C, Configured>, InitError<I2C>> {
+    /// Returns [`InitError`] (containing the I2C bus and delay backend) if
+    /// initialization fails. This allows the caller to recover the bus and
+    /// retry or use it for another device.
+    pub fn init(
+        mut self,
+        config: &Config,
+    ) -> Result<Tmag5273<I2C, Configured, D>, InitError<I2C, D>> {
         if let Err(error) = self.init_inner(config) {
             return Err(InitError {
                 error,
                 i2c: self.i2c,
+                delay: self.delay,
             });
         }
 
@@ -162,8 +221,9 @@ impl<I2C: I2c> Tmag5273<I2C, Unconfigured> {
             channels: config.magnetic_channels,
             angle_enabled: !matches!(config.angle_calculation, AngleCalculation::None),
             temperature_enabled: config.temperature_enabled,
-            max_polls: config.max_polls,
+            conversion_average: config.conversion_average,
             read_mode: I2cReadMode::Standard,
+            delay: self.delay,
             _state: PhantomData,
         })
     }
@@ -174,17 +234,14 @@ impl<I2C: I2c> Tmag5273<I2C, Unconfigured> {
         // 0a. Wake the device if it was left in SLEEP mode by previous firmware.
         // Any I2C activity triggers wake-up; an empty write is the cheapest.
         // Intentionally ignore errors — the device may NACK while waking.
-        //
-        // NOTE: The device needs ~80us to fully wake (TI datasheet; Linux
-        // kernel uses usleep_range(80, 200), Zephyr uses k_usleep). This
-        // driver has no Delay trait, so the caller must ensure sufficient
-        // time has elapsed since the last sleep if calling init() on a
-        // previously-sleeping device. In practice, the I2C transactions
-        // that follow (interrupt disable + manufacturer ID read) take
-        // >100us at 400kHz, providing implicit wake-up time.
         let _ = self.i2c.write(self.address, &[]);
 
-        // 0b. Disable interrupts before applying new configuration to prevent
+        // 0b. Wait for wake-up: 80 us per TI datasheet (Linux kernel uses
+        // usleep_range(80, 200)). NoDelay: no-op — the I2C transactions that
+        // follow provide implicit wake-up time (>100 us at 400 kHz).
+        self.delay.delay_us(WAKE_DELAY.0.0);
+
+        // 0c. Disable interrupts before applying new configuration to prevent
         // spurious INT pin activity from stale settings.
         self.write_register(register::INT_CONFIG_1, 0x00)?;
 
@@ -247,7 +304,17 @@ impl<I2C: I2c> Tmag5273<I2C, Unconfigured> {
 // Configured — measurement + control
 // ---------------------------------------------------------------------------
 
-impl<I2C: I2c> Tmag5273<I2C, Configured> {
+impl<I2C: I2c, D: DelayNs> Tmag5273<I2C, Configured, D> {
+    /// Returns the expected conversion time for the current configuration.
+    ///
+    /// Computed from the stored [`ConversionAverage`], active magnetic channels,
+    /// and temperature measurement state. Use this to calculate duty cycles or
+    /// to manually sleep before reading in standby mode.
+    pub fn conversion_time(&self) -> Micros {
+        self.conversion_average
+            .conversion_time(self.channels, self.temperature_enabled)
+    }
+
     /// Read magnetic field for all enabled channels.
     ///
     /// Uses a burst read (6 bytes) for data coherence and speed.
@@ -555,11 +622,12 @@ impl<I2C: I2c> Tmag5273<I2C, Configured> {
     ///
     /// # Wake-up timing
     ///
-    /// When transitioning from [`Sleep`](OperatingMode::Sleep) to an active
-    /// mode, the device needs ~80 us to wake (TI datasheet; Linux kernel
-    /// uses `usleep_range(80, 200)`). This driver does not inject a delay —
-    /// the caller should wait at least 80 us before the next I2C read if
-    /// the device was in sleep mode.
+    /// When transitioning to an active mode (any mode except
+    /// [`Sleep`](OperatingMode::Sleep)), the device needs ~80 us to wake
+    /// (TI datasheet; Linux kernel uses `usleep_range(80, 200)`). When a
+    /// real delay backend is provided, the wake-up delay is inserted
+    /// automatically. With [`NoDelay`], the delay is a no-op — the caller
+    /// should ensure sufficient time before the next I2C read.
     ///
     /// # Errors
     ///
@@ -573,6 +641,12 @@ impl<I2C: I2c> Tmag5273<I2C, Configured> {
             mode as u8,
         );
         self.write_register(register::DEVICE_CONFIG_2, updated)?;
+
+        // Wake delay: 80 us after non-sleep mode changes.
+        // NoDelay: no-op. Real delay: automatic wake-up timing.
+        if !matches!(mode, OperatingMode::Sleep) {
+            self.delay.delay_us(WAKE_DELAY.0.0);
+        }
         Ok(())
     }
 
@@ -598,15 +672,25 @@ impl<I2C: I2c> Tmag5273<I2C, Configured> {
 
     /// Poll for conversion completion with bounded retry count.
     ///
-    /// The poll limit is derived from the configured averaging mode (2x safety
-    /// margin over datasheet maximum). No `Delay` trait is required.
+    /// When a real delay backend is provided, sleeps the exact conversion time
+    /// before polling — the poll loop then acts as a safety net (typically
+    /// exits on the first read). With [`NoDelay`], the delay is a no-op and
+    /// the bounded poll loop is the primary completion mechanism.
     ///
     /// # Errors
     ///
     /// Returns [`Error::ConversionTimeout`] if the conversion does not complete
     /// within the poll limit, or [`Error::I2c`] on bus failure.
     pub fn wait_for_conversion(&mut self) -> Result<ConversionStatus, Error<I2C::Error>> {
-        for _ in 0..self.max_polls {
+        // Sleep the exact conversion time.
+        // NoDelay: no-op (compiles to nothing). Real delay: precise sleep.
+        let ct = self
+            .conversion_average
+            .conversion_time(self.channels, self.temperature_enabled);
+        self.delay.delay_us(ct.0);
+
+        // Bounded poll — primary loop for NoDelay, safety net for real delays.
+        for _ in 0..self.conversion_average.max_polls() {
             let raw = self.read_register(register::CONV_STATUS)?;
             let status = ConversionStatus::from_reg(raw);
             if status.result_ready {
@@ -930,6 +1014,10 @@ impl<I2C: I2c> Tmag5273<I2C, Configured> {
             1, // TI datasheet recommended hysteresis of 1 (7 LSB)
         );
         self.write_register(register::DEVICE_CONFIG_2, updated)?;
+
+        // Wake delay for mode transition (bypasses set_mode, so must delay explicitly).
+        // NoDelay: no-op. Real delay: automatic wake-up timing.
+        self.delay.delay_us(WAKE_DELAY.0.0);
 
         Ok(())
     }
@@ -1379,8 +1467,20 @@ impl<I2C: I2c> Tmag5273<I2C, Configured> {
     ///
     /// The sensor is left in whatever operating mode it was in. Call
     /// [`sleep`](Self::sleep) before this if you want to minimize power draw.
+    ///
+    /// See also [`into_parts()`](Self::into_parts) to recover both the I2C
+    /// bus and the delay backend.
     pub fn into_inner(self) -> I2C {
         self.i2c
+    }
+
+    /// Consume the driver, returning the I2C bus and delay backend.
+    ///
+    /// Unlike [`into_inner()`](Self::into_inner), this returns the delay
+    /// backend as well, which is useful when the delay type holds resources
+    /// (e.g., an RTOS timer handle).
+    pub fn into_parts(self) -> (I2C, D) {
+        (self.i2c, self.delay)
     }
 }
 
@@ -1388,7 +1488,7 @@ impl<I2C: I2c> Tmag5273<I2C, Configured> {
 // Private I2C helpers (shared across both states)
 // ---------------------------------------------------------------------------
 
-impl<I2C: I2c, State> Tmag5273<I2C, State> {
+impl<I2C: I2c, State, D> Tmag5273<I2C, State, D> {
     /// Read a single register byte.
     fn read_register(&mut self, reg: u8) -> Result<u8, I2C::Error> {
         let mut buf = [0u8];
@@ -1661,7 +1761,7 @@ mod tests {
         expectations.push(I2cTransaction::write_read(address, vec![0x98], vec![0x00]));
 
         // Poll max_polls times (10 for X1), all return not-ready
-        for _ in 0..config.max_polls {
+        for _ in 0..config.conversion_average.max_polls() {
             expectations.push(I2cTransaction::write_read(address, vec![0x18], vec![0x00]));
         }
 

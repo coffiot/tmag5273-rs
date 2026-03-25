@@ -154,6 +154,42 @@ pub struct Degrees(pub f32);
 #[cfg_attr(feature = "defmt", derive(defmt::Format))]
 pub struct Micros(pub u32);
 
+impl core::fmt::Display for Micros {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        write!(f, "{}", self.0)
+    }
+}
+
+/// A range of microsecond durations, matching Linux `usleep_range(min, max)` semantics.
+///
+/// - `.0` — minimum delay (used by the driver for actual `delay_us` calls).
+/// - `.1` — maximum acceptable delay (documentary — for RTOS scheduler batching).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[cfg_attr(feature = "defmt", derive(defmt::Format))]
+pub struct MicrosRange(pub Micros, pub Micros);
+
+/// Wake-up delay range after transitioning from Sleep to an active mode.
+///
+/// From TI TMAG5273 datasheet: device needs >=80 µs to wake. The Linux kernel
+/// driver uses `usleep_range(80, 200)` for this boundary.
+pub const WAKE_DELAY: MicrosRange = MicrosRange(Micros(80), Micros(200));
+
+/// Zero-sized no-op delay backend (default).
+///
+/// All `delay_*()` calls compile to nothing. When used as the delay backend
+/// for [`Tmag5273`](crate::Tmag5273), the driver falls back to bounded I2C
+/// polling for conversion completion and does not insert wake-up delays.
+///
+/// This is the default — existing callers need no changes.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Hash)]
+#[cfg_attr(feature = "defmt", derive(defmt::Format))]
+pub struct NoDelay;
+
+impl embedded_hal::delay::DelayNs for NoDelay {
+    #[inline]
+    fn delay_ns(&mut self, _ns: u32) {}
+}
+
 // ---------------------------------------------------------------------------
 // Composite reading structs
 // ---------------------------------------------------------------------------
@@ -703,5 +739,13 @@ mod tests {
         // practice, but the formula applies the standard signed conversion).
         let m = magnitude_to_millitesla(127, 80.0);
         assert!(approx_eq(m.0, -79.375), "expected ~-79.375, got {}", m.0);
+    }
+
+    // -- Wake delay constants ------------------------------------------------
+
+    #[test]
+    fn wake_delay_constants() {
+        assert_eq!(WAKE_DELAY.0.0, 80);
+        assert_eq!(WAKE_DELAY.1.0, 200);
     }
 }

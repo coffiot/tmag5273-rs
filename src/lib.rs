@@ -45,7 +45,8 @@ pub use device::{Configured, Tmag5273, Unconfigured};
 pub use error::{Error, InitError};
 pub use types::{
     AngleReading, Celsius, ConversionStatus, Degrees, DeviceStatus, DeviceVariant, MagneticReading,
-    Micros, MilliTesla, Range, SensorReading, magnitude_to_millitesla,
+    Micros, MicrosRange, MilliTesla, NoDelay, Range, SensorReading, WAKE_DELAY,
+    magnitude_to_millitesla,
 };
 
 // Re-export config enums for consumer use

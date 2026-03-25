@@ -5,7 +5,8 @@
 //! Use [`ConfigBuilder`] to construct a validated [`Config`], then pass it to
 //! [`Tmag5273::init`](crate::Tmag5273).
 
-use crate::types::Range;
+use crate::error::Error;
+use crate::types::{Micros, Range};
 
 /// I2C read mode for the TMAG5273.
 ///
@@ -205,12 +206,12 @@ impl ConversionAverage {
         self,
         channels: MagneticChannel,
         temperature_enabled: bool,
-    ) -> crate::types::Micros {
+    ) -> Micros {
         let temp_channel: u32 = if temperature_enabled { 1 } else { 0 };
         let num_channels = channels.axis_count() as u32 + temp_channel;
         let samples_per_channel = 1u32 << (self as u32);
         let us = samples_per_channel * 25 * num_channels + 25;
-        crate::types::Micros(us)
+        Micros(us)
     }
 
     /// Maximum poll count for conversion timeout (2x safety margin over
@@ -280,6 +281,27 @@ impl TryFrom<u8> for SleepDuration {
             0xC => Ok(Self::Ms20000),
             other => Err(other),
         }
+    }
+}
+
+impl SleepDuration {
+    /// Returns the sleep duration in microseconds.
+    pub const fn as_micros(self) -> Micros {
+        Micros(match self {
+            Self::Ms1 => 1_000,
+            Self::Ms5 => 5_000,
+            Self::Ms10 => 10_000,
+            Self::Ms15 => 15_000,
+            Self::Ms20 => 20_000,
+            Self::Ms30 => 30_000,
+            Self::Ms50 => 50_000,
+            Self::Ms100 => 100_000,
+            Self::Ms500 => 500_000,
+            Self::Ms1000 => 1_000_000,
+            Self::Ms2000 => 2_000_000,
+            Self::Ms5000 => 5_000_000,
+            Self::Ms20000 => 20_000_000,
+        })
     }
 }
 
@@ -421,8 +443,6 @@ pub struct Config {
     pub glitch_filter: bool,
     /// Magnetic temperature compensation coefficient.
     pub temp_coefficient: TempCoefficient,
-    /// Maximum conversion poll count (derived from `conversion_average`).
-    pub(crate) max_polls: u16,
 }
 
 // ---------------------------------------------------------------------------
@@ -564,21 +584,29 @@ impl ConfigBuilder {
     /// Returns [`Error::AngleRequiresTwoChannels`](crate::Error::AngleRequiresTwoChannels)
     /// if angle calculation is enabled with fewer than two magnetic channels.
     ///
-    /// Returns [`Error::SleepDurationRequired`](crate::Error::SleepDurationRequired)
-    /// if wake-up-and-sleep mode is selected without a sleep duration > 1 ms.
-    pub fn build(self) -> Result<Config, crate::Error<core::convert::Infallible>> {
+    /// Returns [`Error::SleepShorterThanConversion`](crate::Error::SleepShorterThanConversion)
+    /// if the sleep duration is shorter than the conversion time for the
+    /// configured averaging and channels.
+    pub fn build(self) -> Result<Config, Error<core::convert::Infallible>> {
         // Angle calculation requires at least two axes.
         if !matches!(self.angle_calculation, AngleCalculation::None)
             && self.magnetic_channels.axis_count() < 2
         {
-            return Err(crate::Error::AngleRequiresTwoChannels);
+            return Err(Error::AngleRequiresTwoChannels);
         }
 
-        // Wake-up-and-sleep needs a meaningful sleep duration.
-        if matches!(self.operating_mode, OperatingMode::WakeUpAndSleep)
-            && matches!(self.sleep_duration, SleepDuration::Ms1)
-        {
-            return Err(crate::Error::SleepDurationRequired);
+        // Sleep must be long enough for at least one full conversion.
+        if matches!(self.operating_mode, OperatingMode::WakeUpAndSleep) {
+            let sleep_us = self.sleep_duration.as_micros();
+            let conversion_us = self
+                .conversion_average
+                .conversion_time(self.magnetic_channels, self.temperature_enabled);
+            if sleep_us.0 < conversion_us.0 {
+                return Err(Error::SleepShorterThanConversion {
+                    sleep: sleep_us,
+                    conversion: conversion_us,
+                });
+            }
         }
 
         Ok(Config {
@@ -594,7 +622,6 @@ impl ConfigBuilder {
             trigger_mode: self.trigger_mode,
             glitch_filter: self.glitch_filter,
             temp_coefficient: self.temp_coefficient,
-            max_polls: self.conversion_average.max_polls(),
         })
     }
 }
@@ -608,7 +635,7 @@ impl Config {
     /// configuration.
     ///
     /// Returns the expected conversion time for this configuration.
-    pub const fn conversion_time(&self) -> crate::types::Micros {
+    pub const fn conversion_time(&self) -> Micros {
         self.conversion_average
             .conversion_time(self.magnetic_channels, self.temperature_enabled)
     }
@@ -925,7 +952,7 @@ mod tests {
             .magnetic_channels(MagneticChannel::X)
             .angle_calculation(AngleCalculation::XY)
             .build();
-        assert_eq!(result.unwrap_err(), crate::Error::AngleRequiresTwoChannels);
+        assert_eq!(result.unwrap_err(), Error::AngleRequiresTwoChannels);
     }
 
     #[test]
@@ -938,12 +965,14 @@ mod tests {
     }
 
     #[test]
-    fn wake_up_and_sleep_needs_duration() {
+    fn wake_up_and_sleep_ms1_valid_with_fast_conversion() {
+        // Ms1 (1000 µs) is a valid sleep with the default X1 averaging.
+        // X1 + XYZ + temp = 125 µs conversion, well under 1000 µs.
         let result = ConfigBuilder::new()
             .operating_mode(OperatingMode::WakeUpAndSleep)
-            .sleep_duration(SleepDuration::Ms1) // 1 ms is the "none" sentinel
+            .sleep_duration(SleepDuration::Ms1)
             .build();
-        assert_eq!(result.unwrap_err(), crate::Error::SleepDurationRequired);
+        assert!(result.is_ok());
     }
 
     #[test]
@@ -1273,5 +1302,58 @@ mod tests {
         let config = ConfigBuilder::new().build().unwrap();
         // Default: X1, XYZ, temp enabled → 125 us
         assert_eq!(config.conversion_time().0, 125);
+    }
+
+    // -- SleepDuration::as_micros ---------------------------------------------
+
+    #[test]
+    fn sleep_duration_as_micros_all_variants() {
+        assert_eq!(SleepDuration::Ms1.as_micros(), Micros(1_000));
+        assert_eq!(SleepDuration::Ms5.as_micros(), Micros(5_000));
+        assert_eq!(SleepDuration::Ms10.as_micros(), Micros(10_000));
+        assert_eq!(SleepDuration::Ms15.as_micros(), Micros(15_000));
+        assert_eq!(SleepDuration::Ms20.as_micros(), Micros(20_000));
+        assert_eq!(SleepDuration::Ms30.as_micros(), Micros(30_000));
+        assert_eq!(SleepDuration::Ms50.as_micros(), Micros(50_000));
+        assert_eq!(SleepDuration::Ms100.as_micros(), Micros(100_000));
+        assert_eq!(SleepDuration::Ms500.as_micros(), Micros(500_000));
+        assert_eq!(SleepDuration::Ms1000.as_micros(), Micros(1_000_000));
+        assert_eq!(SleepDuration::Ms2000.as_micros(), Micros(2_000_000));
+        assert_eq!(SleepDuration::Ms5000.as_micros(), Micros(5_000_000));
+        assert_eq!(SleepDuration::Ms20000.as_micros(), Micros(20_000_000));
+    }
+
+    // -- SleepShorterThanConversion builder validation -------------------------
+
+    #[test]
+    fn ms1_too_short_for_x32_xyz_temp() {
+        // Ms1 (1000 µs) < X32 + XYZ + temp conversion time (3225 µs).
+        let result = ConfigBuilder::new()
+            .operating_mode(OperatingMode::WakeUpAndSleep)
+            .sleep_duration(SleepDuration::Ms1)
+            .conversion_average(ConversionAverage::X32)
+            .magnetic_channels(MagneticChannel::XYZ)
+            .temperature_enabled(true)
+            .build();
+        assert_eq!(
+            result.unwrap_err(),
+            Error::SleepShorterThanConversion {
+                sleep: Micros(1_000),
+                conversion: Micros(3_225),
+            },
+        );
+    }
+
+    #[test]
+    fn ms5_sufficient_for_worst_case_conversion() {
+        // Ms5 (5000 µs) > X32 + XYZ + temp (3225 µs) — always valid.
+        let result = ConfigBuilder::new()
+            .operating_mode(OperatingMode::WakeUpAndSleep)
+            .sleep_duration(SleepDuration::Ms5)
+            .conversion_average(ConversionAverage::X32)
+            .magnetic_channels(MagneticChannel::XYZ)
+            .temperature_enabled(true)
+            .build();
+        assert!(result.is_ok());
     }
 }
