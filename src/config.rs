@@ -591,6 +591,7 @@ impl Config {
     /// configuration.
     ///
     /// Returns the expected conversion time for this configuration.
+    #[must_use]
     pub const fn conversion_time(&self) -> Micros {
         self.conversion_average
             .conversion_time(self.magnetic_channels, self.temperature_enabled)

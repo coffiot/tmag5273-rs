@@ -197,9 +197,20 @@ impl<I2C: I2c> Tmag5273<I2C, Unconfigured> {
     /// default. Uses [`NoDelay`] as the delay backend.
     ///
     /// The address is masked to 7 bits (`address & 0x7F`).
+    ///
+    /// # Panics (debug only)
+    ///
+    /// Debug-asserts that the 7-bit address is not in the I2C reserved
+    /// ranges (0x00–0x07 or 0x78–0x7F). This catches wiring mistakes
+    /// during development without adding runtime cost in release builds.
     pub fn new_with_address(i2c: I2C, variant: DeviceVariant, address: u8) -> Self {
+        let addr = address & 0x7F;
+        debug_assert!(
+            (0x08..=0x77).contains(&addr),
+            "I2C address 0x{addr:02X} is in the reserved range (valid: 0x08–0x77)"
+        );
         Self {
-            address: address & 0x7F,
+            address: addr,
             i2c,
             variant,
             xy_range: Range::Low,
@@ -230,14 +241,24 @@ impl<I2C: I2c, D: DelayNs> Tmag5273<I2C, Unconfigured, D> {
     /// Create with delay backend and custom I2C address.
     ///
     /// The address is masked to 7 bits (`address & 0x7F`).
+    ///
+    /// # Panics (debug only)
+    ///
+    /// Debug-asserts that the 7-bit address is not in the I2C reserved
+    /// ranges (0x00–0x07 or 0x78–0x7F).
     pub fn new_with_delay_and_address(
         i2c: I2C,
         variant: DeviceVariant,
         address: u8,
         delay: D,
     ) -> Self {
+        let addr = address & 0x7F;
+        debug_assert!(
+            (0x08..=0x77).contains(&addr),
+            "I2C address 0x{addr:02X} is in the reserved range (valid: 0x08–0x77)"
+        );
         Self {
-            address: address & 0x7F,
+            address: addr,
             i2c,
             variant,
             xy_range: Range::Low,
@@ -379,6 +400,7 @@ impl<I2C: I2c, D: DelayNs> Tmag5273<I2C, Configured, D> {
     /// Computed from the stored [`ConversionAverage`], active magnetic channels,
     /// and temperature measurement state. Use this to calculate duty cycles or
     /// to manually sleep before reading in standby mode.
+    #[must_use]
     pub fn conversion_time(&self) -> Micros {
         self.conversion_average
             .conversion_time(self.channels, self.temperature_enabled)
