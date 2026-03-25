@@ -19,6 +19,7 @@ use crate::error::{Error, InitError};
 use crate::register;
 use crate::types::{
     AngleReading, Celsius, ConversionStatus, DeviceStatus, DeviceVariant, MagneticReading, Range,
+    SensorReading,
 };
 
 // ---------------------------------------------------------------------------
@@ -361,6 +362,80 @@ impl<I2C: I2c> Tmag5273<I2C, Configured> {
                 magnitude,
             })
         }
+    }
+
+    /// Read temperature and magnetic field in a single coherent burst.
+    ///
+    /// Performs a single 8-byte I2C burst read from `T_MSB_RESULT` (0x10)
+    /// through `Z_LSB_RESULT` (0x17), guaranteeing all values come from
+    /// the same conversion cycle. This matches the Linux kernel driver's
+    /// `tmag5273_get_measure()` pattern.
+    ///
+    /// For best results in standby mode, call
+    /// [`trigger_conversion`](Self::trigger_conversion) and
+    /// [`wait_for_conversion`](Self::wait_for_conversion) first.
+    ///
+    /// # Note on CRC
+    ///
+    /// This method uses a burst read and does **not** validate CRC, even
+    /// when the `crc` feature is enabled. The TMAG5273 CRC scheme only
+    /// covers 2-byte register pair reads, not 8-byte bursts. Use
+    /// [`read_temperature`](Self::read_temperature) and
+    /// [`read_magnetic`](Self::read_magnetic) separately if CRC protection
+    /// is needed.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::NonStandardReadMode`] if the sensor is not in
+    /// Standard I2C read mode. Returns [`Error::I2c`] on bus failure.
+    pub fn read_all(&mut self) -> Result<SensorReading, Error<I2C::Error>> {
+        if self.read_mode != I2cReadMode::Standard {
+            return Err(Error::NonStandardReadMode {
+                mode: self.read_mode as u8,
+            });
+        }
+
+        // 8-byte burst: T_MSB(0x10), T_LSB(0x11), X_MSB(0x12), X_LSB(0x13),
+        //               Y_MSB(0x14), Y_LSB(0x15), Z_MSB(0x16), Z_LSB(0x17)
+        let mut buf = [0u8; 8];
+        self.i2c
+            .write_read(self.address, &[register::T_MSB_RESULT], &mut buf)?;
+
+        let raw_t = i16::from_be_bytes([buf[0], buf[1]]);
+        let raw_x = i16::from_be_bytes([buf[2], buf[3]]);
+        let raw_y = i16::from_be_bytes([buf[4], buf[5]]);
+        let raw_z = i16::from_be_bytes([buf[6], buf[7]]);
+
+        let xy_range = self.variant.range_mt_xy(self.xy_range);
+        let z_range = self.variant.range_mt_z(self.z_range);
+
+        // Following the Linux kernel pattern: always include temperature.
+        // The caller can check their config if they need to know whether
+        // the temperature channel was enabled.
+        let temperature = Some(crate::types::raw_to_celsius(raw_t));
+
+        let magnetic = MagneticReading {
+            x: if self.channels.has_x() {
+                Some(crate::types::raw_to_millitesla(raw_x, xy_range))
+            } else {
+                None
+            },
+            y: if self.channels.has_y() {
+                Some(crate::types::raw_to_millitesla(raw_y, xy_range))
+            } else {
+                None
+            },
+            z: if self.channels.has_z() {
+                Some(crate::types::raw_to_millitesla(raw_z, z_range))
+            } else {
+                None
+            },
+        };
+
+        Ok(SensorReading {
+            temperature,
+            magnetic,
+        })
     }
 
     /// Enable or disable CRC-8 on the sensor's I2C interface.
@@ -2139,6 +2214,66 @@ mod tests {
         assert!(status.oscillator_error);
         assert!(!status.otp_crc_error);
         assert!(!status.int_error);
+
+        sensor.into_inner().done();
+    }
+
+    // -- Coherent read_all() -------------------------------------------------
+
+    #[test]
+    fn read_all_returns_coherent_data() {
+        let address = 0x22u8;
+        let mut expectations = init_expectations(address);
+
+        // 8-byte burst read from T_MSB_RESULT (0x10):
+        // T = 17508 (0x4464) → 25.0°C
+        // X = 0x4000 (16384), Y = 0x2000 (8192), Z = 0x1000 (4096)
+        expectations.push(I2cTransaction::write_read(
+            address,
+            vec![0x10],
+            vec![0x44, 0x64, 0x40, 0x00, 0x20, 0x00, 0x10, 0x00],
+        ));
+
+        let i2c = I2cMock::new(&expectations);
+        let sensor = Tmag5273::new(i2c, DeviceVariant::B1);
+        let config = ConfigBuilder::new().build().unwrap();
+        let mut sensor = sensor.init(&config).unwrap();
+
+        let reading = sensor.read_all().unwrap();
+
+        // Temperature should be ~25.0°C
+        let temp = reading.temperature.unwrap();
+        assert!(
+            (temp.0 - 25.0).abs() < 0.1,
+            "expected ~25.0°C, got {}",
+            temp.0
+        );
+
+        // Magnetic channels should all be present (default config = XYZ+XYX)
+        assert!(reading.magnetic.x.is_some());
+        assert!(reading.magnetic.y.is_some());
+        assert!(reading.magnetic.z.is_some());
+
+        sensor.into_inner().done();
+    }
+
+    #[test]
+    fn read_all_rejects_non_standard_mode() {
+        let address = 0x22u8;
+        let mut expectations = init_expectations(address);
+
+        // set_read_mode to OneByte16Bit: read-modify-write on DEVICE_CONFIG_1
+        expectations.push(I2cTransaction::write_read(address, vec![0x00], vec![0x00]));
+        expectations.push(I2cTransaction::write(address, vec![0x00, 0x01]));
+
+        let i2c = I2cMock::new(&expectations);
+        let sensor = Tmag5273::new(i2c, DeviceVariant::B1);
+        let config = ConfigBuilder::new().build().unwrap();
+        let mut sensor = sensor.init(&config).unwrap();
+
+        sensor.set_read_mode(I2cReadMode::OneByte16Bit).unwrap();
+        let err = sensor.read_all().unwrap_err();
+        assert_eq!(err, Error::NonStandardReadMode { mode: 0x01 });
 
         sensor.into_inner().done();
     }

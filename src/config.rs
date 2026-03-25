@@ -202,7 +202,11 @@ impl ConversionAverage {
     /// `num_channels` includes magnetic axes plus temperature (if enabled).
     ///
     /// This follows the Zephyr RTOS driver's conversion time calculation.
-    pub const fn conversion_time_us(self, channels: MagneticChannel, temperature_enabled: bool) -> u32 {
+    pub const fn conversion_time_us(
+        self,
+        channels: MagneticChannel,
+        temperature_enabled: bool,
+    ) -> u32 {
         let nb = channels.axis_count() as u32 + temperature_enabled as u32;
         ((1u32 << self as u32) * 25) * nb + 25
     }

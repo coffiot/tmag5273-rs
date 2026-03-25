@@ -179,6 +179,21 @@ pub struct AngleReading {
     pub magnitude: u8,
 }
 
+/// Complete sensor reading from a single conversion cycle.
+///
+/// All values are guaranteed to come from the same conversion — no risk
+/// of data from different cycles mixing. Produced by
+/// [`Tmag5273::read_all`](crate::Tmag5273::read_all).
+#[derive(Debug, Clone, Copy, PartialEq)]
+#[cfg_attr(feature = "defmt", derive(defmt::Format))]
+#[must_use]
+pub struct SensorReading {
+    /// Temperature in degrees Celsius, or `None` if the channel is disabled.
+    pub temperature: Option<Celsius>,
+    /// Magnetic field reading from all enabled axes.
+    pub magnetic: MagneticReading,
+}
+
 // ---------------------------------------------------------------------------
 // Status structs
 // ---------------------------------------------------------------------------
