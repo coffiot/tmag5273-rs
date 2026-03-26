@@ -53,6 +53,38 @@
 #![deny(missing_docs)]
 #![cfg_attr(docsrs, feature(doc_auto_cfg))]
 
+/// Gated `defmt` logging macros.
+///
+/// These wrap `defmt::trace!` / `debug!` / `warn!` / `error!` behind
+/// `#[cfg(all(feature = "defmt", not(test)))]`. The `not(test)` gate is
+/// needed because `defmt` requires a global logger (e.g., `defmt-rtt`)
+/// at link time, which only exists on real hardware — not in host-side
+/// `cargo test`.
+macro_rules! defmt_trace {
+    ($($arg:tt)*) => {
+        #[cfg(all(feature = "defmt", not(test)))]
+        defmt::trace!($($arg)*);
+    };
+}
+macro_rules! defmt_debug {
+    ($($arg:tt)*) => {
+        #[cfg(all(feature = "defmt", not(test)))]
+        defmt::debug!($($arg)*);
+    };
+}
+macro_rules! defmt_warn {
+    ($($arg:tt)*) => {
+        #[cfg(all(feature = "defmt", not(test)))]
+        defmt::warn!($($arg)*);
+    };
+}
+macro_rules! defmt_error {
+    ($($arg:tt)*) => {
+        #[cfg(all(feature = "defmt", not(test)))]
+        defmt::error!($($arg)*);
+    };
+}
+
 /// Generates a `TryFrom<u8>` impl for a `#[repr(u8)]` enum.
 ///
 /// Each variant is mapped from its discriminant value. Unknown values return
@@ -66,8 +98,7 @@ macro_rules! impl_try_from_u8 {
                 match val {
                     $($val => Ok(Self::$variant),)+
                     other => {
-                        #[cfg(feature = "defmt")]
-                        defmt::warn!("invalid register value: 0x{:02X}", other);
+                        defmt_warn!("invalid register value: 0x{:02X}", other);
                         Err(other)
                     }
                 }

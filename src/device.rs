@@ -151,13 +151,20 @@ impl<I2C: I2c> Tmag5273<I2C, Unconfigured> {
 
         match DeviceVariant::from_address_version(address, version) {
             Some(variant) => Ok(Self::new_with_address(i2c, variant, address)),
-            None => Err((
-                Error::InvalidRegisterValue {
-                    register: register::DEVICE_ID,
-                    value: version,
-                },
-                i2c,
-            )),
+            None => {
+                defmt_error!(
+                    "detect: unknown version {} at address 0x{:02X}",
+                    version,
+                    address,
+                );
+                Err((
+                    Error::InvalidRegisterValue {
+                        register: register::DEVICE_ID,
+                        value: version,
+                    },
+                    i2c,
+                ))
+            }
         }
     }
 
@@ -189,8 +196,12 @@ impl<I2C: I2c> Tmag5273<I2C, Unconfigured> {
         let mut last_err = None;
 
         for &address in &DeviceVariant::KNOWN_ADDRESSES {
+            defmt_debug!("scan: probing address 0x{:02X}", address);
             match Self::detect(bus, address) {
-                Ok(sensor) => return Ok(sensor),
+                Ok(sensor) => {
+                    defmt_debug!("scan: found sensor at 0x{:02X}", address);
+                    return Ok(sensor);
+                }
                 Err((err, recovered_bus)) => {
                     last_err = Some(err);
                     bus = recovered_bus;
@@ -359,6 +370,11 @@ impl<I2C: I2c, D: DelayNs> Tmag5273<I2C, Unconfigured, D> {
         let manufacturer_id = u16::from(id_buf[1]) << 8 | u16::from(id_buf[0]);
 
         if manufacturer_id != register::MANUFACTURER_ID_EXPECTED {
+            defmt_error!(
+                "invalid manufacturer ID: 0x{:04X} (expected 0x{:04X})",
+                manufacturer_id,
+                register::MANUFACTURER_ID_EXPECTED,
+            );
             return Err(Error::InvalidManufacturerId(manufacturer_id));
         }
 
@@ -367,6 +383,11 @@ impl<I2C: I2c, D: DelayNs> Tmag5273<I2C, Unconfigured, D> {
         let version = register::extract(device_id, register::VERSION_MASK, register::VERSION_SHIFT);
 
         if version != self.variant.version() {
+            defmt_error!(
+                "version mismatch: expected 0x{:02X}, got 0x{:02X}",
+                self.variant.version(),
+                version,
+            );
             return Err(Error::VersionMismatch {
                 expected: self.variant.version(),
                 got: version,
@@ -400,6 +421,12 @@ impl<I2C: I2c, D: DelayNs> Tmag5273<I2C, Unconfigured, D> {
 
         // 5. Clear POR flag by reading CONV_STATUS
         let _ = self.read_register(register::CONV_STATUS)?;
+
+        defmt_debug!(
+            "init OK: variant={:?}, addr=0x{:02X}",
+            self.variant,
+            self.address,
+        );
 
         Ok(())
     }
@@ -455,6 +482,7 @@ impl<I2C: I2c, D: DelayNs> Tmag5273<I2C, Configured, D> {
     #[inline]
     fn require_standard_mode(&self) -> Result<(), Error<I2C::Error>> {
         if self.read_mode != I2cReadMode::Standard {
+            defmt_error!("non-standard read mode: 0x{:02X}", self.read_mode as u8);
             return Err(Error::NonStandardReadMode {
                 mode: self.read_mode as u8,
             });
@@ -489,10 +517,12 @@ impl<I2C: I2c, D: DelayNs> Tmag5273<I2C, Configured, D> {
             Diagnostics::Warn => {
                 // Best-effort: if the status read fails, swallow the error —
                 // Warn must never promote a diagnostic fault to a measurement error.
-                #[cfg(feature = "defmt")]
+                // Outer cfg gates both the I2C read and the log call — defmt
+                // requires a global logger only available on real hardware.
+                #[cfg(all(feature = "defmt", not(test)))]
                 if let Ok(raw) = self.read_register(register::DEVICE_STATUS) {
                     let status = DeviceStatus::from_register(raw);
-                    defmt::warn!("TMAG5273 diagnostic fault (ignored): {:?}", status);
+                    defmt_warn!("TMAG5273 diagnostic fault (ignored): {:?}", status);
                 }
                 Ok(())
             }
@@ -603,6 +633,7 @@ impl<I2C: I2c, D: DelayNs> Tmag5273<I2C, Configured, D> {
     /// Returns [`Error::I2c`] on bus communication failure.
     pub fn read_temperature(&mut self) -> Result<Celsius, Error<I2C::Error>> {
         if !self.temperature_enabled {
+            defmt_error!("read_temperature called but temperature channel is disabled");
             return Err(Error::TemperatureDisabled);
         }
 
@@ -790,6 +821,7 @@ impl<I2C: I2c, D: DelayNs> Tmag5273<I2C, Configured, D> {
     #[cfg(not(feature = "crc"))]
     pub fn set_crc_enabled(&mut self, enabled: bool) -> Result<(), Error<I2C::Error>> {
         if enabled {
+            defmt_error!("CRC enable requires the `crc` Cargo feature");
             return Err(Error::CrcFeatureRequired);
         }
         let current = self.read_register(register::DEVICE_CONFIG_1)?;
@@ -918,11 +950,13 @@ impl<I2C: I2c, D: DelayNs> Tmag5273<I2C, Configured, D> {
                     if !matches!(mode, OperatingMode::Sleep) {
                         self.delay.delay_us(WAKE_DELAY.min.0);
                     }
+                    defmt_debug!("set_mode: {:?}", mode);
                     return Ok(());
                 }
                 Err(e) => {
                     use embedded_hal::i2c::{Error as I2cError, ErrorKind};
                     if matches!(e.kind(), ErrorKind::NoAcknowledge(_)) {
+                        defmt_debug!("set_mode: NACK, retrying wake");
                         last_err = Some(e);
                         self.delay.delay_us(WAKE_DELAY.min.0);
                     } else {
@@ -933,6 +967,10 @@ impl<I2C: I2c, D: DelayNs> Tmag5273<I2C, Configured, D> {
             }
         }
 
+        defmt_error!(
+            "set_mode: wake failed after {} retries",
+            Self::WAKE_RETRY_MAX
+        );
         Err(Error::I2c(last_err.unwrap()))
     }
 
@@ -983,6 +1021,10 @@ impl<I2C: I2c, D: DelayNs> Tmag5273<I2C, Configured, D> {
                 return Ok(status);
             }
         }
+        defmt_error!(
+            "conversion timeout after {} polls",
+            self.conversion_average.max_polls()
+        );
         Err(Error::ConversionTimeout)
     }
 
@@ -1233,8 +1275,18 @@ impl<I2C: I2c, D: DelayNs> Tmag5273<I2C, Configured, D> {
             Ok(()) => {
                 let id = u16::from(id_buf[1]) << 8 | u16::from(id_buf[0]);
                 if id == register::MANUFACTURER_ID_EXPECTED {
+                    defmt_debug!(
+                        "address changed: 0x{:02X} -> 0x{:02X}",
+                        old_address,
+                        new_address,
+                    );
                     Ok(())
                 } else {
+                    defmt_error!(
+                        "address change failed: 0x{:02X} -> 0x{:02X} (verification)",
+                        old_address,
+                        new_address,
+                    );
                     self.address = old_address;
                     Err(Error::AddressChangeFailed {
                         old_address,
@@ -1243,6 +1295,11 @@ impl<I2C: I2c, D: DelayNs> Tmag5273<I2C, Configured, D> {
                 }
             }
             Err(_) => {
+                defmt_error!(
+                    "address change failed: 0x{:02X} -> 0x{:02X} (no response)",
+                    old_address,
+                    new_address,
+                );
                 self.address = old_address;
                 Err(Error::AddressChangeFailed {
                     old_address,
@@ -1772,12 +1829,14 @@ impl<I2C: I2c, State, D> Tmag5273<I2C, State, D> {
     fn read_register(&mut self, register: u8) -> Result<u8, I2C::Error> {
         let mut buf = [0u8];
         self.i2c.write_read(self.address, &[register], &mut buf)?;
+        defmt_trace!("read  reg 0x{:02X} = 0x{:02X}", register, buf[0]);
         Ok(buf[0])
     }
 
     /// Write a single register byte.
     fn write_register(&mut self, register: u8, value: u8) -> Result<(), I2C::Error> {
         self.i2c.write(self.address, &[register, value])?;
+        defmt_trace!("write reg 0x{:02X} = 0x{:02X}", register, value);
         Ok(())
     }
 
@@ -1817,6 +1876,12 @@ impl<I2C: I2c, State, D> Tmag5273<I2C, State, D> {
         let expected = buf[4];
 
         if computed != expected {
+            defmt_warn!(
+                "CRC mismatch at reg 0x{:02X}: expected 0x{:02X}, computed 0x{:02X}",
+                register,
+                expected,
+                computed,
+            );
             return Err(Error::CrcMismatch { expected, computed });
         }
 
@@ -1845,6 +1910,12 @@ impl<I2C: I2c, State, D> Tmag5273<I2C, State, D> {
         let expected = buf[2];
 
         if computed != expected {
+            defmt_warn!(
+                "CRC mismatch at reg 0x{:02X}: expected 0x{:02X}, computed 0x{:02X}",
+                register,
+                expected,
+                computed,
+            );
             return Err(Error::CrcMismatch { expected, computed });
         }
 
@@ -2981,9 +3052,7 @@ mod tests {
         let mut expectations = init_expectations(address, &config);
         // 7-byte burst with DIAG_FAIL=1 (bit 1 → 0x02)
         expectations.extend(diag_read_magnetic_expectations(address, 0x02));
-        // Warn reads DEVICE_STATUS when defmt is enabled; without defmt, no extra read.
-        #[cfg(feature = "defmt")]
-        expectations.push(I2cTransaction::write_read(address, vec![0x1C], vec![0x01]));
+        // Warn+defmt logging is gated with not(test) so no DEVICE_STATUS read in tests.
 
         let i2c = I2cMock::new(&expectations);
         let sensor = Tmag5273::new(i2c, DeviceVariant::B1);
@@ -3126,9 +3195,7 @@ mod tests {
         ));
         // read_and_check_diag → read CONV_STATUS with DIAG_FAIL=1
         expectations.push(I2cTransaction::write_read(address, vec![0x18], vec![0x02]));
-        // Warn+defmt reads DEVICE_STATUS best-effort
-        #[cfg(feature = "defmt")]
-        expectations.push(I2cTransaction::write_read(address, vec![0x1C], vec![0x01]));
+        // Warn+defmt logging is gated with not(test) so no DEVICE_STATUS read in tests.
 
         let i2c = I2cMock::new(&expectations);
         let sensor = Tmag5273::new(i2c, DeviceVariant::B1);
