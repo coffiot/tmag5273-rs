@@ -13,7 +13,14 @@
 # Espressif Rust toolchain (override: CARGO_ESP="cargo +nightly" make hil-test)
 CARGO_ESP ?= cargo +esp
 
+# Source the Espressif environment if the export script exists.
+# This adds xtensa-esp32s3-elf-gcc and other ESP tools to PATH.
+ESP_ENV := . $${HOME}/export-esp.sh 2>/dev/null;
+
 HIL_DIR := hil
+
+SIZE_DIR := size
+SIZE_TARGET := xtensa-esp32s3-none-elf
 
 # --------------------------------------------------------------------------- #
 #	ANSI formatting
@@ -29,7 +36,7 @@ RESET := \033[0m
 # --------------------------------------------------------------------------- #
 
 .PHONY: help test test-all test-crc test-defmt lint check doc \
-        hil-test hil-build clean
+        hil-test hil-build size clean
 
 # --------------------------------------------------------------------------- #
 #	Library targets (no hardware)
@@ -58,17 +65,41 @@ check: ## Verify bare-metal compilation (no std/alloc)
 doc: ## Build docs locally with feature annotations
 	cargo doc -p tmag5273 --all-features --open
 
+size: ## Report .text size per feature combo (requires esp toolchain)
+	@$(ESP_ENV) \
+	LLVM_SIZE=$$(find "$$($(CARGO_ESP) rustc --print sysroot 2>/dev/null || rustc --print sysroot)" -name llvm-size 2>/dev/null | head -1); \
+	if [ -z "$$LLVM_SIZE" ]; then \
+		printf "$(BOLD)Error:$(RESET) llvm-size not found. Install with: rustup component add llvm-tools\n"; \
+		exit 1; \
+	fi; \
+	printf "\n$(BOLD)tmag5273 binary size ($(SIZE_TARGET), release)$(RESET)\n\n"; \
+	printf "  $(CYAN)%-20s$(RESET) %8s %8s %8s\n" "Features" ".text" ".data" ".bss"; \
+	printf "  %-20s %8s %8s %8s\n" "--------" "-----" "-----" "----"; \
+	for combo in "default:--no-default-features" "crc:--features crc" "defmt:--features defmt" "crc+defmt:--features crc,defmt"; do \
+		name=$${combo%%:*}; flags=$${combo#*:}; \
+		if ! ( cd $(SIZE_DIR) && RUSTFLAGS="-C llvm-args=--disable-block-placement -C llvm-args=--disable-branch-fold" $(CARGO_ESP) build --release $$flags 2>/dev/null ); then \
+			printf "  %-20s %8s %8s %8s\n" "$$name" "FAILED" "-" "-"; \
+			continue; \
+		fi; \
+		sizes=$$($$LLVM_SIZE $(SIZE_DIR)/target/$(SIZE_TARGET)/release/tmag5273-size 2>/dev/null | tail -1); \
+		text=$$(echo "$$sizes" | awk '{print $$1}'); \
+		data=$$(echo "$$sizes" | awk '{print $$2}'); \
+		bss=$$(echo "$$sizes" | awk '{print $$3}'); \
+		printf "  %-20s %8s %8s %8s\n" "$$name" "$$text" "$$data" "$$bss"; \
+	done; \
+	printf "\n"
+
 # --------------------------------------------------------------------------- #
 #	HIL targets (requires ESP32-S3 + TMAG5273 hardware)
 # --------------------------------------------------------------------------- #
 
 ##@ HIL (hardware-in-the-loop — requires ESP32-S3 + TMAG5273)
 
-hil-test: ## Flash and run all HIL tests via probe-rs (7 tests)
-	( cd $(HIL_DIR) && $(CARGO_ESP) test --release )
+hil-test: ## Flash and run all HIL tests via probe-rs
+	@$(ESP_ENV) ( cd $(HIL_DIR) && $(CARGO_ESP) test --release )
 
 hil-build: ## Build HIL test binary without flashing
-	( cd $(HIL_DIR) && $(CARGO_ESP) build --release )
+	@$(ESP_ENV) ( cd $(HIL_DIR) && $(CARGO_ESP) build --release )
 
 # --------------------------------------------------------------------------- #
 #	Housekeeping
@@ -77,8 +108,9 @@ hil-build: ## Build HIL test binary without flashing
 ##@ Housekeeping
 
 clean: ## Remove all build artifacts
-	cargo clean
-	( cd $(HIL_DIR) && cargo clean )
+	cargo clean && cargo update
+	( cd $(HIL_DIR) && cargo clean && cargo update)
+	( cd $(SIZE_DIR) && cargo clean && cargo update 2>/dev/null || true )
 
 # --------------------------------------------------------------------------- #
 #	Help

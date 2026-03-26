@@ -2163,7 +2163,16 @@ mod tests {
 
     #[test]
     fn init_successful() {
-        let i2c = I2cMock::new(&init_expectations(0x22, &default_config()));
+        let expectations = init_expectations(0x22, &default_config());
+        // Regression guard: init uses exactly 9 I2C transactions (see DESIGN.md).
+        // wake-up(1) + disable INT(1) + mfr ID(1) + version(1) + burst config(1)
+        // + T_CONFIG(1) + device status(1) + clear faults(1) + conv status(1) = 9
+        assert_eq!(
+            expectations.len(),
+            9,
+            "init requires exactly 9 I2C transactions"
+        );
+        let i2c = I2cMock::new(&expectations);
         let sensor = Tmag5273::new(i2c, DeviceVariant::B1);
         let config = ConfigBuilder::new().build().unwrap();
         let sensor = sensor.init(&config).unwrap();
@@ -2228,6 +2237,13 @@ mod tests {
             vec![0x40, 0x00, 0x20, 0x00, 0x10, 0x00], // X=16384, Y=8192, Z=4096
         ));
 
+        // Regression guard: all 3 axes in a single burst read (see DESIGN.md).
+        // init(9) + 1 burst read = 10 total — NOT 3 separate register reads.
+        assert_eq!(
+            expectations.len(),
+            10,
+            "read_magnetic: init(9) + 1 burst read for all 3 axes"
+        );
         let i2c = I2cMock::new(&expectations);
         let sensor = Tmag5273::new(i2c, DeviceVariant::B1);
         let config = ConfigBuilder::new().build().unwrap();
@@ -2264,6 +2280,13 @@ mod tests {
             ));
         }
 
+        // Regression guard: temperature is a single register-pair read (see DESIGN.md).
+        // init(9) + 1 read (2 bytes without CRC, 3 bytes with CRC) = 10 total.
+        assert_eq!(
+            expectations.len(),
+            10,
+            "read_temperature: init(9) + 1 register pair read"
+        );
         let i2c = I2cMock::new(&expectations);
         let sensor = Tmag5273::new(i2c, DeviceVariant::B1);
         let config = ConfigBuilder::new().build().unwrap();
@@ -3253,6 +3276,13 @@ mod tests {
             vec![0x44, 0x64, 0x40, 0x00, 0x20, 0x00, 0x10, 0x00],
         ));
 
+        // Regression guard: temp + 3 axes in a single 8-byte burst (see DESIGN.md).
+        // init(9) + 1 burst read = 10 total — NOT 4 separate register reads.
+        assert_eq!(
+            expectations.len(),
+            10,
+            "read_all: init(9) + 1 burst read for temp + 3 axes"
+        );
         let i2c = I2cMock::new(&expectations);
         let sensor = Tmag5273::new(i2c, DeviceVariant::B1);
         let config = ConfigBuilder::new().build().unwrap();

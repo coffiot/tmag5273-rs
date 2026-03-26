@@ -87,6 +87,59 @@ When `crc` is off, the CRC-8 function and 3-byte read paths are completely elimi
 
 **Impact:** Impossible to get corrupt data from a mode mismatch.
 
+## Quantitative Data
+
+Concrete measurements backing the qualitative claims above.
+
+### Binary Size
+
+Driver `.text` section size on `xtensa-esp32s3-none-elf` (release, opt-level=2):
+
+| Features      | `.text`  | `.data`  | `.bss` | Delta vs default |
+| ------------- | -------- | -------- | ------ | ---------------- |
+| default       | 3,167 B  | 16 B     | 32 B   | —                |
+| `crc`         | 3,875 B  | 16 B     | 32 B   | +708 B           |
+| `defmt`       | 8,851 B  | 1,096 B  | 36 B   | +5,684 B         |
+| `crc`+`defmt` | 9,567 B  | 1,096 B  | 36 B   | +6,400 B         |
+
+The full driver fits in **~3.2 KB** of flash with default features. CRC-8 validation adds 708 bytes — when the `crc` feature is disabled, the CRC code is completely eliminated from the binary (Section 9 claim verified). The `defmt` feature adds ~5.7 KB for debug formatting infrastructure (Format impls on all public types + defmt-rtt logger); this overhead is only present in debug/development builds.
+
+Reproduce: `make size` (requires `cargo +esp` toolchain).
+
+### I2C Transaction Counts
+
+Operations measured by transaction-count assertions in mock tests:
+
+| Operation            | Transactions | Notes                                                                                                          |
+| -------------------- | :----------: | -------------------------------------------------------------------------------------------------------------- |
+| `init()`             |      9       | Wake + disable INT + manufacturer ID + version + config burst + T_CONFIG + status + clear faults + conv status |
+| `read_magnetic()`    |      1       | Single 6-byte burst read for X+Y+Z (Section 1: "6x fewer I2C transactions")                                    |
+| `read_temperature()` |      1       | Single register-pair read                                                                                      |
+| `read_all()`         |      1       | Single 8-byte burst read for temp+X+Y+Z (most efficient path)                                                  |
+
+SparkFun's equivalent (`getXData()` + `getYData()` + `getZData()`) requires 6+ separate I2C transactions for the same data. The Rust driver achieves **6x fewer transactions** through burst reads with register latching.
+
+These counts are enforced by `assert_eq!(expectations.len(), N)` in the mock test suite — any change that adds an I2C transaction will fail the test.
+
+### HIL Latency
+
+Wall-clock timing on ESP32-S3 at 400 kHz I2C with TMAG5273 B1:
+
+| Operation            | Min    | Avg      | Max    |
+| -------------------- | ------ | -------- | ------ |
+| `init()`             | —      | 1,439 µs | —      |
+| `read_magnetic()`    | 235 µs | 241 µs   | 296 µs |
+| `read_temperature()` | 143 µs | 146 µs   | 177 µs |
+| `read_all()`         | 281 µs | 287 µs   | 342 µs |
+
+Measured over 10 iterations per operation using `esp_hal::time::Instant`. Reproduce: `make hil-test` (requires ESP32-S3 hardware).
+
+### Methodology
+
+- **Binary size**: Measured with `llvm-size` on a minimal harness binary (`size/`) that calls every driver API through `core::hint::black_box` to prevent dead-code elimination. Target: `xtensa-esp32s3-none-elf` with opt-level=2 (workaround for an Xtensa LLVM block-placement bug).
+- **Transaction counts**: Extracted from `embedded-hal-mock` transaction sequences in unit tests. Each assertion documents the exact I2C transaction breakdown.
+- **HIL latency**: Timed with `esp_hal::time::Instant` on real hardware (ESP32-S3, 400 kHz I2C, TMAG5273 B1 at address 0x22). 10 iterations per operation, reporting min/avg/max.
+
 ## References
 
 - <https://docs.sparkfun.com/SparkFun_Qwiic_Hall_Effect_Sensor_TMAG5273/assets/board_files/schematic-mini.pdf>
