@@ -6,9 +6,9 @@
 use crate::error::ConfigError;
 use crate::register;
 use crate::types::{
-    AngleCalculation, ConversionAverage, GainChannel, I2cReadMode, IntPinBehavior, InterruptMode,
-    MagneticChannel, Micros, OperatingMode, PowerMode, Range, SleepDuration, TempCoefficient,
-    ThresholdDirection, TriggerMode,
+    AngleCalculation, ConversionAverage, Diagnostics, GainChannel, I2cReadMode, IntPinBehavior,
+    InterruptMode, MagneticChannel, Micros, OperatingMode, PowerMode, Range, SleepDuration,
+    TempCoefficient, ThresholdDirection, TriggerMode,
 };
 
 /// Validated device configuration for the TMAG5273.
@@ -44,25 +44,14 @@ pub struct Config {
     pub glitch_filter: bool,
     /// Magnetic temperature compensation coefficient.
     pub temp_coefficient: TempCoefficient,
-    /// Enable per-sample diagnostic check on every measurement read.
+    /// Per-sample diagnostic checking policy.
     ///
-    /// When `true`, each `read_magnetic`, `read_temperature`, `read_all`,
-    /// and `read_angle` call checks `CONV_STATUS.DIAG_FAIL` and returns
-    /// [`Error::DiagnosticFailure`](crate::Error::DiagnosticFailure) if a
-    /// sensor fault is detected.
+    /// Controls whether each `read_magnetic`, `read_temperature`, `read_all`,
+    /// and `read_angle` call checks `CONV_STATUS.DIAG_FAIL`, and what
+    /// happens when a fault is detected.
     ///
-    /// Default: `false` (no overhead — existing behavior unchanged).
-    pub diag_enabled: bool,
-    /// Suppress diagnostic failure errors for noisy environments.
-    ///
-    /// When `true`, per-sample diagnostic checks still run (if
-    /// [`diag_enabled`](Self::diag_enabled) is set) but
-    /// faults are silently ignored — reads succeed regardless. Manual
-    /// [`check_diag()`](crate::Tmag5273::check_diag) still
-    /// reports faults.
-    ///
-    /// Default: `false`.
-    pub ignore_diag_fail: bool,
+    /// Default: [`Diagnostics::Off`] (no overhead — existing behavior unchanged).
+    pub diagnostics: Diagnostics,
 }
 
 // ---------------------------------------------------------------------------
@@ -97,8 +86,7 @@ pub struct ConfigBuilder {
     trigger_mode: TriggerMode,
     glitch_filter: bool,
     temp_coefficient: TempCoefficient,
-    diag_enabled: bool,
-    ignore_diag_fail: bool,
+    diagnostics: Diagnostics,
 }
 
 impl Default for ConfigBuilder {
@@ -124,8 +112,7 @@ impl ConfigBuilder {
             trigger_mode: TriggerMode::I2cCommand,
             glitch_filter: true,
             temp_coefficient: TempCoefficient::None,
-            diag_enabled: false,
-            ignore_diag_fail: false,
+            diagnostics: Diagnostics::Off,
         }
     }
 
@@ -201,23 +188,15 @@ impl ConfigBuilder {
         self
     }
 
-    /// Enable per-sample diagnostic checking on every measurement read.
+    /// Set the per-sample diagnostic checking policy.
     ///
-    /// When enabled, each `read_*` method checks `CONV_STATUS.DIAG_FAIL`
-    /// and returns [`Error::DiagnosticFailure`](crate::Error::DiagnosticFailure)
-    /// on sensor fault. Default: `false`.
-    pub const fn diag_enabled(mut self, enabled: bool) -> Self {
-        self.diag_enabled = enabled;
-        self
-    }
-
-    /// Suppress diagnostic failure errors (for noisy environments).
+    /// Controls whether each `read_*` method checks `CONV_STATUS.DIAG_FAIL`
+    /// and what happens when a fault is detected. See [`Diagnostics`] for
+    /// details on each variant.
     ///
-    /// When `true`, per-sample diagnostic faults are silently ignored.
-    /// Manual [`check_diag()`](crate::Tmag5273::check_diag)
-    /// still reports faults. Default: `false`.
-    pub const fn ignore_diag_fail(mut self, ignore: bool) -> Self {
-        self.ignore_diag_fail = ignore;
+    /// Default: [`Diagnostics::Off`].
+    pub const fn diagnostics(mut self, policy: Diagnostics) -> Self {
+        self.diagnostics = policy;
         self
     }
 
@@ -263,8 +242,7 @@ impl ConfigBuilder {
             trigger_mode: self.trigger_mode,
             glitch_filter: self.glitch_filter,
             temp_coefficient: self.temp_coefficient,
-            diag_enabled: self.diag_enabled,
-            ignore_diag_fail: self.ignore_diag_fail,
+            diagnostics: self.diagnostics,
         })
     }
 }

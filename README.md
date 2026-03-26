@@ -226,31 +226,30 @@ let reading = sensor.read_magnetic()?;
 
 ## Per-Sample Diagnostics
 
-Opt-in per-sample `CONV_STATUS.DIAG_FAIL` checking on every measurement:
+Opt-in per-sample `CONV_STATUS.DIAG_FAIL` checking on every measurement
+via [`Diagnostics`]:
 
 ```rust,no_run
+use tmag5273::{ConfigBuilder, Diagnostics};
+
+// Halt on fault — returns Error::DiagnosticFailure(DeviceStatus)
 let config = ConfigBuilder::new()
-    .diag_enabled(true)  // check DIAG_FAIL on every read
+    .diagnostics(Diagnostics::Halt)
     .build()?;
-let mut sensor = sensor.init(&config)?;
 
-// read_magnetic, read_all, etc. now return
-// Error::DiagnosticFailure(DeviceStatus) on sensor fault
-let reading = sensor.read_magnetic()?;
-```
-
-For noisy environments (EMI, motor controllers) where diagnostic flags
-trigger spuriously:
-
-```rust,no_run
+// Warn on fault — emits defmt::warn! but reads succeed (requires `defmt` feature)
 let config = ConfigBuilder::new()
-    .diag_enabled(true)
-    .ignore_diag_fail(true)  // reads succeed despite faults
+    .diagnostics(Diagnostics::Warn)
+    .build()?;
+
+// Ignore faults — for noisy environments (EMI, motor controllers)
+let config = ConfigBuilder::new()
+    .diagnostics(Diagnostics::Ignore)
     .build()?;
 ```
 
-Zero overhead when disabled (default) — no extra I2C transactions.
-Manual `check_diag()` works independently of this setting.
+Zero overhead when disabled (default `Diagnostics::Off`) — no extra I2C
+transactions. Manual `check_diag()` works independently of this setting.
 
 ## Advanced
 

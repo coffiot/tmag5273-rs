@@ -87,8 +87,8 @@ pub use device::{Configured, Tmag5273, Unconfigured};
 pub use error::{ConfigError, Error, InitError};
 pub use types::{
     AngleCalculation, AngleReading, Celsius, ConversionAverage, ConversionStatus, Degrees,
-    DeviceStatus, DeviceVariant, GainChannel, I2cReadMode, IntPinBehavior, InterruptMode,
-    MagneticChannel, MagneticReading, Micros, MicrosRange, MilliTesla, NoDelay, OperatingMode,
-    PowerMode, Range, SensorReading, SleepDuration, TempCoefficient, ThresholdDirection,
-    TriggerMode, WAKE_DELAY,
+    DeviceStatus, DeviceVariant, Diagnostics, GainChannel, I2cReadMode, IntPinBehavior,
+    InterruptMode, MagneticChannel, MagneticReading, Micros, MicrosRange, MilliTesla, NoDelay,
+    OperatingMode, PowerMode, Range, SensorReading, SleepDuration, TempCoefficient,
+    ThresholdDirection, TriggerMode, WAKE_DELAY,
 };

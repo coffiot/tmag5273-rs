@@ -132,11 +132,11 @@ pub enum Error<E> {
     /// or INT pin error). The [`DeviceStatus`](DeviceStatus) carries
     /// the specific fault flags.
     ///
-    /// This error is only returned when
-    /// [`diag_enabled(true)`](crate::ConfigBuilder::diag_enabled)
-    /// is set in the configuration. Use
-    /// [`ignore_diag_fail(true)`](crate::ConfigBuilder::ignore_diag_fail) to
-    /// suppress this error in noisy environments.
+    /// This error is only returned when [`Diagnostics::Halt`](crate::Diagnostics::Halt)
+    /// is set via [`ConfigBuilder::diagnostics`](crate::ConfigBuilder::diagnostics).
+    /// Use [`Diagnostics::Warn`](crate::Diagnostics::Warn) or
+    /// [`Diagnostics::Ignore`](crate::Diagnostics::Ignore) to suppress this error
+    /// in noisy environments.
     #[error("sensor diagnostic failure: {0:?}")]
     DiagnosticFailure(DeviceStatus),
 }

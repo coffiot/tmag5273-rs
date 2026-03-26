@@ -14,9 +14,10 @@ use crate::error::{Error, InitError};
 use crate::register;
 use crate::types::{
     AngleCalculation, AngleReading, Celsius, ConversionAverage, ConversionStatus, Degrees,
-    DeviceStatus, DeviceVariant, GainChannel, I2cReadMode, IntPinBehavior, InterruptMode,
-    MagneticChannel, MagneticReading, Micros, MilliTesla, NoDelay, OperatingMode, PowerMode, Range,
-    SensorReading, SleepDuration, TempCoefficient, ThresholdDirection, TriggerMode, WAKE_DELAY,
+    DeviceStatus, DeviceVariant, Diagnostics, GainChannel, I2cReadMode, IntPinBehavior,
+    InterruptMode, MagneticChannel, MagneticReading, Micros, MilliTesla, NoDelay, OperatingMode,
+    PowerMode, Range, SensorReading, SleepDuration, TempCoefficient, ThresholdDirection,
+    TriggerMode, WAKE_DELAY,
 };
 
 // ---------------------------------------------------------------------------
@@ -84,10 +85,8 @@ pub struct Tmag5273<I2C, State = Unconfigured, D = NoDelay> {
     /// Current I2C read mode — high-level reads guard against non-Standard
     /// mode to prevent silent data corruption.
     read_mode: I2cReadMode,
-    /// Per-sample diagnostic check on every measurement read.
-    diag_enabled: bool,
-    /// Suppress diagnostic failure errors (noisy environments).
-    ignore_diag_fail: bool,
+    /// Per-sample diagnostic checking policy.
+    diagnostics: Diagnostics,
     delay: D,
     _state: PhantomData<State>,
 }
@@ -233,8 +232,7 @@ impl<I2C: I2c> Tmag5273<I2C, Unconfigured> {
             temperature_enabled: false,
             conversion_average: ConversionAverage::X1,
             read_mode: I2cReadMode::Standard,
-            diag_enabled: false,
-            ignore_diag_fail: false,
+            diagnostics: Diagnostics::Off,
             delay: NoDelay,
             _state: PhantomData,
         }
@@ -283,8 +281,7 @@ impl<I2C: I2c, D: DelayNs> Tmag5273<I2C, Unconfigured, D> {
             temperature_enabled: false,
             conversion_average: ConversionAverage::X1,
             read_mode: I2cReadMode::Standard,
-            diag_enabled: false,
-            ignore_diag_fail: false,
+            diagnostics: Diagnostics::Off,
             delay,
             _state: PhantomData,
         }
@@ -330,8 +327,7 @@ impl<I2C: I2c, D: DelayNs> Tmag5273<I2C, Unconfigured, D> {
             temperature_enabled: config.temperature_enabled,
             conversion_average: config.conversion_average,
             read_mode: I2cReadMode::Standard,
-            diag_enabled: config.diag_enabled,
-            ignore_diag_fail: config.ignore_diag_fail,
+            diagnostics: config.diagnostics,
             delay: self.delay,
             _state: PhantomData,
         })
@@ -468,21 +464,39 @@ impl<I2C: I2c, D: DelayNs> Tmag5273<I2C, Configured, D> {
 
     /// Check CONV_STATUS for diagnostic failure (from a raw register byte).
     ///
-    /// Returns `Ok(())` if diagnostics are disabled, no fault is detected,
-    /// or `ignore_diag_fail` suppresses the error. Returns
-    /// `Err(Error::DiagnosticFailure)` if a fault is detected and not
-    /// suppressed.
+    /// Behaviour depends on [`Diagnostics`]:
+    /// - `Off` → returns `Ok(())` immediately
+    /// - `Halt` → returns `Err(Error::DiagnosticFailure)` on fault
+    /// - `Warn` → emits `defmt::warn!` on fault, returns `Ok(())`
+    /// - `Ignore` → returns `Ok(())`
     #[inline]
     fn check_diag_from_conv_status(&mut self, conv_raw: u8) -> Result<(), Error<I2C::Error>> {
-        if !self.diag_enabled {
+        if matches!(self.diagnostics, Diagnostics::Off) {
             return Ok(());
         }
         let conv = ConversionStatus::from_register(conv_raw);
-        if !conv.diag_fail || self.ignore_diag_fail {
+        if !conv.diag_fail {
             return Ok(());
         }
-        let status = DeviceStatus::from_register(self.read_register(register::DEVICE_STATUS)?);
-        Err(Error::DiagnosticFailure(status))
+        match self.diagnostics {
+            // Off is unreachable (early return above) but kept for exhaustiveness.
+            Diagnostics::Off | Diagnostics::Ignore => Ok(()),
+            Diagnostics::Halt => {
+                let status =
+                    DeviceStatus::from_register(self.read_register(register::DEVICE_STATUS)?);
+                Err(Error::DiagnosticFailure(status))
+            }
+            Diagnostics::Warn => {
+                // Best-effort: if the status read fails, swallow the error —
+                // Warn must never promote a diagnostic fault to a measurement error.
+                #[cfg(feature = "defmt")]
+                if let Ok(raw) = self.read_register(register::DEVICE_STATUS) {
+                    let status = DeviceStatus::from_register(raw);
+                    defmt::warn!("TMAG5273 diagnostic fault (ignored): {:?}", status);
+                }
+                Ok(())
+            }
+        }
     }
 
     /// Read CONV_STATUS and check for diagnostic failure.
@@ -491,7 +505,8 @@ impl<I2C: I2c, D: DelayNs> Tmag5273<I2C, Configured, D> {
     /// not included in the burst read.
     #[inline]
     fn read_and_check_diag(&mut self) -> Result<(), Error<I2C::Error>> {
-        if !self.diag_enabled {
+        // Fast path: skip the CONV_STATUS register read when diagnostics are off.
+        if matches!(self.diagnostics, Diagnostics::Off) {
             return Ok(());
         }
         let conv_raw = self.read_register(register::CONV_STATUS)?;
@@ -548,7 +563,7 @@ impl<I2C: I2c, D: DelayNs> Tmag5273<I2C, Configured, D> {
 
         // Without CRC: burst read with optional diagnostic extension.
         #[cfg(not(feature = "crc"))]
-        let (raw_x, raw_y, raw_z) = if self.diag_enabled {
+        let (raw_x, raw_y, raw_z) = if !matches!(self.diagnostics, Diagnostics::Off) {
             let mut buf = [0u8; 7];
             self.i2c
                 .write_read(self.address, &[register::X_MSB_RESULT], &mut buf)?;
@@ -691,7 +706,7 @@ impl<I2C: I2c, D: DelayNs> Tmag5273<I2C, Configured, D> {
 
         // Without CRC: single burst with optional diagnostic extension.
         #[cfg(not(feature = "crc"))]
-        let (raw_t, raw_x, raw_y, raw_z) = if self.diag_enabled {
+        let (raw_t, raw_x, raw_y, raw_z) = if !matches!(self.diagnostics, Diagnostics::Off) {
             let mut buf = [0u8; 9];
             self.i2c
                 .write_read(self.address, &[register::T_MSB_RESULT], &mut buf)?;
@@ -2890,6 +2905,267 @@ mod tests {
         assert!(!status.otp_crc_error);
         assert!(!status.int_error);
 
+        sensor.into_inner().done();
+    }
+
+    // -- Diagnostics per-sample tests ----------------------------------------
+
+    /// Helper: build expectations for read_magnetic with diag (7-byte burst: 6 mag + 1 CONV_STATUS).
+    #[cfg(not(feature = "crc"))]
+    fn diag_read_magnetic_expectations(address: u8, conv_status: u8) -> Vec<I2cTransaction> {
+        // 7-byte burst: X_MSB, X_LSB, Y_MSB, Y_LSB, Z_MSB, Z_LSB, CONV_STATUS
+        vec![I2cTransaction::write_read(
+            address,
+            vec![0x12],
+            vec![0x40, 0x00, 0x20, 0x00, 0x10, 0x00, conv_status],
+        )]
+    }
+
+    #[test]
+    #[cfg(not(feature = "crc"))]
+    fn diagnostics_halt_fault_returns_error() {
+        let address = 0x22u8;
+        let config = ConfigBuilder::new()
+            .diagnostics(Diagnostics::Halt)
+            .build()
+            .unwrap();
+        let mut expectations = init_expectations(address, &config);
+        // 7-byte burst with DIAG_FAIL=1 (bit 1 set → 0x02)
+        expectations.extend(diag_read_magnetic_expectations(address, 0x02));
+        // Halt reads DEVICE_STATUS (0x1C) on fault → VCC undervoltage (0x01)
+        expectations.push(I2cTransaction::write_read(address, vec![0x1C], vec![0x01]));
+
+        let i2c = I2cMock::new(&expectations);
+        let sensor = Tmag5273::new(i2c, DeviceVariant::B1);
+        let mut sensor = sensor.init(&config).unwrap();
+
+        let err = sensor.read_magnetic().unwrap_err();
+        match err {
+            Error::DiagnosticFailure(status) => {
+                assert!(status.vcc_undervoltage);
+            }
+            other => panic!("expected DiagnosticFailure, got {other:?}"),
+        }
+        sensor.into_inner().done();
+    }
+
+    #[test]
+    #[cfg(not(feature = "crc"))]
+    fn diagnostics_halt_no_fault_succeeds() {
+        let address = 0x22u8;
+        let config = ConfigBuilder::new()
+            .diagnostics(Diagnostics::Halt)
+            .build()
+            .unwrap();
+        let mut expectations = init_expectations(address, &config);
+        // 7-byte burst with DIAG_FAIL=0
+        expectations.extend(diag_read_magnetic_expectations(address, 0x00));
+
+        let i2c = I2cMock::new(&expectations);
+        let sensor = Tmag5273::new(i2c, DeviceVariant::B1);
+        let mut sensor = sensor.init(&config).unwrap();
+
+        let mag = sensor.read_magnetic().unwrap();
+        assert!(mag.x.is_some());
+        sensor.into_inner().done();
+    }
+
+    #[test]
+    #[cfg(not(feature = "crc"))]
+    fn diagnostics_warn_fault_succeeds() {
+        let address = 0x22u8;
+        let config = ConfigBuilder::new()
+            .diagnostics(Diagnostics::Warn)
+            .build()
+            .unwrap();
+        let mut expectations = init_expectations(address, &config);
+        // 7-byte burst with DIAG_FAIL=1 (bit 1 → 0x02)
+        expectations.extend(diag_read_magnetic_expectations(address, 0x02));
+        // Warn reads DEVICE_STATUS when defmt is enabled; without defmt, no extra read.
+        #[cfg(feature = "defmt")]
+        expectations.push(I2cTransaction::write_read(address, vec![0x1C], vec![0x01]));
+
+        let i2c = I2cMock::new(&expectations);
+        let sensor = Tmag5273::new(i2c, DeviceVariant::B1);
+        let mut sensor = sensor.init(&config).unwrap();
+
+        // Warn: read succeeds even with fault
+        let mag = sensor.read_magnetic().unwrap();
+        assert!(mag.x.is_some());
+        sensor.into_inner().done();
+    }
+
+    #[test]
+    #[cfg(not(feature = "crc"))]
+    fn diagnostics_ignore_fault_succeeds() {
+        let address = 0x22u8;
+        let config = ConfigBuilder::new()
+            .diagnostics(Diagnostics::Ignore)
+            .build()
+            .unwrap();
+        let mut expectations = init_expectations(address, &config);
+        // 7-byte burst with DIAG_FAIL=1 — Ignore discards, no DEVICE_STATUS read
+        expectations.extend(diag_read_magnetic_expectations(address, 0x02));
+
+        let i2c = I2cMock::new(&expectations);
+        let sensor = Tmag5273::new(i2c, DeviceVariant::B1);
+        let mut sensor = sensor.init(&config).unwrap();
+
+        // Ignore: read succeeds silently
+        let mag = sensor.read_magnetic().unwrap();
+        assert!(mag.x.is_some());
+        sensor.into_inner().done();
+    }
+
+    #[test]
+    #[cfg(not(feature = "crc"))]
+    fn diagnostics_off_no_extra_read() {
+        let address = 0x22u8;
+        let config = ConfigBuilder::new()
+            .diagnostics(Diagnostics::Off)
+            .build()
+            .unwrap();
+        let mut expectations = init_expectations(address, &config);
+        // Off: standard 6-byte burst, no CONV_STATUS byte
+        expectations.push(I2cTransaction::write_read(
+            address,
+            vec![0x12],
+            vec![0x40, 0x00, 0x20, 0x00, 0x10, 0x00],
+        ));
+
+        let i2c = I2cMock::new(&expectations);
+        let sensor = Tmag5273::new(i2c, DeviceVariant::B1);
+        let mut sensor = sensor.init(&config).unwrap();
+
+        let mag = sensor.read_magnetic().unwrap();
+        assert!(mag.x.is_some());
+        sensor.into_inner().done();
+    }
+
+    // -- Diagnostics: read_all fault path (P2 #4) ---------------------------
+
+    #[test]
+    #[cfg(not(feature = "crc"))]
+    fn diagnostics_halt_read_all_fault_returns_error() {
+        let address = 0x22u8;
+        let config = ConfigBuilder::new()
+            .diagnostics(Diagnostics::Halt)
+            .build()
+            .unwrap();
+        let mut expectations = init_expectations(address, &config);
+        // 9-byte burst from T_MSB_RESULT (0x10): T + X + Y + Z + CONV_STATUS
+        // CONV_STATUS with DIAG_FAIL=1 (bit 1 → 0x02) at buf[8]
+        expectations.push(I2cTransaction::write_read(
+            address,
+            vec![0x10],
+            vec![0x44, 0x64, 0x40, 0x00, 0x20, 0x00, 0x10, 0x00, 0x02],
+        ));
+        // Halt reads DEVICE_STATUS → VCC undervoltage (0x01)
+        expectations.push(I2cTransaction::write_read(address, vec![0x1C], vec![0x01]));
+
+        let i2c = I2cMock::new(&expectations);
+        let sensor = Tmag5273::new(i2c, DeviceVariant::B1);
+        let mut sensor = sensor.init(&config).unwrap();
+
+        let err = sensor.read_all().unwrap_err();
+        match err {
+            Error::DiagnosticFailure(status) => assert!(status.vcc_undervoltage),
+            other => panic!("expected DiagnosticFailure, got {other:?}"),
+        }
+        sensor.into_inner().done();
+    }
+
+    // -- Diagnostics: read_temperature fault path via read_and_check_diag (P2 #3) --
+
+    #[test]
+    #[cfg(not(feature = "crc"))]
+    fn diagnostics_halt_read_temperature_fault() {
+        let address = 0x22u8;
+        let config = ConfigBuilder::new()
+            .diagnostics(Diagnostics::Halt)
+            .build()
+            .unwrap();
+        let mut expectations = init_expectations(address, &config);
+        // read_register_pair(T_MSB_RESULT) → 2 bytes
+        expectations.push(I2cTransaction::write_read(
+            address,
+            vec![0x10],
+            vec![0x44, 0x64],
+        ));
+        // read_and_check_diag → read CONV_STATUS (0x18) with DIAG_FAIL=1
+        expectations.push(I2cTransaction::write_read(address, vec![0x18], vec![0x02]));
+        // Halt reads DEVICE_STATUS → oscillator error (0x08)
+        expectations.push(I2cTransaction::write_read(address, vec![0x1C], vec![0x08]));
+
+        let i2c = I2cMock::new(&expectations);
+        let sensor = Tmag5273::new(i2c, DeviceVariant::B1);
+        let mut sensor = sensor.init(&config).unwrap();
+
+        let err = sensor.read_temperature().unwrap_err();
+        match err {
+            Error::DiagnosticFailure(status) => assert!(status.oscillator_error),
+            other => panic!("expected DiagnosticFailure, got {other:?}"),
+        }
+        sensor.into_inner().done();
+    }
+
+    #[test]
+    #[cfg(not(feature = "crc"))]
+    fn diagnostics_warn_read_temperature_fault_succeeds() {
+        let address = 0x22u8;
+        let config = ConfigBuilder::new()
+            .diagnostics(Diagnostics::Warn)
+            .build()
+            .unwrap();
+        let mut expectations = init_expectations(address, &config);
+        // read_register_pair(T_MSB_RESULT)
+        expectations.push(I2cTransaction::write_read(
+            address,
+            vec![0x10],
+            vec![0x44, 0x64],
+        ));
+        // read_and_check_diag → read CONV_STATUS with DIAG_FAIL=1
+        expectations.push(I2cTransaction::write_read(address, vec![0x18], vec![0x02]));
+        // Warn+defmt reads DEVICE_STATUS best-effort
+        #[cfg(feature = "defmt")]
+        expectations.push(I2cTransaction::write_read(address, vec![0x1C], vec![0x01]));
+
+        let i2c = I2cMock::new(&expectations);
+        let sensor = Tmag5273::new(i2c, DeviceVariant::B1);
+        let mut sensor = sensor.init(&config).unwrap();
+
+        // Warn: temperature read succeeds despite fault
+        let temp = sensor.read_temperature().unwrap();
+        assert!(temp.0 > 20.0 && temp.0 < 30.0);
+        sensor.into_inner().done();
+    }
+
+    #[test]
+    #[cfg(not(feature = "crc"))]
+    fn diagnostics_ignore_read_temperature_fault_succeeds() {
+        let address = 0x22u8;
+        let config = ConfigBuilder::new()
+            .diagnostics(Diagnostics::Ignore)
+            .build()
+            .unwrap();
+        let mut expectations = init_expectations(address, &config);
+        // read_register_pair(T_MSB_RESULT)
+        expectations.push(I2cTransaction::write_read(
+            address,
+            vec![0x10],
+            vec![0x44, 0x64],
+        ));
+        // read_and_check_diag → read CONV_STATUS with DIAG_FAIL=1
+        expectations.push(I2cTransaction::write_read(address, vec![0x18], vec![0x02]));
+        // Ignore: no DEVICE_STATUS read
+
+        let i2c = I2cMock::new(&expectations);
+        let sensor = Tmag5273::new(i2c, DeviceVariant::B1);
+        let mut sensor = sensor.init(&config).unwrap();
+
+        // Ignore: read succeeds silently
+        let temp = sensor.read_temperature().unwrap();
+        assert!(temp.0 > 20.0 && temp.0 < 30.0);
         sensor.into_inner().done();
     }
 

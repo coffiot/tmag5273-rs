@@ -430,6 +430,36 @@ impl_try_from_u8!(GainChannel {
     1 => Second,
 });
 
+/// Per-sample diagnostic checking policy.
+///
+/// Controls whether the driver checks `CONV_STATUS.DIAG_FAIL` after each
+/// measurement read, and what happens when a fault is detected.
+///
+/// | Variant  | Checks diag? | On fault                                  |
+/// |----------|-------------|-------------------------------------------|
+/// | `Off`    | No          | —                                         |
+/// | `Halt`   | Yes         | Returns `Error::DiagnosticFailure`        |
+/// | `Warn`   | Yes         | Emits `defmt::warn!` (no error returned)  |
+/// | `Ignore` | Yes         | Silently discards the fault               |
+///
+/// `Warn` without the `defmt` feature behaves identically to `Ignore`.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Hash)]
+#[cfg_attr(feature = "defmt", derive(defmt::Format))]
+#[repr(u8)]
+pub enum Diagnostics {
+    /// Diagnostics disabled — no overhead. (default)
+    #[default]
+    Off = 0,
+    /// Check diagnostics; return [`Error::DiagnosticFailure`](crate::Error::DiagnosticFailure) on fault.
+    Halt = 1,
+    /// Check diagnostics; emit `defmt::warn!` on fault but do not return an error.
+    ///
+    /// Without the `defmt` Cargo feature this behaves like [`Ignore`](Self::Ignore).
+    Warn = 2,
+    /// Check diagnostics; silently discard faults.
+    Ignore = 3,
+}
+
 /// Magnetic field measurement range.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 #[cfg_attr(feature = "defmt", derive(defmt::Format))]
