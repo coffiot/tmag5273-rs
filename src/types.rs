@@ -155,6 +155,31 @@ impl DeviceVariant {
 #[cfg_attr(feature = "defmt", derive(defmt::Format))]
 pub struct MilliTesla(pub f32);
 
+impl From<MilliTesla> for f32 {
+    #[inline]
+    fn from(v: MilliTesla) -> f32 {
+        v.0
+    }
+}
+
+impl MilliTesla {
+    /// Construct from a raw 16-bit 2's complement ADC code (datasheet eq. 10).
+    #[inline]
+    pub(crate) fn from_raw(raw: i16, range_mt: f32) -> Self {
+        Self(-(raw as f32) * range_mt * INV_32768)
+    }
+
+    /// Construct from the 8-bit magnitude register value (0x1B).
+    ///
+    /// Treats the byte as the upper 8 bits of a 16-bit signed value and
+    /// applies the standard magnetic conversion. Follows the Zephyr RTOS
+    /// driver's `tmag5273_magnitude_convert()` pattern.
+    #[inline]
+    pub(crate) fn from_magnitude_raw(raw: u8, range_mt: f32) -> Self {
+        Self::from_raw(((raw as u16) << 8) as i16, range_mt)
+    }
+}
+
 /// Software `sqrt` for `no_std` — fast inverse square root (Quake-style)
 /// refined with three Newton–Raphson iterations for maximum `f32` precision
 /// (~1 ULP error, matching hardware `fsqrt` accuracy).
@@ -177,15 +202,57 @@ pub(crate) fn sqrt(x: f32) -> f32 {
 #[cfg_attr(feature = "defmt", derive(defmt::Format))]
 pub struct Celsius(pub f32);
 
+impl From<Celsius> for f32 {
+    #[inline]
+    fn from(v: Celsius) -> f32 {
+        v.0
+    }
+}
+
+impl Celsius {
+    /// Construct from a raw 16-bit 2's complement ADC code (datasheet eq. 12).
+    #[inline]
+    pub(crate) fn from_raw(raw: i16) -> Self {
+        Self(TSENSE_T0 + ((raw as f32) - TADC_T0) * TADC_RES_INV)
+    }
+}
+
 /// Angle in degrees (0–360).
 #[derive(Debug, Default, Clone, Copy, PartialEq, PartialOrd)]
 #[cfg_attr(feature = "defmt", derive(defmt::Format))]
 pub struct Degrees(pub f32);
 
+impl From<Degrees> for f32 {
+    #[inline]
+    fn from(v: Degrees) -> f32 {
+        v.0
+    }
+}
+
+impl Degrees {
+    /// Construct from a raw 16-bit angle register value (9.4 fixed-point).
+    ///
+    /// Bits \[12:4\]: 9-bit integer part (0–360).
+    /// Bits \[3:0\]: 4-bit fractional part (resolution 1/16 degree).
+    #[inline]
+    pub(crate) fn from_raw(raw: u16) -> Self {
+        let integer = ((raw >> ANGLE_INT_SHIFT) & ANGLE_INT_MASK) as f32;
+        let fraction = (raw & ANGLE_FRAC_MASK) as f32 * ANGLE_FRAC_SCALE;
+        Self(integer + fraction)
+    }
+}
+
 /// Duration in microseconds.
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 #[cfg_attr(feature = "defmt", derive(defmt::Format))]
 pub struct Micros(pub u32);
+
+impl From<Micros> for u32 {
+    #[inline]
+    fn from(v: Micros) -> u32 {
+        v.0
+    }
+}
 
 impl core::fmt::Display for Micros {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
@@ -194,18 +261,23 @@ impl core::fmt::Display for Micros {
 }
 
 /// A range of microsecond durations, matching Linux `usleep_range(min, max)` semantics.
-///
-/// - `.0` — minimum delay (used by the driver for actual `delay_us` calls).
-/// - `.1` — maximum acceptable delay (documentary — for RTOS scheduler batching).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 #[cfg_attr(feature = "defmt", derive(defmt::Format))]
-pub struct MicrosRange(pub Micros, pub Micros);
+pub struct MicrosRange {
+    /// Minimum delay (used by the driver for actual `delay_us` calls).
+    pub min: Micros,
+    /// Maximum acceptable delay (documentary — for RTOS scheduler batching).
+    pub max: Micros,
+}
 
 /// Wake-up delay range after transitioning from Sleep to an active mode.
 ///
 /// From TI TMAG5273 datasheet: device needs >=80 µs to wake. The Linux kernel
 /// driver uses `usleep_range(80, 200)` for this boundary.
-pub const WAKE_DELAY: MicrosRange = MicrosRange(Micros(80), Micros(200));
+pub const WAKE_DELAY: MicrosRange = MicrosRange {
+    min: Micros(80),
+    max: Micros(200),
+};
 
 /// Zero-sized no-op delay backend (default).
 ///
@@ -279,6 +351,18 @@ pub struct AngleReading {
     pub angle: Degrees,
     /// Magnitude of the magnetic field vector (unitless, 0–255).
     pub magnitude: u8,
+}
+
+impl AngleReading {
+    /// Convert the raw magnitude to physical units (millitesla).
+    ///
+    /// `range_mt` is the full-scale magnetic range for the axis pair used
+    /// in the angle calculation. Obtain it from
+    /// [`DeviceVariant::range_mt_xy`] or [`DeviceVariant::range_mt_z`].
+    #[inline]
+    pub fn magnitude_millitesla(&self, range_mt: f32) -> MilliTesla {
+        MilliTesla::from_magnitude_raw(self.magnitude, range_mt)
+    }
 }
 
 /// Complete sensor reading from a single conversion cycle.
@@ -429,53 +513,17 @@ const ANGLE_FRAC_MASK: u16 = 0x0F;
 const ANGLE_FRAC_SCALE: f32 = 1.0 / 16.0;
 
 // ---------------------------------------------------------------------------
-// Conversion functions
-// ---------------------------------------------------------------------------
-
-/// Converts a raw magnetic field ADC code to millitesla.
-///
-/// Implements datasheet equation 10:
-/// `B_mT = (-raw * range_mt) / 32768.0`
-#[inline]
-pub(crate) fn raw_to_millitesla(raw: i16, range_mt: f32) -> MilliTesla {
-    MilliTesla(-(raw as f32) * range_mt * INV_32768)
-}
-
-/// Converts a raw temperature ADC code to degrees Celsius.
-///
-/// Implements datasheet equation 12:
-/// `T = 25.0 + (raw - 17508) / 60.1`
-#[inline]
-pub(crate) fn raw_to_celsius(raw: i16) -> Celsius {
-    Celsius(TSENSE_T0 + ((raw as f32) - TADC_T0) * TADC_RES_INV)
-}
-
-/// Converts a raw angle register value to degrees.
-///
-/// The register uses a 9.4 fixed-point format:
-/// - Bits \[12:4\]: 9-bit integer part (0–360).
-/// - Bits \[3:0\]: 4-bit fractional part (resolution 1/16 degree).
-#[inline]
-pub(crate) fn raw_to_degrees(raw: u16) -> Degrees {
-    let integer = ((raw >> ANGLE_INT_SHIFT) & ANGLE_INT_MASK) as f32;
-    let fraction = (raw & ANGLE_FRAC_MASK) as f32 * ANGLE_FRAC_SCALE;
-    Degrees(integer + fraction)
-}
-
-// ---------------------------------------------------------------------------
 // Public conversion helpers
 // ---------------------------------------------------------------------------
 
 /// Converts a raw magnitude register value to millitesla.
 ///
-/// The magnitude register (0x1B) contains the MSB of the vector magnitude.
-/// To get physical units, treat it as the upper byte of a 16-bit value
-/// and apply the same conversion as magnetic channels.
-///
-/// This follows the Zephyr RTOS driver's `tmag5273_magnitude_convert()` pattern.
+/// Prefer [`AngleReading::magnitude_millitesla`] when working with angle
+/// readings. This free function is provided for cases where only the raw
+/// register byte is available.
 #[inline]
 pub fn magnitude_to_millitesla(raw_magnitude: u8, range_mt: f32) -> MilliTesla {
-    raw_to_millitesla(((raw_magnitude as u16) << 8) as i16, range_mt)
+    MilliTesla::from_magnitude_raw(raw_magnitude, range_mt)
 }
 
 // ---------------------------------------------------------------------------
@@ -648,21 +696,21 @@ mod tests {
 
     #[test]
     fn temp_reference_point() {
-        let c = raw_to_celsius(17508);
+        let c = Celsius::from_raw(17508);
         assert!(approx_eq(c.0, 25.0), "expected ~25.0, got {}", c.0);
     }
 
     #[test]
     fn temp_raw_zero() {
         // T = 25.0 + (0 - 17508) / 60.1 ≈ -266.36
-        let c = raw_to_celsius(0);
+        let c = Celsius::from_raw(0);
         assert!(approx_eq(c.0, -266.36), "expected ~-266.36, got {}", c.0);
     }
 
     #[test]
     fn temp_raw_max() {
         // T = 25.0 + (32767 - 17508) / 60.1 ≈ 279.0
-        let c = raw_to_celsius(i16::MAX);
+        let c = Celsius::from_raw(i16::MAX);
         assert!(approx_eq(c.0, 279.0), "expected ~279.0, got {}", c.0);
     }
 
@@ -670,27 +718,27 @@ mod tests {
 
     #[test]
     fn mag_raw_zero() {
-        let m = raw_to_millitesla(0, 40.0);
+        let m = MilliTesla::from_raw(0, 40.0);
         assert_eq!(m.0, 0.0);
     }
 
     #[test]
     fn mag_raw_min_yields_positive_range() {
         // raw = i16::MIN = -32768 → B = -(-32768) * range / 32768 = +range
-        let m = raw_to_millitesla(i16::MIN, 40.0);
+        let m = MilliTesla::from_raw(i16::MIN, 40.0);
         assert!(approx_eq(m.0, 40.0), "expected ~40.0, got {}", m.0);
     }
 
     #[test]
     fn mag_raw_max_yields_negative_range() {
         // raw = 32767 → B = -(32767) * 40 / 32768 ≈ -39.9988
-        let m = raw_to_millitesla(i16::MAX, 40.0);
+        let m = MilliTesla::from_raw(i16::MAX, 40.0);
         assert!(approx_eq(m.0, -40.0), "expected ~-40.0, got {}", m.0);
     }
 
     #[test]
     fn mag_high_range_v2() {
-        let m = raw_to_millitesla(i16::MIN, 266.0);
+        let m = MilliTesla::from_raw(i16::MIN, 266.0);
         assert!(approx_eq(m.0, 266.0), "expected ~266.0, got {}", m.0);
     }
 
@@ -698,28 +746,28 @@ mod tests {
 
     #[test]
     fn angle_zero() {
-        let d = raw_to_degrees(0x0000);
+        let d = Degrees::from_raw(0x0000);
         assert_eq!(d.0, 0.0);
     }
 
     #[test]
     fn angle_180() {
         // 180 << 4 = 0x0B40
-        let d = raw_to_degrees(0x0B40);
+        let d = Degrees::from_raw(0x0B40);
         assert!(approx_eq(d.0, 180.0), "expected 180.0, got {}", d.0);
     }
 
     #[test]
     fn angle_360() {
         // 360 << 4 = 0x1680
-        let d = raw_to_degrees(0x1680);
+        let d = Degrees::from_raw(0x1680);
         assert!(approx_eq(d.0, 360.0), "expected 360.0, got {}", d.0);
     }
 
     #[test]
     fn angle_fractional() {
         // 90 degrees + 8/16 = 90.5 degrees → (90 << 4) | 8 = 0x05A8
-        let d = raw_to_degrees(0x05A8);
+        let d = Degrees::from_raw(0x05A8);
         assert!(approx_eq(d.0, 90.5), "expected 90.5, got {}", d.0);
     }
 
@@ -855,8 +903,8 @@ mod tests {
 
     #[test]
     fn wake_delay_constants() {
-        assert_eq!(WAKE_DELAY.0.0, 80);
-        assert_eq!(WAKE_DELAY.1.0, 200);
+        assert_eq!(WAKE_DELAY.min.0, 80);
+        assert_eq!(WAKE_DELAY.max.0, 200);
     }
 
     // -- sqrt edge cases -------------------------------------------------
@@ -964,14 +1012,14 @@ mod tests {
         assert_eq!(r.magnitude().0, 0.0);
     }
 
-    // -- magnitude_to_millitesla overflow edge cases --------------------------
+    // -- MilliTesla::from_magnitude_raw overflow edge cases -------------------
 
     #[test]
     fn magnitude_raw_128_no_overflow() {
         // This was the overflow bug: (128_i16) << 8 = 32768 > i16::MAX
         // Fixed by casting through u16: ((128_u16) << 8) as i16 = -32768
         let m = magnitude_to_millitesla(128, 80.0);
-        // (128 << 8) as i16 = -32768, then raw_to_millitesla(-(-32768) * 80 / 32768) = 80.0
+        // (128 << 8) as i16 = -32768, then MilliTesla::from_raw(-(-32768) * 80 / 32768) = 80.0
         assert!(approx_eq(m.0, 80.0), "expected ~80.0, got {}", m.0);
     }
 
@@ -988,12 +1036,12 @@ mod tests {
         assert_eq!(m.0, 0.0);
     }
 
-    // -- raw_to_millitesla boundary values ------------------------------------
+    // -- MilliTesla::from_raw boundary values ---------------------------------
 
     #[test]
     fn millitesla_max_positive_raw() {
         // i16::MAX = 32767 → -(32767) * 80 / 32768 ≈ -79.9976 mT
-        let m = raw_to_millitesla(i16::MAX, 80.0);
+        let m = MilliTesla::from_raw(i16::MAX, 80.0);
         assert!(m.0 < 0.0, "max positive raw should give negative mT");
         assert!(approx_eq(m.0, -80.0), "expected ~-80.0, got {}", m.0);
     }
@@ -1001,51 +1049,51 @@ mod tests {
     #[test]
     fn millitesla_min_negative_raw() {
         // i16::MIN = -32768 → -(-32768) * 80 / 32768 = 80.0 mT
-        let m = raw_to_millitesla(i16::MIN, 80.0);
+        let m = MilliTesla::from_raw(i16::MIN, 80.0);
         assert!(m.0 > 0.0, "min negative raw should give positive mT");
         assert!(approx_eq(m.0, 80.0), "expected ~80.0, got {}", m.0);
     }
 
     #[test]
     fn millitesla_zero_raw() {
-        let m = raw_to_millitesla(0, 80.0);
+        let m = MilliTesla::from_raw(0, 80.0);
         assert_eq!(m.0, 0.0);
     }
 
     #[test]
     fn millitesla_zero_range() {
-        let m = raw_to_millitesla(16384, 0.0);
+        let m = MilliTesla::from_raw(16384, 0.0);
         assert_eq!(m.0, 0.0);
     }
 
-    // -- raw_to_celsius boundary values ---------------------------------------
+    // -- Celsius::from_raw boundary values ------------------------------------
 
     #[test]
     fn celsius_reference_point() {
         // At raw = TADC_T25 (17508), temperature should be 25.0°C
-        let t = raw_to_celsius(17508);
+        let t = Celsius::from_raw(17508);
         assert!(approx_eq(t.0, 25.0), "expected 25.0, got {}", t.0);
     }
 
     #[test]
     fn celsius_zero_raw() {
         // raw = 0 → 25.0 + (0 - 17508) / 60.1 ≈ -266.4°C
-        let t = raw_to_celsius(0);
+        let t = Celsius::from_raw(0);
         assert!(t.0 < -200.0, "expected very negative, got {}", t.0);
     }
 
-    // -- raw_to_degrees boundary values ---------------------------------------
+    // -- Degrees::from_raw boundary values ------------------------------------
 
     #[test]
     fn degrees_zero() {
-        let d = raw_to_degrees(0);
+        let d = Degrees::from_raw(0);
         assert_eq!(d.0, 0.0);
     }
 
     #[test]
     fn degrees_full_scale() {
         // 0x0B40 → 180.0° per datasheet
-        let d = raw_to_degrees(0x0B40);
+        let d = Degrees::from_raw(0x0B40);
         assert!(approx_eq(d.0, 180.0), "expected ~180.0, got {}", d.0);
     }
 }

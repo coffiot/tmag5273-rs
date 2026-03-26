@@ -17,8 +17,8 @@ use crate::config::{
 use crate::error::{Error, InitError};
 use crate::register;
 use crate::types::{
-    AngleReading, Celsius, ConversionStatus, DeviceStatus, DeviceVariant, MagneticReading, Micros,
-    NoDelay, Range, SensorReading, WAKE_DELAY, raw_to_celsius, raw_to_degrees, raw_to_millitesla,
+    AngleReading, Celsius, ConversionStatus, Degrees, DeviceStatus, DeviceVariant, MagneticReading,
+    Micros, MilliTesla, NoDelay, Range, SensorReading, WAKE_DELAY,
 };
 
 // ---------------------------------------------------------------------------
@@ -340,7 +340,7 @@ impl<I2C: I2c, D: DelayNs> Tmag5273<I2C, Unconfigured, D> {
         // 0b. Wait for wake-up: 80 us per TI datasheet (Linux kernel uses
         // usleep_range(80, 200)). NoDelay: no-op — the I2C transactions that
         // follow provide implicit wake-up time (>100 us at 400 kHz).
-        self.delay.delay_us(WAKE_DELAY.0.0);
+        self.delay.delay_us(WAKE_DELAY.min.0);
 
         // 0c. Disable interrupts before applying new configuration to prevent
         // spurious INT pin activity from stale settings.
@@ -427,17 +427,17 @@ impl<I2C: I2c, D: DelayNs> Tmag5273<I2C, Configured, D> {
         let z_range = self.variant.range_mt_z(self.z_range);
         MagneticReading {
             x: if self.channels.has_x() {
-                Some(raw_to_millitesla(raw_x, xy_range))
+                Some(MilliTesla::from_raw(raw_x, xy_range))
             } else {
                 None
             },
             y: if self.channels.has_y() {
-                Some(raw_to_millitesla(raw_y, xy_range))
+                Some(MilliTesla::from_raw(raw_y, xy_range))
             } else {
                 None
             },
             z: if self.channels.has_z() {
-                Some(raw_to_millitesla(raw_z, z_range))
+                Some(MilliTesla::from_raw(raw_z, z_range))
             } else {
                 None
             },
@@ -525,7 +525,7 @@ impl<I2C: I2c, D: DelayNs> Tmag5273<I2C, Configured, D> {
 
         let buf = self.read_register_pair(register::T_MSB_RESULT)?;
         let raw = i16::from_be_bytes(buf);
-        Ok(raw_to_celsius(raw))
+        Ok(Celsius::from_raw(raw))
     }
 
     /// Read the CORDIC angle calculation result.
@@ -555,7 +555,7 @@ impl<I2C: I2c, D: DelayNs> Tmag5273<I2C, Configured, D> {
             let raw_angle = u16::from_be_bytes([buf[0], buf[1]]);
             let magnitude = buf[2];
             Ok(AngleReading {
-                angle: raw_to_degrees(raw_angle),
+                angle: Degrees::from_raw(raw_angle),
                 magnitude,
             })
         }
@@ -569,7 +569,7 @@ impl<I2C: I2c, D: DelayNs> Tmag5273<I2C, Configured, D> {
             let raw_angle = u16::from_be_bytes(angle_buf);
             let magnitude = self.read_register(register::MAGNITUDE_RESULT)?;
             Ok(AngleReading {
-                angle: raw_to_degrees(raw_angle),
+                angle: Degrees::from_raw(raw_angle),
                 magnitude,
             })
         }
@@ -614,7 +614,7 @@ impl<I2C: I2c, D: DelayNs> Tmag5273<I2C, Configured, D> {
         let raw_z = i16::from_be_bytes([buf[6], buf[7]]);
 
         let temperature = if self.temperature_enabled {
-            Some(raw_to_celsius(raw_t))
+            Some(Celsius::from_raw(raw_t))
         } else {
             None
         };
@@ -775,7 +775,7 @@ impl<I2C: I2c, D: DelayNs> Tmag5273<I2C, Configured, D> {
         // Wake delay: 80 us after non-sleep mode changes.
         // NoDelay: no-op. Real delay: automatic wake-up timing.
         if !matches!(mode, OperatingMode::Sleep) {
-            self.delay.delay_us(WAKE_DELAY.0.0);
+            self.delay.delay_us(WAKE_DELAY.min.0);
         }
         Ok(())
     }
@@ -1158,7 +1158,7 @@ impl<I2C: I2c, D: DelayNs> Tmag5273<I2C, Configured, D> {
 
         // Wake delay for mode transition (bypasses set_mode, so must delay explicitly).
         // NoDelay: no-op. Real delay: automatic wake-up timing.
-        self.delay.delay_us(WAKE_DELAY.0.0);
+        self.delay.delay_us(WAKE_DELAY.min.0);
 
         Ok(())
     }
@@ -1826,7 +1826,7 @@ mod tests {
     #[test]
     fn scan_finds_first_address() {
         // B-family (0x22) responds first — scan should stop immediately
-        let mut expectations = respond_at(0x22, 0x01);
+        let expectations = respond_at(0x22, 0x01);
         let i2c = I2cMock::new(&expectations);
 
         let sensor = Tmag5273::scan(i2c).unwrap();
@@ -2955,7 +2955,7 @@ mod tests {
         let mut sensor = sensor.init(&config).unwrap();
 
         let reading = sensor.read_angle().unwrap();
-        // Exact: raw_to_degrees(0x0B40) = 0x0B40 / 16 = 180.0
+        // Exact: Degrees::from_raw(0x0B40) = 180.0
         assert_eq!(reading.angle, Degrees(180.0));
         assert_eq!(reading.magnitude, 42);
 
