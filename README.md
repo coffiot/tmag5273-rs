@@ -224,6 +224,34 @@ let reading = sensor.read_magnetic()?;
 | `set_read_mode(I2cReadMode)`                 | Change I2C response format                      |
 | `get_read_mode()` → `I2cReadMode`            | Read current response format                    |
 
+## Per-Sample Diagnostics
+
+Opt-in per-sample `CONV_STATUS.DIAG_FAIL` checking on every measurement:
+
+```rust,no_run
+let config = ConfigBuilder::new()
+    .diagnostics_enabled(true)  // check DIAG_FAIL on every read
+    .build()?;
+let mut sensor = sensor.init(&config)?;
+
+// read_magnetic, read_all, etc. now return
+// Error::DiagnosticFailure(DeviceStatus) on sensor fault
+let reading = sensor.read_magnetic()?;
+```
+
+For noisy environments (EMI, motor controllers) where diagnostic flags
+trigger spuriously:
+
+```rust,no_run
+let config = ConfigBuilder::new()
+    .diagnostics_enabled(true)
+    .ignore_diag_fail(true)  // reads succeed despite faults
+    .build()?;
+```
+
+Zero overhead when disabled (default) — no extra I2C transactions.
+Manual `check_diagnostics()` works independently of this setting.
+
 ## Advanced
 
 ### Threshold Interrupts
