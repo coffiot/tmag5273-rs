@@ -140,8 +140,8 @@ pub(crate) const INT_STATE_SHIFT: u8 = 5;
 pub(crate) const INT_MODE_MASK: u8 = 0b0001_1100;
 pub(crate) const INT_MODE_SHIFT: u8 = 2;
 
-pub(crate) const MASK_INTB_MASK: u8 = 0b0000_0010;
-pub(crate) const MASK_INTB_SHIFT: u8 = 1;
+pub(crate) const MASK_INTB_MASK: u8 = 0b0000_0001;
+pub(crate) const MASK_INTB_SHIFT: u8 = 0;
 
 // ---------------------------------------------------------------------------
 // 0x09 — MAG_GAIN_CONFIG
