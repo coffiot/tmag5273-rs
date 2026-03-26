@@ -400,6 +400,25 @@ pub struct Config {
     pub glitch_filter: bool,
     /// Magnetic temperature compensation coefficient.
     pub temp_coefficient: TempCoefficient,
+    /// Enable per-sample diagnostic check on every measurement read.
+    ///
+    /// When `true`, each `read_magnetic`, `read_temperature`, `read_all`,
+    /// and `read_angle` call checks `CONV_STATUS.DIAG_FAIL` and returns
+    /// [`Error::DiagnosticFailure`](crate::Error::DiagnosticFailure) if a
+    /// sensor fault is detected.
+    ///
+    /// Default: `false` (no overhead — existing behavior unchanged).
+    pub diagnostics_enabled: bool,
+    /// Suppress diagnostic failure errors for noisy environments.
+    ///
+    /// When `true`, per-sample diagnostic checks still run (if
+    /// [`diagnostics_enabled`](Self::diagnostics_enabled) is set) but
+    /// faults are silently ignored — reads succeed regardless. Manual
+    /// [`check_diagnostics()`](crate::Tmag5273::check_diagnostics) still
+    /// reports faults.
+    ///
+    /// Default: `false`.
+    pub ignore_diag_fail: bool,
 }
 
 // ---------------------------------------------------------------------------
@@ -434,6 +453,8 @@ pub struct ConfigBuilder {
     trigger_mode: TriggerMode,
     glitch_filter: bool,
     temp_coefficient: TempCoefficient,
+    diagnostics_enabled: bool,
+    ignore_diag_fail: bool,
 }
 
 impl Default for ConfigBuilder {
@@ -459,6 +480,8 @@ impl ConfigBuilder {
             trigger_mode: TriggerMode::I2cCommand,
             glitch_filter: true,
             temp_coefficient: TempCoefficient::None,
+            diagnostics_enabled: false,
+            ignore_diag_fail: false,
         }
     }
 
@@ -534,6 +557,26 @@ impl ConfigBuilder {
         self
     }
 
+    /// Enable per-sample diagnostic checking on every measurement read.
+    ///
+    /// When enabled, each `read_*` method checks `CONV_STATUS.DIAG_FAIL`
+    /// and returns [`Error::DiagnosticFailure`](crate::Error::DiagnosticFailure)
+    /// on sensor fault. Default: `false`.
+    pub const fn diagnostics_enabled(mut self, enabled: bool) -> Self {
+        self.diagnostics_enabled = enabled;
+        self
+    }
+
+    /// Suppress diagnostic failure errors (for noisy environments).
+    ///
+    /// When `true`, per-sample diagnostic faults are silently ignored.
+    /// Manual [`check_diagnostics()`](crate::Tmag5273::check_diagnostics)
+    /// still reports faults. Default: `false`.
+    pub const fn ignore_diag_fail(mut self, ignore: bool) -> Self {
+        self.ignore_diag_fail = ignore;
+        self
+    }
+
     /// Validate and build the [`Config`].
     ///
     /// # Errors
@@ -576,6 +619,8 @@ impl ConfigBuilder {
             trigger_mode: self.trigger_mode,
             glitch_filter: self.glitch_filter,
             temp_coefficient: self.temp_coefficient,
+            diagnostics_enabled: self.diagnostics_enabled,
+            ignore_diag_fail: self.ignore_diag_fail,
         })
     }
 }

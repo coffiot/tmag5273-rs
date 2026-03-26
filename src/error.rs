@@ -123,6 +123,21 @@ pub enum Error<E> {
     /// call [`set_crc_enabled(false)`](crate::Tmag5273::set_crc_enabled).
     #[error("enabling sensor CRC requires the `crc` Cargo feature")]
     CrcFeatureRequired,
+
+    /// A sensor diagnostic failure was detected during a measurement read.
+    ///
+    /// The device's `CONV_STATUS.DIAG_FAIL` flag was set, indicating an
+    /// internal fault (VCC undervoltage, oscillator error, OTP CRC error,
+    /// or INT pin error). The [`DeviceStatus`](crate::DeviceStatus) carries
+    /// the specific fault flags.
+    ///
+    /// This error is only returned when
+    /// [`diagnostics_enabled(true)`](crate::ConfigBuilder::diagnostics_enabled)
+    /// is set in the configuration. Use
+    /// [`ignore_diag_fail(true)`](crate::ConfigBuilder::ignore_diag_fail) to
+    /// suppress this error in noisy environments.
+    #[error("sensor diagnostic failure: {0:?}")]
+    DiagnosticFailure(crate::DeviceStatus),
 }
 
 // ---------------------------------------------------------------------------

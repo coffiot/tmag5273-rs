@@ -86,6 +86,10 @@ pub struct Tmag5273<I2C, State = Unconfigured, D = NoDelay> {
     /// Current I2C read mode — high-level reads guard against non-Standard
     /// mode to prevent silent data corruption.
     read_mode: I2cReadMode,
+    /// Per-sample diagnostic check on every measurement read.
+    diag_enabled: bool,
+    /// Suppress diagnostic failure errors (noisy environments).
+    ignore_diag_fail: bool,
     delay: D,
     _state: PhantomData<State>,
 }
@@ -231,6 +235,8 @@ impl<I2C: I2c> Tmag5273<I2C, Unconfigured> {
             temperature_enabled: false,
             conversion_average: ConversionAverage::X1,
             read_mode: I2cReadMode::Standard,
+            diag_enabled: false,
+            ignore_diag_fail: false,
             delay: NoDelay,
             _state: PhantomData,
         }
@@ -279,6 +285,8 @@ impl<I2C: I2c, D: DelayNs> Tmag5273<I2C, Unconfigured, D> {
             temperature_enabled: false,
             conversion_average: ConversionAverage::X1,
             read_mode: I2cReadMode::Standard,
+            diag_enabled: false,
+            ignore_diag_fail: false,
             delay,
             _state: PhantomData,
         }
@@ -324,6 +332,8 @@ impl<I2C: I2c, D: DelayNs> Tmag5273<I2C, Unconfigured, D> {
             temperature_enabled: config.temperature_enabled,
             conversion_average: config.conversion_average,
             read_mode: I2cReadMode::Standard,
+            diag_enabled: config.diagnostics_enabled,
+            ignore_diag_fail: config.ignore_diag_fail,
             delay: self.delay,
             _state: PhantomData,
         })
@@ -458,6 +468,38 @@ impl<I2C: I2c, D: DelayNs> Tmag5273<I2C, Configured, D> {
         Ok(())
     }
 
+    /// Check CONV_STATUS for diagnostic failure (from a raw register byte).
+    ///
+    /// Returns `Ok(())` if diagnostics are disabled, no fault is detected,
+    /// or `ignore_diag_fail` suppresses the error. Returns
+    /// `Err(Error::DiagnosticFailure)` if a fault is detected and not
+    /// suppressed.
+    #[inline]
+    fn check_diag_from_conv_status(&mut self, conv_raw: u8) -> Result<(), Error<I2C::Error>> {
+        if !self.diag_enabled {
+            return Ok(());
+        }
+        let conv = ConversionStatus::from_reg(conv_raw);
+        if !conv.diag_fail || self.ignore_diag_fail {
+            return Ok(());
+        }
+        let status = DeviceStatus::from_reg(self.read_register(register::DEVICE_STATUS)?);
+        Err(Error::DiagnosticFailure(status))
+    }
+
+    /// Read CONV_STATUS and check for diagnostic failure.
+    ///
+    /// Used by `read_temperature` and `read_angle` where CONV_STATUS is
+    /// not included in the burst read.
+    #[inline]
+    fn read_and_check_diag(&mut self) -> Result<(), Error<I2C::Error>> {
+        if !self.diag_enabled {
+            return Ok(());
+        }
+        let conv_raw = self.read_register(register::CONV_STATUS)?;
+        self.check_diag_from_conv_status(conv_raw)
+    }
+
     /// Read a register field and decode it into a typed enum.
     fn read_field<T: TryFrom<u8, Error = u8>>(
         &mut self,
@@ -490,7 +532,22 @@ impl<I2C: I2c, D: DelayNs> Tmag5273<I2C, Configured, D> {
     pub fn read_magnetic(&mut self) -> Result<MagneticReading, Error<I2C::Error>> {
         self.require_standard_mode()?;
 
-        // Burst read X/Y/Z: 6 bytes starting from X_MSB_RESULT (0x12)
+        if self.diag_enabled {
+            // Extended burst: 7 bytes (X/Y/Z + CONV_STATUS at 0x18).
+            // CONV_STATUS is adjacent to Z_LSB — zero extra I2C overhead.
+            let mut buf = [0u8; 7];
+            self.i2c
+                .write_read(self.address, &[register::X_MSB_RESULT], &mut buf)?;
+
+            let raw_x = i16::from_be_bytes([buf[0], buf[1]]);
+            let raw_y = i16::from_be_bytes([buf[2], buf[3]]);
+            let raw_z = i16::from_be_bytes([buf[4], buf[5]]);
+
+            self.check_diag_from_conv_status(buf[6])?;
+            return Ok(self.decode_magnetic(raw_x, raw_y, raw_z));
+        }
+
+        // Standard burst: 6 bytes from X_MSB_RESULT (0x12)
         let mut buf = [0u8; 6];
         self.i2c
             .write_read(self.address, &[register::X_MSB_RESULT], &mut buf)?;
@@ -525,6 +582,7 @@ impl<I2C: I2c, D: DelayNs> Tmag5273<I2C, Configured, D> {
 
         let buf = self.read_register_pair(register::T_MSB_RESULT)?;
         let raw = i16::from_be_bytes(buf);
+        self.read_and_check_diag()?;
         Ok(Celsius::from_raw(raw))
     }
 
@@ -548,31 +606,34 @@ impl<I2C: I2c, D: DelayNs> Tmag5273<I2C, Configured, D> {
         // Without CRC, read all 3 registers (ANGLE_MSB, ANGLE_LSB,
         // MAGNITUDE) in a single burst — they are consecutive.
         #[cfg(not(feature = "crc"))]
-        {
+        let reading = {
             let mut buf = [0u8; 3];
             self.i2c
                 .write_read(self.address, &[register::ANGLE_RESULT_MSB], &mut buf)?;
             let raw_angle = u16::from_be_bytes([buf[0], buf[1]]);
             let magnitude = buf[2];
-            Ok(AngleReading {
+            AngleReading {
                 angle: Degrees::from_raw(raw_angle),
                 magnitude,
-            })
-        }
+            }
+        };
 
         // With CRC, use the existing 2-call approach — `read_register_pair`
         // validates the CRC over the angle register pair, and the magnitude
         // is a separate single-byte read.
         #[cfg(feature = "crc")]
-        {
+        let reading = {
             let angle_buf = self.read_register_pair(register::ANGLE_RESULT_MSB)?;
             let raw_angle = u16::from_be_bytes(angle_buf);
             let magnitude = self.read_register(register::MAGNITUDE_RESULT)?;
-            Ok(AngleReading {
+            AngleReading {
                 angle: Degrees::from_raw(raw_angle),
                 magnitude,
-            })
-        }
+            }
+        };
+
+        self.read_and_check_diag()?;
+        Ok(reading)
     }
 
     /// Read temperature and magnetic field in a single coherent burst.
@@ -602,16 +663,35 @@ impl<I2C: I2c, D: DelayNs> Tmag5273<I2C, Configured, D> {
     pub fn read_all(&mut self) -> Result<SensorReading, Error<I2C::Error>> {
         self.require_standard_mode()?;
 
-        // 8-byte burst: T_MSB(0x10), T_LSB(0x11), X_MSB(0x12), X_LSB(0x13),
-        //               Y_MSB(0x14), Y_LSB(0x15), Z_MSB(0x16), Z_LSB(0x17)
-        let mut buf = [0u8; 8];
-        self.i2c
-            .write_read(self.address, &[register::T_MSB_RESULT], &mut buf)?;
+        let (raw_t, raw_x, raw_y, raw_z, conv_status) = if self.diag_enabled {
+            // Extended 9-byte burst: T/X/Y/Z + CONV_STATUS at 0x18.
+            let mut buf = [0u8; 9];
+            self.i2c
+                .write_read(self.address, &[register::T_MSB_RESULT], &mut buf)?;
+            (
+                i16::from_be_bytes([buf[0], buf[1]]),
+                i16::from_be_bytes([buf[2], buf[3]]),
+                i16::from_be_bytes([buf[4], buf[5]]),
+                i16::from_be_bytes([buf[6], buf[7]]),
+                Some(buf[8]),
+            )
+        } else {
+            // Standard 8-byte burst: T_MSB(0x10) through Z_LSB(0x17)
+            let mut buf = [0u8; 8];
+            self.i2c
+                .write_read(self.address, &[register::T_MSB_RESULT], &mut buf)?;
+            (
+                i16::from_be_bytes([buf[0], buf[1]]),
+                i16::from_be_bytes([buf[2], buf[3]]),
+                i16::from_be_bytes([buf[4], buf[5]]),
+                i16::from_be_bytes([buf[6], buf[7]]),
+                None,
+            )
+        };
 
-        let raw_t = i16::from_be_bytes([buf[0], buf[1]]);
-        let raw_x = i16::from_be_bytes([buf[2], buf[3]]);
-        let raw_y = i16::from_be_bytes([buf[4], buf[5]]);
-        let raw_z = i16::from_be_bytes([buf[6], buf[7]]);
+        if let Some(conv_raw) = conv_status {
+            self.check_diag_from_conv_status(conv_raw)?;
+        }
 
         let temperature = if self.temperature_enabled {
             Some(Celsius::from_raw(raw_t))
