@@ -752,6 +752,10 @@ impl<I2C: I2c, D: DelayNs> Tmag5273<I2C, Configured, D> {
     /// Zephyr RTOS drivers retry — they rely on implicit settling, which
     /// can fail on fast I2C controllers.
     const WAKE_RETRY_MAX: u8 = 3;
+    // Compile-time guard: the retry loop assumes at least one iteration
+    // so that `last_err` is always `Some` at the `unwrap()` call.
+    #[allow(dead_code)]
+    const WAKE_RETRY_ASSERT: () = assert!(Self::WAKE_RETRY_MAX > 0);
 
     /// Switch the operating mode at runtime.
     ///
