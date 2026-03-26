@@ -784,6 +784,8 @@ impl<I2C: I2c, D: DelayNs> Tmag5273<I2C, Configured, D> {
 
         // Bounded retry on the register read — the device may NACK the
         // first access after deep sleep even with the wake delay above.
+        // Only NACK errors are retried (expected during wake). Bus faults,
+        // arbitration loss, and other hard errors propagate immediately.
         // Non-sleep transitions succeed on the first attempt (no overhead).
         let mut last_err = None;
         for _ in 0..Self::WAKE_RETRY_MAX {
@@ -803,8 +805,14 @@ impl<I2C: I2c, D: DelayNs> Tmag5273<I2C, Configured, D> {
                     return Ok(());
                 }
                 Err(e) => {
-                    last_err = Some(e);
-                    self.delay.delay_us(WAKE_DELAY.min.0);
+                    use embedded_hal::i2c::{Error as I2cError, ErrorKind};
+                    if matches!(e.kind(), ErrorKind::NoAcknowledge(_)) {
+                        last_err = Some(e);
+                        self.delay.delay_us(WAKE_DELAY.min.0);
+                    } else {
+                        // Hard bus fault — propagate immediately, no retry.
+                        return Err(Error::I2c(e));
+                    }
                 }
             }
         }
@@ -3192,6 +3200,32 @@ mod tests {
 
         let result = sensor.set_mode(OperatingMode::Standby);
         assert!(result.is_err(), "should fail after 3 NACKs");
+        sensor.into_inner().done();
+    }
+
+    #[test]
+    fn set_mode_bus_error_propagates_immediately() {
+        // A bus fault (not NACK) should fail on the first attempt — no retry.
+        let address = 0x22u8;
+        let config = default_config();
+        let dc2 = config.to_register_writes()[1].1;
+
+        let mut expectations = init_expectations(address, &config);
+        // Wake write
+        expectations.push(I2cTransaction::write(address, vec![]));
+        // First read_register returns Bus error — should NOT retry
+        expectations.push(
+            I2cTransaction::write_read(address, vec![0x01], vec![dc2])
+                .with_error(embedded_hal::i2c::ErrorKind::Bus),
+        );
+        // No further I2C transactions expected — retry is skipped
+
+        let i2c = I2cMock::new(&expectations);
+        let sensor = Tmag5273::new(i2c, DeviceVariant::B1);
+        let mut sensor = sensor.init(&config).unwrap();
+
+        let result = sensor.set_mode(OperatingMode::Standby);
+        assert!(result.is_err(), "bus error should propagate immediately");
         sensor.into_inner().done();
     }
 
