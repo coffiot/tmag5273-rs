@@ -1802,4 +1802,312 @@ mod tests {
         }
         assert_eq!(I2cReadMode::try_from(0x03), Err(0x03));
     }
+
+    // -- Exhaustive from_register fuzz ----------------------------------------
+
+    #[test]
+    fn fuzz_device_status_from_register() {
+        for byte in 0u8..=255 {
+            let s = DeviceStatus::from_register(byte);
+
+            // All fields must be valid bools (no panic) — the mere act of
+            // reading them is the check. Additionally verify is_ok() doesn't
+            // panic.
+            let _ = s.vcc_undervoltage;
+            let _ = s.otp_crc_error;
+            let _ = s.int_error;
+            let _ = s.oscillator_error;
+            let _ = s.int_pin_active;
+            let _ = s.is_ok();
+        }
+
+        // Spot-check: byte 0x00 — all flags clear.
+        let s = DeviceStatus::from_register(0x00);
+        assert!(!s.vcc_undervoltage);
+        assert!(!s.otp_crc_error);
+        assert!(!s.int_error);
+        assert!(!s.oscillator_error);
+        assert!(!s.int_pin_active);
+        assert!(s.is_ok());
+
+        // Spot-check: byte 0x1F — all five defined bits set.
+        let s = DeviceStatus::from_register(0x1F);
+        assert!(s.vcc_undervoltage);
+        assert!(s.otp_crc_error);
+        assert!(s.int_error);
+        assert!(s.oscillator_error);
+        assert!(s.int_pin_active);
+        assert!(!s.is_ok()); // faults present
+    }
+
+    #[test]
+    fn fuzz_conversion_status_from_register() {
+        for byte in 0u8..=255 {
+            let s = ConversionStatus::from_register(byte);
+
+            // set_count must always be in 0..=7 (3-bit field).
+            assert!(
+                s.set_count <= 7,
+                "set_count out of range for byte 0x{byte:02X}: {}",
+                s.set_count
+            );
+
+            // Bool fields readable without panic.
+            let _ = s.power_on_reset;
+            let _ = s.diag_fail;
+            let _ = s.result_ready;
+            let _ = s.is_ready();
+        }
+
+        // Spot-check: byte 0x00 — all defaults.
+        let s = ConversionStatus::from_register(0x00);
+        assert_eq!(s.set_count, 0);
+        assert!(!s.power_on_reset);
+        assert!(!s.diag_fail);
+        assert!(!s.result_ready);
+
+        // Spot-check: byte 0xFF — all bits set.
+        // SET_COUNT=7 (bits [7:5]), POR (bit 4), reserved [3:2], DIAG (bit 1), RESULT (bit 0)
+        let s = ConversionStatus::from_register(0xFF);
+        assert_eq!(s.set_count, 7);
+        assert!(s.power_on_reset);
+        assert!(s.diag_fail);
+        assert!(s.result_ready);
+    }
+
+    // -- Exhaustive TryFrom fuzz ----------------------------------------------
+
+    /// Test helper: for every byte 0..=255, calls `T::try_from(byte)` and
+    /// asserts:
+    ///   - `Ok(v)` ⇒ `v as u8 == byte` (round-trip) — via the caller-supplied
+    ///     `to_u8` closure (needed because `#[repr(u8)]` does not provide
+    ///     `Into<u8>`).
+    ///   - `Err(e)` ⇒ `e == byte`.
+    ///   - The total valid count matches `expected_valid`.
+    fn assert_exhaustive_try_from<T>(name: &str, expected_valid: usize, to_u8: impl Fn(T) -> u8)
+    where
+        T: TryFrom<u8, Error = u8> + Copy + core::fmt::Debug + PartialEq,
+    {
+        let mut valid = 0usize;
+        for byte in 0..=255u8 {
+            match T::try_from(byte) {
+                Ok(v) => {
+                    let back = to_u8(v);
+                    assert_eq!(
+                        back, byte,
+                        "{name}: round-trip failed for Ok({v:?}): {back} != {byte}"
+                    );
+                    valid += 1;
+                }
+                Err(e) => {
+                    assert_eq!(e, byte, "{name}: Err payload mismatch: {e} != {byte}");
+                }
+            }
+        }
+        assert_eq!(
+            valid, expected_valid,
+            "{name}: expected {expected_valid} valid variants, got {valid}"
+        );
+    }
+
+    #[test]
+    fn exhaustive_i2c_read_mode() {
+        assert_exhaustive_try_from::<I2cReadMode>("I2cReadMode", 3, |v| v as u8);
+    }
+
+    #[test]
+    fn exhaustive_operating_mode() {
+        assert_exhaustive_try_from::<OperatingMode>("OperatingMode", 4, |v| v as u8);
+    }
+
+    #[test]
+    fn exhaustive_magnetic_channel() {
+        assert_exhaustive_try_from::<MagneticChannel>("MagneticChannel", 12, |v| v as u8);
+    }
+
+    #[test]
+    fn exhaustive_conversion_average() {
+        assert_exhaustive_try_from::<ConversionAverage>("ConversionAverage", 6, |v| v as u8);
+    }
+
+    #[test]
+    fn exhaustive_sleep_duration() {
+        assert_exhaustive_try_from::<SleepDuration>("SleepDuration", 13, |v| v as u8);
+    }
+
+    #[test]
+    fn exhaustive_power_mode() {
+        assert_exhaustive_try_from::<PowerMode>("PowerMode", 2, |v| v as u8);
+    }
+
+    #[test]
+    fn exhaustive_trigger_mode() {
+        assert_exhaustive_try_from::<TriggerMode>("TriggerMode", 2, |v| v as u8);
+    }
+
+    #[test]
+    fn exhaustive_temp_coefficient() {
+        assert_exhaustive_try_from::<TempCoefficient>("TempCoefficient", 3, |v| v as u8);
+    }
+
+    #[test]
+    fn exhaustive_angle_calculation() {
+        assert_exhaustive_try_from::<AngleCalculation>("AngleCalculation", 4, |v| v as u8);
+    }
+
+    #[test]
+    fn exhaustive_threshold_direction() {
+        assert_exhaustive_try_from::<ThresholdDirection>("ThresholdDirection", 2, |v| v as u8);
+    }
+
+    #[test]
+    fn exhaustive_interrupt_mode() {
+        assert_exhaustive_try_from::<InterruptMode>("InterruptMode", 5, |v| v as u8);
+    }
+
+    #[test]
+    fn exhaustive_int_pin_behavior() {
+        assert_exhaustive_try_from::<IntPinBehavior>("IntPinBehavior", 2, |v| v as u8);
+    }
+
+    #[test]
+    fn exhaustive_gain_channel() {
+        assert_exhaustive_try_from::<GainChannel>("GainChannel", 2, |v| v as u8);
+    }
+
+    #[test]
+    fn exhaustive_range() {
+        assert_exhaustive_try_from::<Range>("Range", 2, |v| v as u8);
+    }
+
+    // -- Linux kernel driver cross-reference (v6.14) --------------------------
+    // Cross-reference: Linux kernel drivers/iio/magnetometer/tmag5273.c (v6.14)
+
+    #[test]
+    fn linux_xref_averaging_modes() {
+        // Linux stores pre-shifted values via FIELD_PREP into CONV_AVG_MASK.
+        // Our enum stores unshifted raw values (0-5).
+        // Comparison: (variant as u8) << CONV_AVG_SHIFT == linux_value
+        use crate::register::CONV_AVG_SHIFT;
+
+        let table: &[(ConversionAverage, u8, &str)] = &[
+            (ConversionAverage::X1, 0x00, "TMAG5273_AVG_1"),
+            (ConversionAverage::X2, 0x04, "TMAG5273_AVG_2"),
+            (ConversionAverage::X4, 0x08, "TMAG5273_AVG_4"),
+            (ConversionAverage::X8, 0x0C, "TMAG5273_AVG_8"),
+            (ConversionAverage::X16, 0x10, "TMAG5273_AVG_16"),
+            (ConversionAverage::X32, 0x14, "TMAG5273_AVG_32"),
+        ];
+        for &(variant, linux_shifted, name) in table {
+            let shifted = (variant as u8) << CONV_AVG_SHIFT;
+            assert_eq!(
+                shifted, linux_shifted,
+                "averaging mode mismatch for {name}: (rust {variant:?} as u8) << {CONV_AVG_SHIFT} = 0x{shifted:02X}, linux=0x{linux_shifted:02X}"
+            );
+        }
+    }
+
+    #[test]
+    fn linux_xref_operating_modes() {
+        let table: &[(OperatingMode, u8, &str)] = &[
+            (OperatingMode::Standby, 0, "TMAG5273_OP_MODE_STANDBY"),
+            (OperatingMode::Sleep, 1, "TMAG5273_OP_MODE_SLEEP"),
+            (
+                OperatingMode::ContinuousMeasure,
+                2,
+                "TMAG5273_OP_MODE_CONTINUOUS",
+            ),
+            (OperatingMode::WakeUpAndSleep, 3, "TMAG5273_OP_MODE_WAKEUP"),
+        ];
+        for &(variant, linux_value, name) in table {
+            assert_eq!(
+                variant as u8, linux_value,
+                "operating mode mismatch for {name}: rust={}, linux={linux_value}",
+                variant as u8
+            );
+        }
+    }
+
+    #[test]
+    fn linux_xref_angle_enable() {
+        let table: &[(AngleCalculation, u8, &str)] = &[
+            (AngleCalculation::None, 0, "TMAG5273_ANGLE_EN_OFF"),
+            (AngleCalculation::XY, 1, "TMAG5273_ANGLE_EN_X_Y"),
+            (AngleCalculation::YZ, 2, "TMAG5273_ANGLE_EN_Y_Z"),
+            (AngleCalculation::XZ, 3, "TMAG5273_ANGLE_EN_X_Z"),
+        ];
+        for &(variant, linux_value, name) in table {
+            assert_eq!(
+                variant as u8, linux_value,
+                "angle enable mismatch for {name}: rust={}, linux={linux_value}",
+                variant as u8
+            );
+        }
+    }
+
+    #[test]
+    fn linux_xref_mag_channel_xyz() {
+        // Linux: TMAG5273_MAG_CH_EN_X_Y_Z = 7
+        assert_eq!(
+            MagneticChannel::XYZ as u8,
+            7,
+            "MagneticChannel::XYZ should be 7 (TMAG5273_MAG_CH_EN_X_Y_Z)"
+        );
+    }
+
+    #[test]
+    fn linux_xref_magnetic_scale() {
+        // Linux tmag5273_scale table: microgauss per LSB for each range.
+        // Our range constants are in mT; convert:
+        //   1 mT = 10 Gauss = 10_000_000 microgauss
+        //   microgauss_per_lsb = range_mt * 10_000_000 / 32768
+        // Linux rounds these to integers (e.g., 12200 vs exact 12207.03).
+        let table: &[(f64, f64, &str)] = &[
+            (40.0, 12200.0, "v1 low (40 mT)"),
+            (80.0, 24400.0, "v1 high (80 mT)"),
+            (133.0, 40600.0, "v2 low (133 mT)"),
+            (266.0, 81200.0, "v2 high (266 mT)"),
+        ];
+        for &(range_mt, linux_ugauss_per_lsb, name) in table {
+            let our_ugauss_per_lsb = range_mt * 10_000_000.0 / 32768.0;
+            let rel_error =
+                ((our_ugauss_per_lsb - linux_ugauss_per_lsb) / linux_ugauss_per_lsb).abs();
+            assert!(
+                rel_error < 0.005,
+                "magnetic scale mismatch for {name}: ours={our_ugauss_per_lsb:.2}, linux={linux_ugauss_per_lsb}, error={:.3}%",
+                rel_error * 100.0
+            );
+        }
+    }
+
+    #[test]
+    fn linux_xref_temperature_formula() {
+        // Linux integer formula: millidegrees = (raw - 16005) * 10000 / 601
+        // Our float formula: celsius = 25.0 + (raw - 17508.0) / 60.1
+        // Both implement the same datasheet curve but diverge by ~8 millidegrees
+        // due to integer vs float rounding. Assert within 0.5°C at 3 reference points.
+        let table: &[(i16, f64, &str)] = &[
+            (0, -266.305, "raw=0"),
+            (17508, 25.008, "raw=17508 (reference)"),
+            (32767, 278.902, "raw=i16::MAX"),
+        ];
+        for &(raw, linux_millideg_approx, name) in table {
+            // Linux: (raw - 16005) * 10000 / 601 millidegrees
+            let linux_celsius = ((raw as i64 - 16005) * 10000) as f64 / 601.0 / 1000.0;
+            // Verify our Linux reference values are correct
+            assert!(
+                (linux_celsius - linux_millideg_approx).abs() < 0.01,
+                "Linux formula sanity check failed for {name}: computed={linux_celsius}, expected={linux_millideg_approx}"
+            );
+
+            // Our formula
+            let our_celsius = 25.0_f64 + (raw as f64 - 17508.0) / 60.1;
+
+            let diff = (our_celsius - linux_celsius).abs();
+            assert!(
+                diff < 0.5,
+                "temperature formula mismatch for {name}: ours={our_celsius:.3}°C, linux={linux_celsius:.3}°C, diff={diff:.3}°C"
+            );
+        }
+    }
 }
