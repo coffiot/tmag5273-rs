@@ -512,19 +512,6 @@ const ANGLE_FRAC_MASK: u16 = 0x0F;
 /// Reciprocal of 16 — converts the 4-bit fractional angle field to degrees.
 const ANGLE_FRAC_SCALE: f32 = 1.0 / 16.0;
 
-// ---------------------------------------------------------------------------
-// Public conversion helpers
-// ---------------------------------------------------------------------------
-
-/// Converts a raw magnitude register value to millitesla.
-///
-/// Prefer [`AngleReading::magnitude_millitesla`] when working with angle
-/// readings. This free function is provided for cases where only the raw
-/// register byte is available.
-#[inline]
-pub fn magnitude_to_millitesla(raw_magnitude: u8, range_mt: f32) -> MilliTesla {
-    MilliTesla::from_magnitude_raw(raw_magnitude, range_mt)
-}
 
 // ---------------------------------------------------------------------------
 // Tests
@@ -885,17 +872,16 @@ mod tests {
     // -- Magnitude conversion (Zephyr-inspired) ------------------------------
 
     #[test]
-    fn magnitude_zero() {
-        let m = magnitude_to_millitesla(0, 80.0);
+    fn magnitude_raw_zero() {
+        let m = MilliTesla::from_magnitude_raw(0, 80.0);
         assert_eq!(m.0, 0.0);
     }
 
     #[test]
-    fn magnitude_max() {
+    fn magnitude_raw_max() {
         // raw=127, range=80.0 → (127 << 8) = 32512 as i16
-        // B = -(32512) * 80 / 32768 ≈ -79.375 mT (magnitude is always positive in
-        // practice, but the formula applies the standard signed conversion).
-        let m = magnitude_to_millitesla(127, 80.0);
+        // B = -(32512) * 80 / 32768 ≈ -79.375 mT
+        let m = MilliTesla::from_magnitude_raw(127, 80.0);
         assert!(approx_eq(m.0, -79.375), "expected ~-79.375, got {}", m.0);
     }
 
@@ -1018,21 +1004,20 @@ mod tests {
     fn magnitude_raw_128_no_overflow() {
         // This was the overflow bug: (128_i16) << 8 = 32768 > i16::MAX
         // Fixed by casting through u16: ((128_u16) << 8) as i16 = -32768
-        let m = magnitude_to_millitesla(128, 80.0);
-        // (128 << 8) as i16 = -32768, then MilliTesla::from_raw(-(-32768) * 80 / 32768) = 80.0
+        let m = MilliTesla::from_magnitude_raw(128, 80.0);
         assert!(approx_eq(m.0, 80.0), "expected ~80.0, got {}", m.0);
     }
 
     #[test]
     fn magnitude_raw_255_no_overflow() {
         // Maximum raw value: ((255_u16) << 8) as i16 = -256
-        let m = magnitude_to_millitesla(255, 80.0);
+        let m = MilliTesla::from_magnitude_raw(255, 80.0);
         assert!(m.0.is_finite(), "expected finite, got {}", m.0);
     }
 
     #[test]
-    fn magnitude_raw_0() {
-        let m = magnitude_to_millitesla(0, 80.0);
+    fn from_magnitude_raw_zero() {
+        let m = MilliTesla::from_magnitude_raw(0, 80.0);
         assert_eq!(m.0, 0.0);
     }
 
@@ -1095,5 +1080,49 @@ mod tests {
         // 0x0B40 → 180.0° per datasheet
         let d = Degrees::from_raw(0x0B40);
         assert!(approx_eq(d.0, 180.0), "expected ~180.0, got {}", d.0);
+    }
+
+    // -- From impls -----------------------------------------------------------
+
+    #[test]
+    fn millitesla_into_f32() {
+        assert_eq!(f32::from(MilliTesla(3.14)), 3.14);
+    }
+
+    #[test]
+    fn celsius_into_f32() {
+        assert_eq!(f32::from(Celsius(25.0)), 25.0);
+    }
+
+    #[test]
+    fn degrees_into_f32() {
+        assert_eq!(f32::from(Degrees(180.0)), 180.0);
+    }
+
+    #[test]
+    fn micros_into_u32() {
+        assert_eq!(u32::from(Micros(1000)), 1000);
+    }
+
+    // -- AngleReading::magnitude_millitesla -----------------------------------
+
+    #[test]
+    fn angle_reading_magnitude_millitesla() {
+        let reading = AngleReading {
+            angle: Degrees(90.0),
+            magnitude: 128,
+        };
+        // from_magnitude_raw(128, 80.0) = 80.0 mT (tested above)
+        let m = reading.magnitude_millitesla(80.0);
+        assert!(approx_eq(m.0, 80.0), "expected ~80.0, got {}", m.0);
+    }
+
+    #[test]
+    fn angle_reading_magnitude_millitesla_zero() {
+        let reading = AngleReading {
+            angle: Degrees(0.0),
+            magnitude: 0,
+        };
+        assert_eq!(reading.magnitude_millitesla(80.0).0, 0.0);
     }
 }

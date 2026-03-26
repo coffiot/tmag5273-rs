@@ -88,7 +88,6 @@ pub use error::{ConfigError, Error, InitError};
 pub use types::{
     AngleReading, Celsius, ConversionStatus, Degrees, DeviceStatus, DeviceVariant, MagneticReading,
     Micros, MicrosRange, MilliTesla, NoDelay, Range, SensorReading, WAKE_DELAY,
-    magnitude_to_millitesla,
 };
 
 // Re-export config enums for consumer use

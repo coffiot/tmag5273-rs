@@ -2150,6 +2150,54 @@ mod tests {
         }
     }
 
+    #[test]
+    fn set_interrupt_mask_true_writes_bit_0() {
+        // Verifies MASK_INTB lands at bit 0 per datasheet (SLYS045B Table 8-11).
+        // With mask=true: 0x64 | 0x01 = 0x65 (bit 0 set).
+        // The old bug had MASK_INTB at bit 1, which would produce 0x66.
+        let address = 0x22u8;
+        let mut expectations = init_expectations(address, &default_config());
+
+        // INT_CONFIG_1: THRESHOLD_INT=1 | INT_STATE=1 | INT_MODE=001 | MASK_INTB=1
+        // = 0b0110_0101 = 0x65
+        expectations.push(I2cTransaction::write(address, vec![0x08, 0x65]));
+
+        let i2c = I2cMock::new(&expectations);
+        let sensor = Tmag5273::new(i2c, DeviceVariant::B1);
+        let config = ConfigBuilder::new().build().unwrap();
+        let mut sensor = sensor.init(&config).unwrap();
+
+        use crate::config::{IntPinBehavior, InterruptConfig, InterruptMode};
+        sensor
+            .set_interrupt(&InterruptConfig {
+                mode: InterruptMode::IntPin,
+                on_conversion_complete: false,
+                on_threshold_crossing: true,
+                pin_behavior: IntPinBehavior::Pulse10us,
+                mask: true,
+            })
+            .unwrap();
+
+        sensor.into_inner().done();
+    }
+
+    #[test]
+    fn get_interrupt_mask_reads_bit_0() {
+        let address = 0x22u8;
+        let mut expectations = init_expectations(address, &default_config());
+
+        // Read INT_CONFIG_1 returning 0x01 (only MASK_INTB set at bit 0)
+        expectations.push(I2cTransaction::write_read(address, vec![0x08], vec![0x01]));
+
+        let i2c = I2cMock::new(&expectations);
+        let sensor = Tmag5273::new(i2c, DeviceVariant::B1);
+        let config = ConfigBuilder::new().build().unwrap();
+        let mut sensor = sensor.init(&config).unwrap();
+
+        assert!(sensor.get_interrupt_mask().unwrap());
+        sensor.into_inner().done();
+    }
+
     // -- Phase 3: Gain/Offset Calibration -----------------------------------
 
     #[test]
