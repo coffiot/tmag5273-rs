@@ -46,7 +46,7 @@ pub enum Error<E> {
     InvalidManufacturerId(u16),
 
     /// The device version register does not match the expected value for the
-    /// selected [`DeviceVariant`](DeviceVariant).
+    /// selected [`DeviceVariant`](crate::DeviceVariant).
     #[error("device version mismatch: expected 0x{expected:02X}, got 0x{got:02X}")]
     VersionMismatch {
         /// The version byte the driver expected.

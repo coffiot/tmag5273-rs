@@ -517,44 +517,58 @@ impl<I2C: I2c, D: DelayNs> Tmag5273<I2C, Configured, D> {
 
     /// Read magnetic field for all enabled channels.
     ///
-    /// Uses a burst read (6 bytes) for data coherence and speed.
-    /// Disabled channels return `None`.
+    /// Uses a burst read for data coherence and speed. Disabled channels
+    /// return `None`.
     ///
-    /// **CRC limitation:** Even when the `crc` feature is enabled, this
-    /// method does **not** validate CRC on the magnetic burst read. The
-    /// TMAG5273 CRC scheme operates on 2-byte register-pair reads, not
-    /// 6-byte bursts. CRC validation covers temperature and angle reads
-    /// only (via [`read_register_pair`](Self::read_temperature)).
+    /// When the `crc` feature is enabled, uses two 4-byte block reads
+    /// (from 0x10 and 0x14) with per-block CRC-8 validation. The
+    /// temperature bytes in block 1 are discarded.
     ///
     /// # Errors
     ///
+    /// Returns [`Error::CrcMismatch`] if CRC validation fails (`crc` feature).
     /// Returns [`Error::I2c`] on bus communication failure.
     pub fn read_magnetic(&mut self) -> Result<MagneticReading, Error<I2C::Error>> {
         self.require_standard_mode()?;
 
-        if self.diag_enabled {
-            // Extended burst: 7 bytes (X/Y/Z + CONV_STATUS at 0x18).
-            // CONV_STATUS is adjacent to Z_LSB — zero extra I2C overhead.
+        // With CRC: two 4-byte block reads (0x10-0x13, 0x14-0x17) with CRC
+        // validation per block. Reads from T_MSB (0x10) for 4-byte alignment;
+        // discards the 2 temperature bytes from block 1.
+        #[cfg(feature = "crc")]
+        let (raw_x, raw_y, raw_z) = {
+            let block1 = self.read_block_with_crc(register::T_MSB_RESULT)?;
+            let block2 = self.read_block_with_crc(0x14)?;
+            // block1: [T_MSB, T_LSB, X_MSB, X_LSB] — discard T
+            // block2: [Y_MSB, Y_LSB, Z_MSB, Z_LSB]
+            (
+                i16::from_be_bytes([block1[2], block1[3]]),
+                i16::from_be_bytes([block2[0], block2[1]]),
+                i16::from_be_bytes([block2[2], block2[3]]),
+            )
+        };
+
+        // Without CRC: burst read with optional diagnostic extension.
+        #[cfg(not(feature = "crc"))]
+        let (raw_x, raw_y, raw_z) = if self.diag_enabled {
             let mut buf = [0u8; 7];
             self.i2c
                 .write_read(self.address, &[register::X_MSB_RESULT], &mut buf)?;
-
-            let raw_x = i16::from_be_bytes([buf[0], buf[1]]);
-            let raw_y = i16::from_be_bytes([buf[2], buf[3]]);
-            let raw_z = i16::from_be_bytes([buf[4], buf[5]]);
-
             self.check_diag_from_conv_status(buf[6])?;
-            return Ok(self.decode_magnetic(raw_x, raw_y, raw_z));
-        }
-
-        // Standard burst: 6 bytes from X_MSB_RESULT (0x12)
-        let mut buf = [0u8; 6];
-        self.i2c
-            .write_read(self.address, &[register::X_MSB_RESULT], &mut buf)?;
-
-        let raw_x = i16::from_be_bytes([buf[0], buf[1]]);
-        let raw_y = i16::from_be_bytes([buf[2], buf[3]]);
-        let raw_z = i16::from_be_bytes([buf[4], buf[5]]);
+            (
+                i16::from_be_bytes([buf[0], buf[1]]),
+                i16::from_be_bytes([buf[2], buf[3]]),
+                i16::from_be_bytes([buf[4], buf[5]]),
+            )
+        } else {
+            let mut buf = [0u8; 6];
+            self.i2c
+                .write_read(self.address, &[register::X_MSB_RESULT], &mut buf)?;
+            (
+                i16::from_be_bytes([buf[0], buf[1]]),
+                i16::from_be_bytes([buf[2], buf[3]]),
+                i16::from_be_bytes([buf[4], buf[5]]),
+            )
+        };
 
         Ok(self.decode_magnetic(raw_x, raw_y, raw_z))
     }
@@ -647,14 +661,11 @@ impl<I2C: I2c, D: DelayNs> Tmag5273<I2C, Configured, D> {
     /// [`trigger_conversion`](Self::trigger_conversion) and
     /// [`wait_for_conversion`](Self::wait_for_conversion) first.
     ///
-    /// # Note on CRC
+    /// # CRC
     ///
-    /// This method uses a burst read and does **not** validate CRC, even
-    /// when the `crc` feature is enabled. The TMAG5273 CRC scheme only
-    /// covers 2-byte register pair reads, not 8-byte bursts. Use
-    /// [`read_temperature`](Self::read_temperature) and
-    /// [`read_magnetic`](Self::read_magnetic) separately if CRC protection
-    /// is needed.
+    /// When the `crc` feature is enabled, uses two 4-byte block reads
+    /// (0x10–0x13 and 0x14–0x17) with per-block CRC-8 validation instead
+    /// of a single 8-byte burst.
     ///
     /// # Errors
     ///
@@ -663,20 +674,35 @@ impl<I2C: I2c, D: DelayNs> Tmag5273<I2C, Configured, D> {
     pub fn read_all(&mut self) -> Result<SensorReading, Error<I2C::Error>> {
         self.require_standard_mode()?;
 
-        let (raw_t, raw_x, raw_y, raw_z, conv_status) = if self.diag_enabled {
-            // Extended 9-byte burst: T/X/Y/Z + CONV_STATUS at 0x18.
+        // With CRC: two perfectly-aligned 4-byte block reads with CRC validation.
+        // Block 1: 0x10-0x13 (T_MSB, T_LSB, X_MSB, X_LSB)
+        // Block 2: 0x14-0x17 (Y_MSB, Y_LSB, Z_MSB, Z_LSB)
+        #[cfg(feature = "crc")]
+        let (raw_t, raw_x, raw_y, raw_z) = {
+            let block1 = self.read_block_with_crc(register::T_MSB_RESULT)?;
+            let block2 = self.read_block_with_crc(0x14)?;
+            (
+                i16::from_be_bytes([block1[0], block1[1]]),
+                i16::from_be_bytes([block1[2], block1[3]]),
+                i16::from_be_bytes([block2[0], block2[1]]),
+                i16::from_be_bytes([block2[2], block2[3]]),
+            )
+        };
+
+        // Without CRC: single burst with optional diagnostic extension.
+        #[cfg(not(feature = "crc"))]
+        let (raw_t, raw_x, raw_y, raw_z) = if self.diag_enabled {
             let mut buf = [0u8; 9];
             self.i2c
                 .write_read(self.address, &[register::T_MSB_RESULT], &mut buf)?;
+            self.check_diag_from_conv_status(buf[8])?;
             (
                 i16::from_be_bytes([buf[0], buf[1]]),
                 i16::from_be_bytes([buf[2], buf[3]]),
                 i16::from_be_bytes([buf[4], buf[5]]),
                 i16::from_be_bytes([buf[6], buf[7]]),
-                Some(buf[8]),
             )
         } else {
-            // Standard 8-byte burst: T_MSB(0x10) through Z_LSB(0x17)
             let mut buf = [0u8; 8];
             self.i2c
                 .write_read(self.address, &[register::T_MSB_RESULT], &mut buf)?;
@@ -685,13 +711,8 @@ impl<I2C: I2c, D: DelayNs> Tmag5273<I2C, Configured, D> {
                 i16::from_be_bytes([buf[2], buf[3]]),
                 i16::from_be_bytes([buf[4], buf[5]]),
                 i16::from_be_bytes([buf[6], buf[7]]),
-                None,
             )
         };
-
-        if let Some(conv_raw) = conv_status {
-            self.check_diag_from_conv_status(conv_raw)?;
-        }
 
         let temperature = if self.temperature_enabled {
             Some(Celsius::from_raw(raw_t))
@@ -1756,6 +1777,37 @@ impl<I2C: I2c, State, D> Tmag5273<I2C, State, D> {
         Ok(buf)
     }
 
+    /// Read a 4-byte block with CRC-8 validation.
+    ///
+    /// Reads 5 bytes (4 data + 1 CRC) from the given register address.
+    /// CRC covers `[addr_W, register, addr_R, data0, data1, data2, data3]`.
+    /// Per TI datasheet SLYS045B §6.5.1.3.3: "the secondary sends the fifth
+    /// CRC byte based off the CRC calculation of immediate past four register
+    /// bytes."
+    #[cfg(feature = "crc")]
+    fn read_block_with_crc(&mut self, register: u8) -> Result<[u8; 4], Error<I2C::Error>> {
+        let mut buf = [0u8; 5]; // 4 data + 1 CRC
+        self.i2c.write_read(self.address, &[register], &mut buf)?;
+
+        let crc_input = [
+            self.address << 1,       // address + write bit
+            register,                // register address
+            (self.address << 1) | 1, // address + read bit
+            buf[0],
+            buf[1],
+            buf[2],
+            buf[3],
+        ];
+        let computed = crc8(&crc_input);
+        let expected = buf[4];
+
+        if computed != expected {
+            return Err(Error::CrcMismatch { expected, computed });
+        }
+
+        Ok([buf[0], buf[1], buf[2], buf[3]])
+    }
+
     /// Read a register pair with CRC-8 validation.
     ///
     /// Reads 3 bytes: MSB, LSB, CRC. Validates the CRC over `[address_W, register, address_R, MSB, LSB]`
@@ -2078,6 +2130,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(not(feature = "crc"))]
     fn read_magnetic_burst() {
         let mut expectations = init_expectations(0x22, &default_config());
         // Burst read X/Y/Z: 6 bytes from register 0x12
@@ -2845,6 +2898,7 @@ mod tests {
     // -- Coherent read_all() -------------------------------------------------
 
     #[test]
+    #[cfg(not(feature = "crc"))]
     fn read_all_returns_coherent_data() {
         let address = 0x22u8;
         let mut expectations = init_expectations(address, &default_config());
@@ -2899,6 +2953,7 @@ mod tests {
     // -- read_all() temperature gating --------------------------------------
 
     #[test]
+    #[cfg(not(feature = "crc"))]
     fn read_all_returns_none_temperature_when_disabled() {
         let address = 0x22u8;
         let config = ConfigBuilder::new()
@@ -3032,6 +3087,7 @@ mod tests {
     // -- read_magnetic() partial channels -----------------------------------
 
     #[test]
+    #[cfg(not(feature = "crc"))]
     fn read_magnetic_partial_channel_xy() {
         let address = 0x22u8;
         let config = ConfigBuilder::new()
@@ -3061,6 +3117,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(not(feature = "crc"))]
     fn read_magnetic_off_returns_all_none() {
         let address = 0x22u8;
         let config = ConfigBuilder::new()
@@ -3337,6 +3394,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(not(feature = "crc"))]
     fn full_lifecycle_trigger_wait_read_all() {
         let address = 0x22u8;
         let config = ConfigBuilder::new()
@@ -3444,6 +3502,96 @@ mod tests {
             }
         );
 
+        sensor.into_inner().done();
+    }
+
+    #[cfg(feature = "crc")]
+    #[test]
+    fn crc_read_all_validates_both_blocks() {
+        let address = 0x22u8;
+        let mut expectations = init_expectations(address, &default_config());
+
+        // Block 1: T_MSB(0x10) → [T_MSB=0x44, T_LSB=0x64, X_MSB=0x10, X_LSB=0x00, CRC]
+        expectations.push(I2cTransaction::write_read(
+            address,
+            vec![0x10],
+            vec![0x44, 0x64, 0x10, 0x00, 0x35],
+        ));
+        // Block 2: 0x14 → [Y_MSB=0x20, Y_LSB=0x00, Z_MSB=0x30, Z_LSB=0x00, CRC]
+        expectations.push(I2cTransaction::write_read(
+            address,
+            vec![0x14],
+            vec![0x20, 0x00, 0x30, 0x00, 0x5C],
+        ));
+
+        let i2c = I2cMock::new(&expectations);
+        let sensor = Tmag5273::new(i2c, DeviceVariant::B1);
+        let mut sensor = sensor.init(&default_config()).unwrap();
+
+        let reading = sensor.read_all().unwrap();
+        assert!(reading.temperature.is_some());
+        assert!(reading.magnetic.x.is_some());
+        assert!(reading.magnetic.y.is_some());
+        assert!(reading.magnetic.z.is_some());
+        sensor.into_inner().done();
+    }
+
+    #[cfg(feature = "crc")]
+    #[test]
+    fn crc_read_magnetic_validates_both_blocks() {
+        let address = 0x22u8;
+        let mut expectations = init_expectations(address, &default_config());
+
+        // Block 1: T_MSB(0x10) → [T_MSB, T_LSB, X_MSB, X_LSB, CRC]
+        // Temperature bytes are discarded by read_magnetic
+        expectations.push(I2cTransaction::write_read(
+            address,
+            vec![0x10],
+            vec![0x44, 0x64, 0x10, 0x00, 0x35],
+        ));
+        // Block 2: 0x14 → [Y_MSB, Y_LSB, Z_MSB, Z_LSB, CRC]
+        expectations.push(I2cTransaction::write_read(
+            address,
+            vec![0x14],
+            vec![0x20, 0x00, 0x30, 0x00, 0x5C],
+        ));
+
+        let i2c = I2cMock::new(&expectations);
+        let sensor = Tmag5273::new(i2c, DeviceVariant::B1);
+        let mut sensor = sensor.init(&default_config()).unwrap();
+
+        let reading = sensor.read_magnetic().unwrap();
+        assert!(reading.x.is_some());
+        assert!(reading.y.is_some());
+        assert!(reading.z.is_some());
+        sensor.into_inner().done();
+    }
+
+    #[cfg(feature = "crc")]
+    #[test]
+    fn crc_read_all_block2_mismatch_returns_error() {
+        let address = 0x22u8;
+        let mut expectations = init_expectations(address, &default_config());
+
+        // Block 1: valid CRC
+        expectations.push(I2cTransaction::write_read(
+            address,
+            vec![0x10],
+            vec![0x44, 0x64, 0x10, 0x00, 0x35],
+        ));
+        // Block 2: wrong CRC (0xFF instead of 0x5C)
+        expectations.push(I2cTransaction::write_read(
+            address,
+            vec![0x14],
+            vec![0x20, 0x00, 0x30, 0x00, 0xFF],
+        ));
+
+        let i2c = I2cMock::new(&expectations);
+        let sensor = Tmag5273::new(i2c, DeviceVariant::B1);
+        let mut sensor = sensor.init(&default_config()).unwrap();
+
+        let err = sensor.read_all().unwrap_err();
+        assert!(matches!(err, Error::CrcMismatch { .. }));
         sensor.into_inner().done();
     }
 

@@ -194,6 +194,7 @@ pub(crate) const T_MSB_RESULT: u8 = 0x10;
 // ---------------------------------------------------------------------------
 // 0x12 — X_MSB_RESULT (read-only, burst reads X/Y/Z from here)
 // ---------------------------------------------------------------------------
+#[cfg_attr(feature = "crc", allow(dead_code))]
 pub(crate) const X_MSB_RESULT: u8 = 0x12;
 // 0x13–0x17 X_LSB, Y_MSB/LSB, Z_MSB/LSB — implicit via 6-byte burst from X_MSB
 

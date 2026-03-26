@@ -355,7 +355,7 @@ let sensor_b = Tmag5273::new(RefCellDevice::new(&bus), DeviceVariant::C1);
 
 | Feature | Description                                                                                                                                                |
 | ------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `crc`   | Enables CRC-8 validation on I2C register-pair reads. Incompatible with burst reads — `read_magnetic()` and `read_all()` always use burst mode without CRC. |
+| `crc`   | Enables CRC-8 validation on all I2C reads. Burst reads (`read_magnetic`, `read_all`) use 4-byte block reads with per-block CRC. |
 | `defmt` | Enables `defmt::Format` derives on all public types (requires `defmt` 1.0).                                                                                |
 
 Both features are off by default.
