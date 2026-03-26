@@ -554,15 +554,12 @@ impl ConfigBuilder {
 
         // Sleep must be long enough for at least one full conversion.
         if matches!(self.operating_mode, OperatingMode::WakeUpAndSleep) {
-            let sleep_us = self.sleep_duration.as_micros();
-            let conversion_us = self
+            let sleep = self.sleep_duration.as_micros();
+            let conversion = self
                 .conversion_average
                 .conversion_time(self.magnetic_channels, self.temperature_enabled);
-            if sleep_us.0 < conversion_us.0 {
-                return Err(ConfigError::SleepShorterThanConversion {
-                    sleep: sleep_us,
-                    conversion: conversion_us,
-                });
+            if sleep.0 < conversion.0 {
+                return Err(ConfigError::SleepShorterThanConversion { sleep, conversion });
             }
         }
 
