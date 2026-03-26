@@ -540,6 +540,7 @@ impl<I2C: I2c, D: DelayNs> Tmag5273<I2C, Configured, D> {
             let block2 = self.read_block_with_crc(0x14)?;
             // block1: [T_MSB, T_LSB, X_MSB, X_LSB] — discard T
             // block2: [Y_MSB, Y_LSB, Z_MSB, Z_LSB]
+            self.read_and_check_diag()?;
             (
                 i16::from_be_bytes([block1[2], block1[3]]),
                 i16::from_be_bytes([block2[0], block2[1]]),
@@ -681,6 +682,7 @@ impl<I2C: I2c, D: DelayNs> Tmag5273<I2C, Configured, D> {
         let (raw_t, raw_x, raw_y, raw_z) = {
             let block1 = self.read_block_with_crc(register::T_MSB_RESULT)?;
             let block2 = self.read_block_with_crc(0x14)?;
+            self.read_and_check_diag()?;
             (
                 i16::from_be_bytes([block1[0], block1[1]]),
                 i16::from_be_bytes([block1[2], block1[3]]),
