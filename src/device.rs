@@ -9,16 +9,14 @@ use core::marker::PhantomData;
 use embedded_hal::delay::DelayNs;
 use embedded_hal::i2c::I2c;
 
-use crate::config::{
-    AngleCalculation, Config, ConversionAverage, GainChannel, I2cReadMode, IntPinBehavior,
-    InterruptMode, MagneticChannel, OperatingMode, PowerMode, SleepDuration, TempCoefficient,
-    ThresholdDirection, TriggerMode,
-};
+use crate::config::Config;
 use crate::error::{Error, InitError};
 use crate::register;
 use crate::types::{
-    AngleReading, Celsius, ConversionStatus, Degrees, DeviceStatus, DeviceVariant, MagneticReading,
-    Micros, MilliTesla, NoDelay, Range, SensorReading, WAKE_DELAY,
+    AngleCalculation, AngleReading, Celsius, ConversionAverage, ConversionStatus, Degrees,
+    DeviceStatus, DeviceVariant, GainChannel, I2cReadMode, IntPinBehavior, InterruptMode,
+    MagneticChannel, MagneticReading, Micros, MilliTesla, NoDelay, OperatingMode, PowerMode, Range,
+    SensorReading, SleepDuration, TempCoefficient, ThresholdDirection, TriggerMode, WAKE_DELAY,
 };
 
 // ---------------------------------------------------------------------------
@@ -1876,8 +1874,10 @@ mod tests {
     use alloc::vec::Vec;
 
     use super::*;
-    use crate::config::ConfigBuilder;
-    use crate::types::{Degrees, MilliTesla};
+    use crate::config::{CalibrationConfig, ConfigBuilder, InterruptConfig, ThresholdConfig};
+    use crate::types::{
+        Degrees, GainChannel, IntPinBehavior, InterruptMode, MilliTesla, ThresholdDirection,
+    };
     use embedded_hal_mock::eh1::delay::{CheckedDelay, Transaction as DelayTransaction};
     use embedded_hal_mock::eh1::i2c::{Mock as I2cMock, Transaction as I2cTransaction};
 
@@ -2245,7 +2245,6 @@ mod tests {
         let config = ConfigBuilder::new().build().unwrap();
         let mut sensor = sensor.init(&config).unwrap();
 
-        use crate::config::{ThresholdConfig, ThresholdDirection};
         sensor
             .set_thresholds(&ThresholdConfig {
                 x: 5,
@@ -2277,7 +2276,6 @@ mod tests {
         let config = ConfigBuilder::new().build().unwrap();
         let mut sensor = sensor.init(&config).unwrap();
 
-        use crate::config::{IntPinBehavior, InterruptConfig, InterruptMode};
         sensor
             .set_interrupt(&InterruptConfig {
                 mode: InterruptMode::IntPin,
@@ -2293,7 +2291,8 @@ mod tests {
 
     #[test]
     fn set_interrupt_all_modes() {
-        use crate::config::{IntPinBehavior, InterruptConfig, InterruptMode};
+        use crate::config::InterruptConfig;
+        use crate::types::{IntPinBehavior, InterruptMode};
 
         let modes = [
             (InterruptMode::None, 0b000),
@@ -2346,7 +2345,6 @@ mod tests {
         let config = ConfigBuilder::new().build().unwrap();
         let mut sensor = sensor.init(&config).unwrap();
 
-        use crate::config::{IntPinBehavior, InterruptConfig, InterruptMode};
         sensor
             .set_interrupt(&InterruptConfig {
                 mode: InterruptMode::IntPin,
@@ -2399,7 +2397,6 @@ mod tests {
         let config = ConfigBuilder::new().build().unwrap();
         let mut sensor = sensor.init(&config).unwrap();
 
-        use crate::config::{CalibrationConfig, GainChannel};
         sensor
             .set_calibration(&CalibrationConfig {
                 gain: 0x80,
@@ -2429,7 +2426,6 @@ mod tests {
         let config = ConfigBuilder::new().build().unwrap();
         let mut sensor = sensor.init(&config).unwrap();
 
-        use crate::config::{CalibrationConfig, GainChannel};
         sensor
             .set_calibration(&CalibrationConfig {
                 gain: 0,

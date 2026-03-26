@@ -82,17 +82,13 @@ mod error;
 mod register;
 mod types;
 
-pub use config::{Config, ConfigBuilder};
+pub use config::{CalibrationConfig, Config, ConfigBuilder, InterruptConfig, ThresholdConfig};
 pub use device::{Configured, Tmag5273, Unconfigured};
 pub use error::{ConfigError, Error, InitError};
 pub use types::{
-    AngleReading, Celsius, ConversionStatus, Degrees, DeviceStatus, DeviceVariant, MagneticReading,
-    Micros, MicrosRange, MilliTesla, NoDelay, Range, SensorReading, WAKE_DELAY,
-};
-
-// Re-export config enums for consumer use
-pub use config::{
-    AngleCalculation, CalibrationConfig, ConversionAverage, GainChannel, I2cReadMode,
-    IntPinBehavior, InterruptConfig, InterruptMode, MagneticChannel, OperatingMode, PowerMode,
-    SleepDuration, TempCoefficient, ThresholdConfig, ThresholdDirection, TriggerMode,
+    AngleCalculation, AngleReading, Celsius, ConversionAverage, ConversionStatus, Degrees,
+    DeviceStatus, DeviceVariant, GainChannel, I2cReadMode, IntPinBehavior, InterruptMode,
+    MagneticChannel, MagneticReading, Micros, MicrosRange, MilliTesla, NoDelay, OperatingMode,
+    PowerMode, Range, SensorReading, SleepDuration, TempCoefficient, ThresholdDirection,
+    TriggerMode, WAKE_DELAY,
 };
