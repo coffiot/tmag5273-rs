@@ -744,40 +744,68 @@ impl<I2C: I2c, D: DelayNs> Tmag5273<I2C, Configured, D> {
         Ok(self.read_status()?.int_pin_active)
     }
 
+    /// Maximum retry attempts for register access after wake-up from sleep.
+    ///
+    /// The TI datasheet specifies 50 µs typical wake time, but real hardware
+    /// (ESP32-S3 + TMAG5273 B1) needs ~6 ms. Three attempts with 80 µs
+    /// inter-retry delay covers this reliably. Neither the Linux kernel nor
+    /// Zephyr RTOS drivers retry — they rely on implicit settling, which
+    /// can fail on fast I2C controllers.
+    const WAKE_RETRY_MAX: u8 = 3;
+
     /// Switch the operating mode at runtime.
     ///
-    /// # Wake-up timing
+    /// # Wake-up from sleep
     ///
-    /// When transitioning to an active mode (any mode except
-    /// [`Sleep`](OperatingMode::Sleep)), the device needs ~80 us to wake
-    /// (TI datasheet; Linux kernel uses `usleep_range(80, 200)`). When a
-    /// real delay backend is provided, the wake-up delay is inserted
-    /// automatically. With [`NoDelay`], the delay is a no-op — the caller
-    /// should ensure sufficient time before the next I2C read.
+    /// When the device may be in sleep mode, `set_mode()` automatically
+    /// retries the register access up to 3 times to handle post-sleep
+    /// I2C NACKs. An empty I2C write is sent first to trigger the
+    /// device's wake-up circuit, followed by an 80 µs settling delay
+    /// (per TI datasheet; Linux kernel uses `usleep_range(80, 200)`).
+    ///
+    /// With [`NoDelay`], the inter-retry delay is a no-op — the I2C bus
+    /// transaction overhead (~100 µs at 400 kHz) provides implicit
+    /// settling between attempts.
     ///
     /// # Errors
     ///
-    /// Returns [`Error::I2c`] on bus communication failure.
+    /// Returns [`Error::I2c`] if the register access fails after all
+    /// retry attempts, indicating the device is unresponsive.
     pub fn set_mode(&mut self, mode: OperatingMode) -> Result<(), Error<I2C::Error>> {
         // Wake the sensor if it may be sleeping — any I2C activity wakes
-        // the device (TI datasheet §7.5.1). Without this, the register read
-        // below can NACK when transitioning from Sleep mode.
+        // the device (TI datasheet §7.5.1). Errors are expected and
+        // tolerated (Zephyr: "operation is known to fail").
         let _ = self.i2c.write(self.address, &[]);
-        let current = self.read_register(register::DEVICE_CONFIG_2)?;
-        let updated = register::insert(
-            current,
-            register::OPERATING_MODE_MASK,
-            register::OPERATING_MODE_SHIFT,
-            mode as u8,
-        );
-        self.write_register(register::DEVICE_CONFIG_2, updated)?;
+        self.delay.delay_us(WAKE_DELAY.min.0);
 
-        // Wake delay: 80 us after non-sleep mode changes.
-        // NoDelay: no-op. Real delay: automatic wake-up timing.
-        if !matches!(mode, OperatingMode::Sleep) {
-            self.delay.delay_us(WAKE_DELAY.min.0);
+        // Bounded retry on the register read — the device may NACK the
+        // first access after deep sleep even with the wake delay above.
+        // Non-sleep transitions succeed on the first attempt (no overhead).
+        let mut last_err = None;
+        for _ in 0..Self::WAKE_RETRY_MAX {
+            match self.read_register(register::DEVICE_CONFIG_2) {
+                Ok(current) => {
+                    let updated = register::insert(
+                        current,
+                        register::OPERATING_MODE_MASK,
+                        register::OPERATING_MODE_SHIFT,
+                        mode as u8,
+                    );
+                    self.write_register(register::DEVICE_CONFIG_2, updated)?;
+
+                    if !matches!(mode, OperatingMode::Sleep) {
+                        self.delay.delay_us(WAKE_DELAY.min.0);
+                    }
+                    return Ok(());
+                }
+                Err(e) => {
+                    last_err = Some(e);
+                    self.delay.delay_us(WAKE_DELAY.min.0);
+                }
+            }
         }
-        Ok(())
+
+        Err(Error::I2c(last_err.unwrap()))
     }
 
     /// Trigger a single conversion in standby or trigger mode.
@@ -1164,6 +1192,10 @@ impl<I2C: I2c, D: DelayNs> Tmag5273<I2C, Configured, D> {
     }
 
     /// Put the sensor into sleep mode for power savings.
+    ///
+    /// After calling this, the next [`set_mode()`](Self::set_mode) call will
+    /// automatically retry the register access to handle the post-sleep
+    /// wake-up delay — no caller-side retry is needed.
     ///
     /// # Errors
     ///
@@ -3098,6 +3130,67 @@ mod tests {
         sensor.into_inner().done();
     }
 
+    #[test]
+    fn set_mode_retries_on_nack_then_succeeds() {
+        // Simulates wake-from-sleep: first read_register NACKs, second succeeds.
+        let address = 0x22u8;
+        let config = default_config();
+        let dc2 = config.to_register_writes()[1].1;
+
+        let mut expectations = init_expectations(address, &config);
+        // Wake write
+        expectations.push(I2cTransaction::write(address, vec![]));
+        // First read_register NACKs
+        expectations.push(
+            I2cTransaction::write_read(address, vec![0x01], vec![dc2]).with_error(
+                embedded_hal::i2c::ErrorKind::NoAcknowledge(
+                    embedded_hal::i2c::NoAcknowledgeSource::Address,
+                ),
+            ),
+        );
+        // Retry: second read_register succeeds
+        expectations.push(I2cTransaction::write_read(address, vec![0x01], vec![dc2]));
+        // Write-back with Standby mode
+        expectations.push(I2cTransaction::write(address, vec![0x01, dc2 & !0x03]));
+
+        let i2c = I2cMock::new(&expectations);
+        let sensor = Tmag5273::new(i2c, DeviceVariant::B1);
+        let mut sensor = sensor.init(&config).unwrap();
+
+        sensor.set_mode(OperatingMode::Standby).unwrap();
+        sensor.into_inner().done();
+    }
+
+    #[test]
+    fn set_mode_exhausts_retries_returns_error() {
+        // All 3 read_register attempts NACK — device unresponsive.
+        let address = 0x22u8;
+        let config = default_config();
+        let dc2 = config.to_register_writes()[1].1;
+
+        let mut expectations = init_expectations(address, &config);
+        // Wake write
+        expectations.push(I2cTransaction::write(address, vec![]));
+        // All 3 attempts NACK
+        for _ in 0..3 {
+            expectations.push(
+                I2cTransaction::write_read(address, vec![0x01], vec![dc2]).with_error(
+                    embedded_hal::i2c::ErrorKind::NoAcknowledge(
+                        embedded_hal::i2c::NoAcknowledgeSource::Address,
+                    ),
+                ),
+            );
+        }
+
+        let i2c = I2cMock::new(&expectations);
+        let sensor = Tmag5273::new(i2c, DeviceVariant::B1);
+        let mut sensor = sensor.init(&config).unwrap();
+
+        let result = sensor.set_mode(OperatingMode::Standby);
+        assert!(result.is_err(), "should fail after 3 NACKs");
+        sensor.into_inner().done();
+    }
+
     // -- Conversion lifecycle -----------------------------------------------
 
     #[test]
@@ -3297,8 +3390,9 @@ mod tests {
         i2c_expectations.push(I2cTransaction::write(address, vec![0x01, dc2 & !0x03]));
 
         let i2c = I2cMock::new(&i2c_expectations);
-        // Two wake delays: one from init, one from set_mode(Standby)
+        // Three wake delays: init(80), set_mode pre-read(80), set_mode post-write(80)
         let delay = CheckedDelay::new(&[
+            DelayTransaction::delay_us(80),
             DelayTransaction::delay_us(80),
             DelayTransaction::delay_us(80),
         ]);
@@ -3314,7 +3408,7 @@ mod tests {
     }
 
     #[test]
-    fn sleep_with_checked_delay_skips_wake() {
+    fn sleep_with_checked_delay_skips_post_wake() {
         let address = 0x22u8;
         let config = default_config();
         let dc2 = config.to_register_writes()[1].1;
@@ -3331,8 +3425,11 @@ mod tests {
         ));
 
         let i2c = I2cMock::new(&i2c_expectations);
-        // Only one wake delay from init — sleep does NOT trigger wake delay
-        let delay = CheckedDelay::new(&[DelayTransaction::delay_us(80)]);
+        // Two delays: init(80) + set_mode pre-read(80). No post-write delay for sleep.
+        let delay = CheckedDelay::new(&[
+            DelayTransaction::delay_us(80),
+            DelayTransaction::delay_us(80),
+        ]);
 
         let sensor = Tmag5273::new_with_delay(i2c, DeviceVariant::B1, delay);
         let mut sensor = sensor.init(&config).unwrap();

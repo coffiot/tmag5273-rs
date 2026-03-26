@@ -512,7 +512,6 @@ const ANGLE_FRAC_MASK: u16 = 0x0F;
 /// Reciprocal of 16 — converts the 4-bit fractional angle field to degrees.
 const ANGLE_FRAC_SCALE: f32 = 1.0 / 16.0;
 
-
 // ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
