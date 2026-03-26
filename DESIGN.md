@@ -89,14 +89,16 @@ When `crc` is off, the CRC-8 function and 3-byte read paths are completely elimi
 
 ## References
 
-- <https://docs.sparkfun.com/SparkFun_Qwiic_Hall_Effect_Sensor_TMAG5273/introduction/>
 - <https://docs.sparkfun.com/SparkFun_Qwiic_Hall_Effect_Sensor_TMAG5273/assets/board_files/schematic-mini.pdf>
-- <https://www.ti.com/product/TMAG5273>
-- <https://www.ti.com/lit/ds/symlink/tmag5273.pdf>
+- <https://docs.sparkfun.com/SparkFun_Qwiic_Hall_Effect_Sensor_TMAG5273/hardware_overview/> — built-in pull-ups and jumper documentation
+- <https://docs.sparkfun.com/SparkFun_Qwiic_Hall_Effect_Sensor_TMAG5273/introduction/>
 - <https://github.com/sparkfun/SparkFun_Qwiic_Hall_Effect_Sensor_TMAG5273>
 - <https://github.com/sparkfun/SparkFun_TMAG5273_Arduino_Library>
-- <https://github.com/zephyrproject-rtos/zephyr/tree/main/drivers/sensor/ti/tmag5273>
 - <https://github.com/torvalds/linux/blob/master/drivers/iio/magnetometer/tmag5273.c>
+- <https://github.com/zephyrproject-rtos/zephyr/tree/main/drivers/sensor/ti/tmag5273>
+- <https://learn.sparkfun.com/tutorials/i2c>
+- <https://www.ti.com/lit/ds/symlink/tmag5273.pdf>
+- <https://www.ti.com/product/TMAG5273>
 
 ## Summary
 
