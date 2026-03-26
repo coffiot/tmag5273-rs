@@ -217,7 +217,7 @@ let reading = sensor.read_magnetic()?;
 | `wait_for_conversion()` → `ConversionStatus` | Blocking poll with bounded retry                |
 | `is_conversion_complete()` → `bool`          | Non-blocking check                              |
 | `read_status()` → `DeviceStatus`             | Read fault-flag register                        |
-| `check_diagnostics()` → `DeviceStatus`       | Lazy diagnostic read (skips status if no fault) |
+| `check_diag()` → `DeviceStatus`              | Lazy diagnostic read (skips status if no fault) |
 | `is_interrupt_active()` → `bool`             | Read INT pin state                              |
 | `set_crc_enabled(bool)`                      | Toggle sensor-side CRC-8 generation             |
 | `get_crc_enabled()` → `bool`                 | Read sensor-side CRC setting                    |
@@ -230,7 +230,7 @@ Opt-in per-sample `CONV_STATUS.DIAG_FAIL` checking on every measurement:
 
 ```rust,no_run
 let config = ConfigBuilder::new()
-    .diagnostics_enabled(true)  // check DIAG_FAIL on every read
+    .diag_enabled(true)  // check DIAG_FAIL on every read
     .build()?;
 let mut sensor = sensor.init(&config)?;
 
@@ -244,13 +244,13 @@ trigger spuriously:
 
 ```rust,no_run
 let config = ConfigBuilder::new()
-    .diagnostics_enabled(true)
+    .diag_enabled(true)
     .ignore_diag_fail(true)  // reads succeed despite faults
     .build()?;
 ```
 
 Zero overhead when disabled (default) — no extra I2C transactions.
-Manual `check_diagnostics()` works independently of this setting.
+Manual `check_diag()` works independently of this setting.
 
 ## Advanced
 

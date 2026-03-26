@@ -14,6 +14,7 @@
 use core::fmt;
 use embedded_hal::i2c::I2c;
 
+use crate::DeviceStatus;
 use crate::types::{Micros, NoDelay};
 
 // ---------------------------------------------------------------------------
@@ -45,7 +46,7 @@ pub enum Error<E> {
     InvalidManufacturerId(u16),
 
     /// The device version register does not match the expected value for the
-    /// selected [`DeviceVariant`](crate::DeviceVariant).
+    /// selected [`DeviceVariant`](DeviceVariant).
     #[error("device version mismatch: expected 0x{expected:02X}, got 0x{got:02X}")]
     VersionMismatch {
         /// The version byte the driver expected.
@@ -128,16 +129,16 @@ pub enum Error<E> {
     ///
     /// The device's `CONV_STATUS.DIAG_FAIL` flag was set, indicating an
     /// internal fault (VCC undervoltage, oscillator error, OTP CRC error,
-    /// or INT pin error). The [`DeviceStatus`](crate::DeviceStatus) carries
+    /// or INT pin error). The [`DeviceStatus`](DeviceStatus) carries
     /// the specific fault flags.
     ///
     /// This error is only returned when
-    /// [`diagnostics_enabled(true)`](crate::ConfigBuilder::diagnostics_enabled)
+    /// [`diag_enabled(true)`](crate::ConfigBuilder::diag_enabled)
     /// is set in the configuration. Use
     /// [`ignore_diag_fail(true)`](crate::ConfigBuilder::ignore_diag_fail) to
     /// suppress this error in noisy environments.
     #[error("sensor diagnostic failure: {0:?}")]
-    DiagnosticFailure(crate::DeviceStatus),
+    DiagnosticFailure(DeviceStatus),
 }
 
 // ---------------------------------------------------------------------------

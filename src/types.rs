@@ -421,7 +421,7 @@ impl DeviceStatus {
 
     /// Parses a raw `DEVICE_STATUS` register byte into structured flags.
     #[inline]
-    pub const fn from_reg(register: u8) -> Self {
+    pub const fn from_register(register: u8) -> Self {
         Self {
             vcc_undervoltage: (register >> DEVICE_STATUS_VCC_UV_BIT) & 1 != 0,
             otp_crc_error: (register >> DEVICE_STATUS_OTP_CRC_BIT) & 1 != 0,
@@ -474,7 +474,7 @@ impl ConversionStatus {
 
     /// Parses a raw `CONV_STATUS` register byte into structured fields.
     #[inline]
-    pub const fn from_reg(register: u8) -> Self {
+    pub const fn from_register(register: u8) -> Self {
         Self {
             set_count: (register >> CONV_STATUS_SET_COUNT_SHIFT) & CONV_STATUS_SET_COUNT_MASK,
             power_on_reset: (register >> CONV_STATUS_POR_BIT) & 1 != 0,
@@ -761,7 +761,7 @@ mod tests {
 
     #[test]
     fn device_status_all_clear() {
-        let s = DeviceStatus::from_reg(0x00);
+        let s = DeviceStatus::from_register(0x00);
         assert!(!s.vcc_undervoltage);
         assert!(!s.otp_crc_error);
         assert!(!s.int_error);
@@ -771,7 +771,7 @@ mod tests {
 
     #[test]
     fn device_status_all_set() {
-        let s = DeviceStatus::from_reg(0x1F);
+        let s = DeviceStatus::from_register(0x1F);
         assert!(s.vcc_undervoltage);
         assert!(s.otp_crc_error);
         assert!(s.int_error);
@@ -781,26 +781,26 @@ mod tests {
 
     #[test]
     fn device_status_individual_bits() {
-        let s = DeviceStatus::from_reg(0b0000_0001);
+        let s = DeviceStatus::from_register(0b0000_0001);
         assert!(s.vcc_undervoltage);
         assert!(!s.otp_crc_error);
 
-        let s = DeviceStatus::from_reg(0b0000_0010);
+        let s = DeviceStatus::from_register(0b0000_0010);
         assert!(!s.vcc_undervoltage);
         assert!(s.otp_crc_error);
 
-        let s = DeviceStatus::from_reg(0b0000_0100);
+        let s = DeviceStatus::from_register(0b0000_0100);
         assert!(s.int_error);
         assert!(!s.oscillator_error);
 
-        let s = DeviceStatus::from_reg(0b0000_1000);
+        let s = DeviceStatus::from_register(0b0000_1000);
         assert!(!s.int_error);
         assert!(s.oscillator_error);
     }
 
     #[test]
     fn device_status_int_pin_active() {
-        let s = DeviceStatus::from_reg(0b0001_0000);
+        let s = DeviceStatus::from_register(0b0001_0000);
         assert!(s.int_pin_active);
         assert!(s.is_ok()); // INT is not a fault
     }
@@ -809,7 +809,7 @@ mod tests {
 
     #[test]
     fn conv_status_all_clear() {
-        let s = ConversionStatus::from_reg(0x00);
+        let s = ConversionStatus::from_register(0x00);
         assert_eq!(s.set_count, 0);
         assert!(!s.power_on_reset);
         assert!(!s.diag_fail);
@@ -819,7 +819,7 @@ mod tests {
     #[test]
     fn conv_status_set_count() {
         // set_count occupies bits [7:5] — value 5 = 0b101 << 5 = 0xA0
-        let s = ConversionStatus::from_reg(0b1010_0000);
+        let s = ConversionStatus::from_register(0b1010_0000);
         assert_eq!(s.set_count, 5);
         assert!(!s.power_on_reset);
     }
@@ -827,14 +827,14 @@ mod tests {
     #[test]
     fn conv_status_set_count_max() {
         // 7 = 0b111 << 5 = 0xE0
-        let s = ConversionStatus::from_reg(0b1110_0000);
+        let s = ConversionStatus::from_register(0b1110_0000);
         assert_eq!(s.set_count, 7);
     }
 
     #[test]
     fn conv_status_power_on_reset() {
         // POR = bit 4 = 0x10
-        let s = ConversionStatus::from_reg(0b0001_0000);
+        let s = ConversionStatus::from_register(0b0001_0000);
         assert_eq!(s.set_count, 0);
         assert!(s.power_on_reset);
         assert!(!s.diag_fail);
@@ -844,7 +844,7 @@ mod tests {
     #[test]
     fn conv_status_diag_fail() {
         // DIAG_STATUS = bit 1 = 0x02
-        let s = ConversionStatus::from_reg(0b0000_0010);
+        let s = ConversionStatus::from_register(0b0000_0010);
         assert!(s.diag_fail);
         assert!(!s.result_ready);
     }
@@ -852,7 +852,7 @@ mod tests {
     #[test]
     fn conv_status_result_ready() {
         // RESULT_STATUS = bit 0 = 0x01
-        let s = ConversionStatus::from_reg(0b0000_0001);
+        let s = ConversionStatus::from_register(0b0000_0001);
         assert!(s.result_ready);
         assert!(!s.diag_fail);
     }
@@ -861,7 +861,7 @@ mod tests {
     fn conv_status_all_flags() {
         // SET_COUNT=7 (bits [7:5]) | POR (bit 4) | DIAG (bit 1) | RESULT (bit 0)
         // = 0b1110_0000 | 0b0001_0000 | 0b0000_0010 | 0b0000_0001 = 0xF3
-        let s = ConversionStatus::from_reg(0b1111_0011);
+        let s = ConversionStatus::from_register(0b1111_0011);
         assert_eq!(s.set_count, 7);
         assert!(s.power_on_reset);
         assert!(s.diag_fail);

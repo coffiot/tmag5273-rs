@@ -202,7 +202,7 @@ pub(crate) const X_MSB_RESULT: u8 = 0x12;
 // ---------------------------------------------------------------------------
 pub(crate) const CONV_STATUS: u8 = 0x18;
 
-// CONV_STATUS field masks live in types.rs (ConversionStatus::from_reg)
+// CONV_STATUS field masks live in types.rs (ConversionStatus::from_register)
 pub(crate) const RESULT_STATUS_MASK: u8 = 0b0000_0001;
 pub(crate) const RESULT_STATUS_SHIFT: u8 = 0;
 
@@ -223,7 +223,7 @@ pub(crate) const MAGNITUDE_RESULT: u8 = 0x1B;
 // ---------------------------------------------------------------------------
 pub(crate) const DEVICE_STATUS: u8 = 0x1C;
 
-// DEVICE_STATUS field masks live in types.rs (DeviceStatus::from_reg)
+// DEVICE_STATUS field masks live in types.rs (DeviceStatus::from_register)
 
 // ===========================================================================
 // Tests
@@ -512,7 +512,7 @@ mod tests {
 
     // CONV_STATUS field masks (SET_COUNT, POR, DIAG_STATUS) and
     // DEVICE_STATUS field masks (INTB_RB, OSC_ER, INT_ER, OTP_CRC_ER, VCC_UV_ER)
-    // are tested in types.rs via ConversionStatus::from_reg() and DeviceStatus::from_reg().
+    // are tested in types.rs via ConversionStatus::from_register() and DeviceStatus::from_register().
 
     // -----------------------------------------------------------------------
     // Edge cases

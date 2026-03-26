@@ -332,7 +332,7 @@ impl<I2C: I2c, D: DelayNs> Tmag5273<I2C, Unconfigured, D> {
             temperature_enabled: config.temperature_enabled,
             conversion_average: config.conversion_average,
             read_mode: I2cReadMode::Standard,
-            diag_enabled: config.diagnostics_enabled,
+            diag_enabled: config.diag_enabled,
             ignore_diag_fail: config.ignore_diag_fail,
             delay: self.delay,
             _state: PhantomData,
@@ -479,11 +479,11 @@ impl<I2C: I2c, D: DelayNs> Tmag5273<I2C, Configured, D> {
         if !self.diag_enabled {
             return Ok(());
         }
-        let conv = ConversionStatus::from_reg(conv_raw);
+        let conv = ConversionStatus::from_register(conv_raw);
         if !conv.diag_fail || self.ignore_diag_fail {
             return Ok(());
         }
-        let status = DeviceStatus::from_reg(self.read_register(register::DEVICE_STATUS)?);
+        let status = DeviceStatus::from_register(self.read_register(register::DEVICE_STATUS)?);
         Err(Error::DiagnosticFailure(status))
     }
 
@@ -942,7 +942,7 @@ impl<I2C: I2c, D: DelayNs> Tmag5273<I2C, Configured, D> {
         // Bounded poll — primary loop for NoDelay, safety net for real delays.
         for _ in 0..self.conversion_average.max_polls() {
             let raw = self.read_register(register::CONV_STATUS)?;
-            let status = ConversionStatus::from_reg(raw);
+            let status = ConversionStatus::from_register(raw);
             if status.result_ready {
                 return Ok(status);
             }
@@ -971,7 +971,7 @@ impl<I2C: I2c, D: DelayNs> Tmag5273<I2C, Configured, D> {
     /// Returns [`Error::I2c`] on bus communication failure.
     pub fn read_status(&mut self) -> Result<DeviceStatus, Error<I2C::Error>> {
         let raw = self.read_register(register::DEVICE_STATUS)?;
-        Ok(DeviceStatus::from_reg(raw))
+        Ok(DeviceStatus::from_register(raw))
     }
 
     /// Check sensor diagnostics by reading `CONV_STATUS` and, if needed,
@@ -986,9 +986,9 @@ impl<I2C: I2c, D: DelayNs> Tmag5273<I2C, Configured, D> {
     /// # Errors
     ///
     /// Returns [`Error::I2c`] on bus communication failure.
-    pub fn check_diagnostics(&mut self) -> Result<DeviceStatus, Error<I2C::Error>> {
+    pub fn check_diag(&mut self) -> Result<DeviceStatus, Error<I2C::Error>> {
         let conv_raw = self.read_register(register::CONV_STATUS)?;
-        let conv = ConversionStatus::from_reg(conv_raw);
+        let conv = ConversionStatus::from_register(conv_raw);
         if conv.diag_fail {
             self.read_status()
         } else {
@@ -1704,7 +1704,7 @@ impl<I2C: I2c, D: DelayNs> Tmag5273<I2C, Configured, D> {
     /// Returns [`Error::I2c`] on bus communication failure.
     pub fn read_conversion_status(&mut self) -> Result<ConversionStatus, Error<I2C::Error>> {
         let raw = self.read_register(register::CONV_STATUS)?;
-        Ok(ConversionStatus::from_reg(raw))
+        Ok(ConversionStatus::from_register(raw))
     }
 }
 
@@ -2793,10 +2793,10 @@ mod tests {
         sensor.into_inner().done();
     }
 
-    // -- check_diagnostics (Zephyr-inspired) --------------------------------
+    // -- check_diag (Zephyr-inspired) --------------------------------
 
     #[test]
-    fn check_diagnostics_no_fault() {
+    fn check_diag_no_fault() {
         let address = 0x22u8;
         let mut expectations = init_expectations(address, &default_config());
 
@@ -2809,7 +2809,7 @@ mod tests {
         let config = ConfigBuilder::new().build().unwrap();
         let mut sensor = sensor.init(&config).unwrap();
 
-        let status = sensor.check_diagnostics().unwrap();
+        let status = sensor.check_diag().unwrap();
         assert!(status.is_ok());
         assert_eq!(status, DeviceStatus::default());
 
@@ -2817,7 +2817,7 @@ mod tests {
     }
 
     #[test]
-    fn check_diagnostics_with_fault() {
+    fn check_diag_with_fault() {
         let address = 0x22u8;
         let mut expectations = init_expectations(address, &default_config());
 
@@ -2832,7 +2832,7 @@ mod tests {
         let config = ConfigBuilder::new().build().unwrap();
         let mut sensor = sensor.init(&config).unwrap();
 
-        let status = sensor.check_diagnostics().unwrap();
+        let status = sensor.check_diag().unwrap();
         assert!(!status.is_ok());
         assert!(status.vcc_undervoltage);
         assert!(status.oscillator_error);
