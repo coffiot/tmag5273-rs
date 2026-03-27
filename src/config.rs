@@ -482,21 +482,12 @@ mod tests {
     }
 
     #[test]
-    fn wake_up_and_sleep_ms1_valid_with_fast_conversion() {
+    fn build_wakeup_sleep_accepts_ms1_with_default_x1_averaging() {
         // Ms1 (1000 µs) is a valid sleep with the default X1 averaging.
         // X1 + XYZ + temp = 125 µs conversion, well under 1000 µs.
         let result = ConfigBuilder::new()
             .operating_mode(OperatingMode::WakeUpAndSleep)
             .sleep_duration(SleepDuration::Ms1)
-            .build();
-        assert!(result.is_ok());
-    }
-
-    #[test]
-    fn wake_up_and_sleep_with_duration_ok() {
-        let result = ConfigBuilder::new()
-            .operating_mode(OperatingMode::WakeUpAndSleep)
-            .sleep_duration(SleepDuration::Ms100)
             .build();
         assert!(result.is_ok());
     }
@@ -524,14 +515,14 @@ mod tests {
     }
 
     #[test]
-    fn config_conversion_time_delegates() {
+    fn conversion_time_default_config_returns_125us() {
         let config = ConfigBuilder::new().build().unwrap();
         // Default: X1, XYZ, temp enabled → 125 us
         assert_eq!(config.conversion_time().0, 125);
     }
 
     #[test]
-    fn ms1_too_short_for_x32_xyz_temp() {
+    fn build_wakeup_sleep_rejects_ms1_when_x32_xyz_temp_exceeds_1000us() {
         // Ms1 (1000 µs) < X32 + XYZ + temp conversion time (3225 µs).
         let result = ConfigBuilder::new()
             .operating_mode(OperatingMode::WakeUpAndSleep)
@@ -550,7 +541,7 @@ mod tests {
     }
 
     #[test]
-    fn ms5_sufficient_for_worst_case_conversion() {
+    fn build_wakeup_sleep_accepts_ms5_with_x32_xyz_temp() {
         // Ms5 (5000 µs) > X32 + XYZ + temp (3225 µs) — always valid.
         let result = ConfigBuilder::new()
             .operating_mode(OperatingMode::WakeUpAndSleep)

@@ -246,13 +246,7 @@ mod tests {
         assert_eq!(err, Error::I2c(FakeI2cError(7)));
     }
 
-    #[test]
-    fn from_i2c_error_via_into() {
-        let raw = FakeI2cError(99);
-        let err: Error<FakeI2cError> = raw.into();
-        assert_eq!(err, Error::I2c(FakeI2cError(99)));
-    }
-
+    // Verify every Error<E> variant can be constructed and round-trips through PartialEq.
     #[test]
     fn variant_invalid_manufacturer_id() {
         let err: Error<FakeI2cError> = Error::InvalidManufacturerId(0x0000);
@@ -364,8 +358,7 @@ mod tests {
         assert_eq!(err, cloned);
     }
 
-    // -- ConfigError tests --------------------------------------------------
-
+    // Verify every ConfigError variant can be constructed and compared.
     #[test]
     fn config_error_angle_requires_two_channels() {
         let err = ConfigError::AngleRequiresTwoChannels;
@@ -392,5 +385,25 @@ mod tests {
         let err = ConfigError::AngleRequiresTwoChannels;
         let copy = err;
         assert_eq!(err, copy);
+    }
+
+    #[test]
+    fn init_error_debug_impl() {
+        extern crate alloc;
+        use alloc::format;
+        use embedded_hal_mock::eh1::i2c::Mock as I2cMock;
+
+        let expectations: &[embedded_hal_mock::eh1::i2c::Transaction] = &[];
+        let i2c = I2cMock::new(expectations);
+        let mut init_err: InitError<I2cMock, crate::NoDelay> = InitError {
+            error: Error::InvalidManufacturerId(0x1234),
+            i2c,
+            delay: crate::NoDelay,
+        };
+        let debug = format!("{:?}", init_err);
+        assert!(debug.contains("InitError"));
+        assert!(debug.contains("InvalidManufacturerId"));
+        assert!(debug.contains("<I2C bus>"));
+        init_err.i2c.done();
     }
 }

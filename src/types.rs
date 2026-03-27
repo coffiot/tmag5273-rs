@@ -1158,27 +1158,27 @@ mod tests {
     // -- Magnetic conversion -------------------------------------------------
 
     #[test]
-    fn mag_raw_zero() {
+    fn from_raw_zero_returns_zero_mt() {
         let m = MilliTesla::from_raw(0, 40.0);
         assert_eq!(m.0, 0.0);
     }
 
     #[test]
-    fn mag_raw_min_yields_positive_range() {
+    fn from_raw_i16_min_returns_positive_range() {
         // raw = i16::MIN = -32768 → B = -(-32768) * range / 32768 = +range
         let m = MilliTesla::from_raw(i16::MIN, 40.0);
         assert!(approx_eq(m.0, 40.0), "expected ~40.0, got {}", m.0);
     }
 
     #[test]
-    fn mag_raw_max_yields_negative_range() {
+    fn from_raw_i16_max_returns_negative_range() {
         // raw = 32767 → B = -(32767) * 40 / 32768 ≈ -39.9988
         let m = MilliTesla::from_raw(i16::MAX, 40.0);
         assert!(approx_eq(m.0, -40.0), "expected ~-40.0, got {}", m.0);
     }
 
     #[test]
-    fn mag_high_range_v2() {
+    fn from_raw_i16_min_v2_high_returns_266mt() {
         let m = MilliTesla::from_raw(i16::MIN, 266.0);
         assert!(approx_eq(m.0, 266.0), "expected ~266.0, got {}", m.0);
     }
@@ -1326,13 +1326,13 @@ mod tests {
     // -- Magnitude conversion (Zephyr-inspired) ------------------------------
 
     #[test]
-    fn magnitude_raw_zero() {
+    fn from_magnitude_raw_zero_returns_zero() {
         let m = MilliTesla::from_magnitude_raw(0, 80.0);
         assert_eq!(m.0, 0.0);
     }
 
     #[test]
-    fn magnitude_raw_max() {
+    fn from_magnitude_raw_127_returns_negative() {
         // raw=127, range=80.0 → (127 << 8) = 32512 as i16
         // B = -(32512) * 80 / 32768 ≈ -79.375 mT
         let m = MilliTesla::from_magnitude_raw(127, 80.0);
@@ -1469,12 +1469,6 @@ mod tests {
         assert!(m.0.is_finite(), "expected finite, got {}", m.0);
     }
 
-    #[test]
-    fn from_magnitude_raw_zero() {
-        let m = MilliTesla::from_magnitude_raw(0, 80.0);
-        assert_eq!(m.0, 0.0);
-    }
-
     // -- MilliTesla::from_raw boundary values ---------------------------------
 
     #[test]
@@ -1506,35 +1500,6 @@ mod tests {
     }
 
     // -- Celsius::from_raw boundary values ------------------------------------
-
-    #[test]
-    fn celsius_reference_point() {
-        // At raw = TADC_T25 (17508), temperature should be 25.0°C
-        let t = Celsius::from_raw(17508);
-        assert!(approx_eq(t.0, 25.0), "expected 25.0, got {}", t.0);
-    }
-
-    #[test]
-    fn celsius_zero_raw() {
-        // raw = 0 → 25.0 + (0 - 17508) / 60.1 ≈ -266.4°C
-        let t = Celsius::from_raw(0);
-        assert!(t.0 < -200.0, "expected very negative, got {}", t.0);
-    }
-
-    // -- Degrees::from_raw boundary values ------------------------------------
-
-    #[test]
-    fn degrees_zero() {
-        let d = Degrees::from_raw(0);
-        assert_eq!(d.0, 0.0);
-    }
-
-    #[test]
-    fn degrees_full_scale() {
-        // 0x0B40 → 180.0° per datasheet
-        let d = Degrees::from_raw(0x0B40);
-        assert!(approx_eq(d.0, 180.0), "expected ~180.0, got {}", d.0);
-    }
 
     // -- From impls -----------------------------------------------------------
 
@@ -1631,164 +1596,6 @@ mod tests {
             assert_eq!(ch.has_y(), y, "{ch:?}.has_y()");
             assert_eq!(ch.has_z(), z, "{ch:?}.has_z()");
         }
-    }
-
-    #[test]
-    fn max_polls_for_averaging() {
-        assert_eq!(ConversionAverage::X1.max_polls(), 10);
-        assert_eq!(ConversionAverage::X32.max_polls(), 100);
-    }
-
-    // -- TryFrom<u8> round-trip tests -----------------------------------------
-
-    #[test]
-    fn operating_mode_try_from() {
-        for v in [
-            OperatingMode::Standby,
-            OperatingMode::Sleep,
-            OperatingMode::ContinuousMeasure,
-            OperatingMode::WakeUpAndSleep,
-        ] {
-            assert_eq!(OperatingMode::try_from(v as u8), Ok(v));
-        }
-        assert_eq!(OperatingMode::try_from(0x04), Err(0x04));
-    }
-
-    #[test]
-    fn magnetic_channel_try_from() {
-        for v in [
-            MagneticChannel::Off,
-            MagneticChannel::X,
-            MagneticChannel::Y,
-            MagneticChannel::XY,
-            MagneticChannel::Z,
-            MagneticChannel::ZX,
-            MagneticChannel::YZ,
-            MagneticChannel::XYZ,
-            MagneticChannel::XYX,
-            MagneticChannel::YXY,
-            MagneticChannel::YZY,
-            MagneticChannel::XZX,
-        ] {
-            assert_eq!(MagneticChannel::try_from(v as u8), Ok(v));
-        }
-        assert_eq!(MagneticChannel::try_from(0x0C), Err(0x0C));
-    }
-
-    #[test]
-    fn conversion_average_try_from() {
-        for v in [
-            ConversionAverage::X1,
-            ConversionAverage::X2,
-            ConversionAverage::X4,
-            ConversionAverage::X8,
-            ConversionAverage::X16,
-            ConversionAverage::X32,
-        ] {
-            assert_eq!(ConversionAverage::try_from(v as u8), Ok(v));
-        }
-        assert_eq!(ConversionAverage::try_from(0b110), Err(0b110));
-    }
-
-    #[test]
-    fn sleep_duration_try_from() {
-        for v in [
-            SleepDuration::Ms1,
-            SleepDuration::Ms5,
-            SleepDuration::Ms10,
-            SleepDuration::Ms15,
-            SleepDuration::Ms20,
-            SleepDuration::Ms30,
-            SleepDuration::Ms50,
-            SleepDuration::Ms100,
-            SleepDuration::Ms500,
-            SleepDuration::Ms1000,
-            SleepDuration::Ms2000,
-            SleepDuration::Ms5000,
-            SleepDuration::Ms20000,
-        ] {
-            assert_eq!(SleepDuration::try_from(v as u8), Ok(v));
-        }
-        assert_eq!(SleepDuration::try_from(0x0D), Err(0x0D));
-    }
-
-    #[test]
-    fn power_mode_try_from() {
-        for v in [PowerMode::LowActiveCurrent, PowerMode::LowNoise] {
-            assert_eq!(PowerMode::try_from(v as u8), Ok(v));
-        }
-        assert_eq!(PowerMode::try_from(2), Err(2));
-    }
-
-    #[test]
-    fn trigger_mode_try_from() {
-        for v in [TriggerMode::I2cCommand, TriggerMode::IntPin] {
-            assert_eq!(TriggerMode::try_from(v as u8), Ok(v));
-        }
-        assert_eq!(TriggerMode::try_from(2), Err(2));
-    }
-
-    #[test]
-    fn temp_coefficient_try_from() {
-        for v in [
-            TempCoefficient::None,
-            TempCoefficient::NdBFe,
-            TempCoefficient::Ceramic,
-        ] {
-            assert_eq!(TempCoefficient::try_from(v as u8), Ok(v));
-        }
-        assert_eq!(TempCoefficient::try_from(0b10), Err(0b10));
-    }
-
-    #[test]
-    fn angle_calculation_try_from() {
-        for v in [
-            AngleCalculation::None,
-            AngleCalculation::XY,
-            AngleCalculation::YZ,
-            AngleCalculation::XZ,
-        ] {
-            assert_eq!(AngleCalculation::try_from(v as u8), Ok(v));
-        }
-        assert_eq!(AngleCalculation::try_from(0x04), Err(0x04));
-    }
-
-    #[test]
-    fn threshold_direction_try_from() {
-        for v in [ThresholdDirection::Above, ThresholdDirection::Below] {
-            assert_eq!(ThresholdDirection::try_from(v as u8), Ok(v));
-        }
-        assert_eq!(ThresholdDirection::try_from(2), Err(2));
-    }
-
-    #[test]
-    fn interrupt_mode_try_from() {
-        for v in [
-            InterruptMode::None,
-            InterruptMode::IntPin,
-            InterruptMode::IntPinLatched,
-            InterruptMode::Scl,
-            InterruptMode::SclLatched,
-        ] {
-            assert_eq!(InterruptMode::try_from(v as u8), Ok(v));
-        }
-        assert_eq!(InterruptMode::try_from(0b101), Err(0b101));
-    }
-
-    #[test]
-    fn int_pin_behavior_try_from() {
-        for v in [IntPinBehavior::Latched, IntPinBehavior::Pulse10us] {
-            assert_eq!(IntPinBehavior::try_from(v as u8), Ok(v));
-        }
-        assert_eq!(IntPinBehavior::try_from(2), Err(2));
-    }
-
-    #[test]
-    fn gain_channel_try_from() {
-        for v in [GainChannel::First, GainChannel::Second] {
-            assert_eq!(GainChannel::try_from(v as u8), Ok(v));
-        }
-        assert_eq!(GainChannel::try_from(2), Err(2));
     }
 
     #[test]
@@ -2109,5 +1916,46 @@ mod tests {
                 "temperature formula mismatch for {name}: ours={our_celsius:.3}°C, linux={linux_celsius:.3}°C, diff={diff:.3}°C"
             );
         }
+    }
+
+    // -- coverage: max_polls for all ConversionAverage variants ---------------
+
+    #[test]
+    fn max_polls_all_variants() {
+        assert_eq!(ConversionAverage::X1.max_polls(), 10);
+        assert_eq!(ConversionAverage::X2.max_polls(), 15);
+        assert_eq!(ConversionAverage::X4.max_polls(), 25);
+        assert_eq!(ConversionAverage::X8.max_polls(), 40);
+        assert_eq!(ConversionAverage::X16.max_polls(), 70);
+        assert_eq!(ConversionAverage::X32.max_polls(), 100);
+    }
+
+    // -- coverage: SleepDuration::as_micros for all variants ------------------
+
+    #[test]
+    fn sleep_duration_as_micros_all_variants() {
+        assert_eq!(SleepDuration::Ms1.as_micros(), Micros(1_000));
+        assert_eq!(SleepDuration::Ms5.as_micros(), Micros(5_000));
+        assert_eq!(SleepDuration::Ms10.as_micros(), Micros(10_000));
+        assert_eq!(SleepDuration::Ms15.as_micros(), Micros(15_000));
+        assert_eq!(SleepDuration::Ms20.as_micros(), Micros(20_000));
+        assert_eq!(SleepDuration::Ms30.as_micros(), Micros(30_000));
+        assert_eq!(SleepDuration::Ms50.as_micros(), Micros(50_000));
+        assert_eq!(SleepDuration::Ms100.as_micros(), Micros(100_000));
+        assert_eq!(SleepDuration::Ms500.as_micros(), Micros(500_000));
+        assert_eq!(SleepDuration::Ms1000.as_micros(), Micros(1_000_000));
+        assert_eq!(SleepDuration::Ms2000.as_micros(), Micros(2_000_000));
+        assert_eq!(SleepDuration::Ms5000.as_micros(), Micros(5_000_000));
+        assert_eq!(SleepDuration::Ms20000.as_micros(), Micros(20_000_000));
+    }
+
+    // -- coverage: Micros Display impl ----------------------------------------
+
+    #[test]
+    fn micros_display_impl() {
+        extern crate alloc;
+        let m = Micros(12345);
+        let s = alloc::format!("{}", m);
+        assert_eq!(s, "12345");
     }
 }

@@ -36,7 +36,7 @@ RESET := \033[0m
 # --------------------------------------------------------------------------- #
 
 .PHONY: help test test-all test-crc test-defmt test-minimal lint check check-hil check-size check-all doc \
-        hil-test hil-build size clean
+        coverage hil-test hil-build size clean
 
 # --------------------------------------------------------------------------- #
 #	Library targets (no hardware)
@@ -86,6 +86,14 @@ check-all: ## Run all compilation checks (driver + HIL + size)
 
 doc: ## Build docs locally with feature annotations
 	cargo doc --all-features --open
+
+coverage: ## Generate test coverage report (lcov + HTML)
+	@mkdir -p coverage
+	cargo llvm-cov --all-features --lcov --output-path coverage/lcov.info
+	cargo llvm-cov --all-features --html --output-dir coverage/html
+	@printf "\n$(BOLD)Coverage report:$(RESET)\n"
+	@printf "  lcov:  coverage/lcov.info\n"
+	@printf "  HTML:  coverage/html/html/index.html\n\n"
 
 size: ## Report .text size per feature combo (requires esp toolchain)
 	@$(ESP_ENV) \

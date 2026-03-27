@@ -4,6 +4,7 @@
 Cargo.lock
 dist/
 build/
+coverage/
 
 # IDE and editor files
 .vscode/

@@ -1962,8 +1962,10 @@ mod tests {
     use super::*;
     use crate::config::{CalibrationConfig, ConfigBuilder, InterruptConfig, ThresholdConfig};
     use crate::types::{
-        Degrees, GainChannel, IntPinBehavior, InterruptMode, MilliTesla, ThresholdDirection,
+        AngleCalculation, ConversionAverage, MagneticChannel, OperatingMode, PowerMode, Range,
+        SleepDuration, TempCoefficient, TriggerMode,
     };
+    use crate::types::{Degrees, GainChannel, IntPinBehavior, InterruptMode, ThresholdDirection};
     use embedded_hal_mock::eh1::delay::{CheckedDelay, Transaction as DelayTransaction};
     use embedded_hal_mock::eh1::i2c::{Mock as I2cMock, Transaction as I2cTransaction};
 
@@ -2400,9 +2402,6 @@ mod tests {
 
     #[test]
     fn set_interrupt_all_modes() {
-        use crate::config::InterruptConfig;
-        use crate::types::{IntPinBehavior, InterruptMode};
-
         let modes = [
             (InterruptMode::None, 0b000),
             (InterruptMode::IntPin, 0b001),
@@ -3017,7 +3016,7 @@ mod tests {
 
     #[test]
     #[cfg(not(feature = "crc"))]
-    fn diagnostics_halt_fault_returns_error() {
+    fn read_magnetic_diagnostics_halt_returns_error_on_fault() {
         let address = 0x22u8;
         let config = ConfigBuilder::new()
             .diagnostics(Diagnostics::Halt)
@@ -3045,7 +3044,7 @@ mod tests {
 
     #[test]
     #[cfg(not(feature = "crc"))]
-    fn diagnostics_halt_no_fault_succeeds() {
+    fn read_magnetic_diagnostics_halt_succeeds_without_fault() {
         let address = 0x22u8;
         let config = ConfigBuilder::new()
             .diagnostics(Diagnostics::Halt)
@@ -3066,7 +3065,7 @@ mod tests {
 
     #[test]
     #[cfg(not(feature = "crc"))]
-    fn diagnostics_warn_fault_succeeds() {
+    fn read_magnetic_diagnostics_warn_succeeds_on_fault() {
         let address = 0x22u8;
         let config = ConfigBuilder::new()
             .diagnostics(Diagnostics::Warn)
@@ -3089,7 +3088,7 @@ mod tests {
 
     #[test]
     #[cfg(not(feature = "crc"))]
-    fn diagnostics_ignore_fault_succeeds() {
+    fn read_magnetic_diagnostics_ignore_succeeds_on_fault() {
         let address = 0x22u8;
         let config = ConfigBuilder::new()
             .diagnostics(Diagnostics::Ignore)
@@ -3111,7 +3110,7 @@ mod tests {
 
     #[test]
     #[cfg(not(feature = "crc"))]
-    fn diagnostics_off_no_extra_read() {
+    fn read_magnetic_diagnostics_off_skips_conv_status_byte() {
         let address = 0x22u8;
         let config = ConfigBuilder::new()
             .diagnostics(Diagnostics::Off)
@@ -4110,5 +4109,342 @@ mod tests {
         let (mut i2c, mut delay) = sensor.into_parts();
         i2c.done();
         delay.done();
+    }
+
+    // -- coverage: getter round-trips ----------------------------------------
+    // Each test inits a sensor with default config, mocks one register read,
+    // and verifies the getter returns the expected decoded value.
+
+    macro_rules! getter_test {
+        ($name:ident, $getter:ident, $reg:expr, $raw:expr, $expected:expr) => {
+            #[test]
+            fn $name() {
+                let address = 0x22u8;
+                let mut expectations = init_expectations(address, &default_config());
+                expectations.push(I2cTransaction::write_read(address, vec![$reg], vec![$raw]));
+                let i2c = I2cMock::new(&expectations);
+                let sensor = Tmag5273::new(i2c, DeviceVariant::B1);
+                let mut sensor = sensor.init(&default_config()).unwrap();
+                assert_eq!(sensor.$getter().unwrap(), $expected);
+                sensor.into_inner().done();
+            }
+        };
+    }
+
+    // DEVICE_CONFIG_1 (0x00) getters
+    getter_test!(
+        get_temp_coefficient_reads_ndbfe,
+        get_temp_coefficient,
+        0x00,
+        0b0010_0000, // MAG_TEMPCO = 1 (NdBFe)
+        TempCoefficient::NdBFe
+    );
+
+    getter_test!(
+        get_conversion_average_reads_x16,
+        get_conversion_average,
+        0x00,
+        0b0001_0000, // CONV_AVG = 0b100 (X16)
+        ConversionAverage::X16
+    );
+
+    // DEVICE_CONFIG_2 (0x01) getters
+    getter_test!(
+        get_power_mode_reads_low_noise,
+        get_power_mode,
+        0x01,
+        0b0001_0000, // LP_LN = 1
+        PowerMode::LowNoise
+    );
+
+    getter_test!(
+        get_trigger_mode_reads_int_pin,
+        get_trigger_mode,
+        0x01,
+        0b0000_0100, // TRIGGER_MODE = 1
+        TriggerMode::IntPin
+    );
+
+    #[test]
+    fn get_glitch_filter_enabled_when_bit_clear() {
+        let address = 0x22u8;
+        let mut expectations = init_expectations(address, &default_config());
+        // I2C_GLITCH_FILTER bit 3 = 0 means filter ENABLED
+        expectations.push(I2cTransaction::write_read(address, vec![0x01], vec![0x00]));
+        let i2c = I2cMock::new(&expectations);
+        let sensor = Tmag5273::new(i2c, DeviceVariant::B1);
+        let mut sensor = sensor.init(&default_config()).unwrap();
+        assert!(sensor.get_glitch_filter().unwrap());
+        sensor.into_inner().done();
+    }
+
+    #[test]
+    fn get_glitch_filter_disabled_when_bit_set() {
+        let address = 0x22u8;
+        let mut expectations = init_expectations(address, &default_config());
+        // I2C_GLITCH_FILTER bit 3 = 1 means filter DISABLED
+        expectations.push(I2cTransaction::write_read(address, vec![0x01], vec![0x08]));
+        let i2c = I2cMock::new(&expectations);
+        let sensor = Tmag5273::new(i2c, DeviceVariant::B1);
+        let mut sensor = sensor.init(&default_config()).unwrap();
+        assert!(!sensor.get_glitch_filter().unwrap());
+        sensor.into_inner().done();
+    }
+
+    #[test]
+    fn get_hysteresis_reads_3bit_value() {
+        let address = 0x22u8;
+        let mut expectations = init_expectations(address, &default_config());
+        // THR_HYST = 0b101 (5) in bits [7:5]
+        expectations.push(I2cTransaction::write_read(
+            address,
+            vec![0x01],
+            vec![0b1010_0000],
+        ));
+        let i2c = I2cMock::new(&expectations);
+        let sensor = Tmag5273::new(i2c, DeviceVariant::B1);
+        let mut sensor = sensor.init(&default_config()).unwrap();
+        assert_eq!(sensor.get_hysteresis().unwrap(), 5);
+        sensor.into_inner().done();
+    }
+
+    // SENSOR_CONFIG_1 (0x02) getters
+    getter_test!(
+        get_sleep_duration_reads_ms10,
+        get_sleep_duration,
+        0x02,
+        0b0000_0010, // SLEEPTIME = 0x2 (Ms10)
+        SleepDuration::Ms10
+    );
+
+    // SENSOR_CONFIG_2 (0x03) getters
+    getter_test!(
+        get_angle_calculation_reads_xy,
+        get_angle_calculation,
+        0x03,
+        0b0000_0100, // ANGLE_EN = 1 (XY)
+        AngleCalculation::XY
+    );
+
+    getter_test!(
+        get_xy_range_reads_low,
+        get_xy_range,
+        0x03,
+        0b0000_0000, // X_Y_RANGE = 0 (Low)
+        Range::Low
+    );
+
+    getter_test!(
+        get_z_range_reads_high,
+        get_z_range,
+        0x03,
+        0b0000_0001, // Z_RANGE = 1 (High)
+        Range::High
+    );
+
+    getter_test!(
+        get_threshold_direction_reads_below,
+        get_threshold_direction,
+        0x03,
+        0b0010_0000, // MAG_THR_DIR = 1 (Below)
+        ThresholdDirection::Below
+    );
+
+    getter_test!(
+        get_gain_channel_reads_second,
+        get_gain_channel,
+        0x03,
+        0b0001_0000, // MAG_GAIN_CH = 1 (Second)
+        GainChannel::Second
+    );
+
+    // T_CONFIG (0x07) getters
+    #[test]
+    fn get_temperature_enabled_true() {
+        let address = 0x22u8;
+        let mut expectations = init_expectations(address, &default_config());
+        expectations.push(I2cTransaction::write_read(address, vec![0x07], vec![0x01]));
+        let i2c = I2cMock::new(&expectations);
+        let sensor = Tmag5273::new(i2c, DeviceVariant::B1);
+        let mut sensor = sensor.init(&default_config()).unwrap();
+        assert!(sensor.get_temperature_enabled().unwrap());
+        sensor.into_inner().done();
+    }
+
+    #[test]
+    fn get_temperature_enabled_false() {
+        let address = 0x22u8;
+        let mut expectations = init_expectations(address, &default_config());
+        expectations.push(I2cTransaction::write_read(address, vec![0x07], vec![0x00]));
+        let i2c = I2cMock::new(&expectations);
+        let sensor = Tmag5273::new(i2c, DeviceVariant::B1);
+        let mut sensor = sensor.init(&default_config()).unwrap();
+        assert!(!sensor.get_temperature_enabled().unwrap());
+        sensor.into_inner().done();
+    }
+
+    // INT_CONFIG_1 (0x08) getters
+    getter_test!(
+        get_interrupt_mode_reads_int_only,
+        get_interrupt_mode,
+        0x08,
+        0b0000_0100, // INT_MODE = 1 (IntOnly)
+        InterruptMode::IntPin
+    );
+
+    #[test]
+    fn get_interrupt_on_conversion_true() {
+        let address = 0x22u8;
+        let mut expectations = init_expectations(address, &default_config());
+        // RSLT_INT bit 7 = 1
+        expectations.push(I2cTransaction::write_read(address, vec![0x08], vec![0x80]));
+        let i2c = I2cMock::new(&expectations);
+        let sensor = Tmag5273::new(i2c, DeviceVariant::B1);
+        let mut sensor = sensor.init(&default_config()).unwrap();
+        assert!(sensor.get_interrupt_on_conversion().unwrap());
+        sensor.into_inner().done();
+    }
+
+    #[test]
+    fn get_interrupt_on_threshold_true() {
+        let address = 0x22u8;
+        let mut expectations = init_expectations(address, &default_config());
+        // THRESHOLD_INT bit 6 = 1
+        expectations.push(I2cTransaction::write_read(address, vec![0x08], vec![0x40]));
+        let i2c = I2cMock::new(&expectations);
+        let sensor = Tmag5273::new(i2c, DeviceVariant::B1);
+        let mut sensor = sensor.init(&default_config()).unwrap();
+        assert!(sensor.get_interrupt_on_threshold().unwrap());
+        sensor.into_inner().done();
+    }
+
+    #[test]
+    fn get_interrupt_pin_state_pulsed() {
+        let address = 0x22u8;
+        let mut expectations = init_expectations(address, &default_config());
+        // INT_STATE bit 5 = 1 (pulsed)
+        expectations.push(I2cTransaction::write_read(address, vec![0x08], vec![0x20]));
+        let i2c = I2cMock::new(&expectations);
+        let sensor = Tmag5273::new(i2c, DeviceVariant::B1);
+        let mut sensor = sensor.init(&default_config()).unwrap();
+        assert!(sensor.get_interrupt_pin_state().unwrap());
+        sensor.into_inner().done();
+    }
+
+    // Threshold getters (0x04, 0x05, 0x06)
+    #[test]
+    fn get_xyz_thresholds_signed() {
+        let address = 0x22u8;
+        let mut expectations = init_expectations(address, &default_config());
+        expectations.push(I2cTransaction::write_read(address, vec![0x04], vec![0x7F]));
+        expectations.push(I2cTransaction::write_read(address, vec![0x05], vec![0x80])); // -128
+        expectations.push(I2cTransaction::write_read(address, vec![0x06], vec![0x00]));
+        let i2c = I2cMock::new(&expectations);
+        let sensor = Tmag5273::new(i2c, DeviceVariant::B1);
+        let mut sensor = sensor.init(&default_config()).unwrap();
+        assert_eq!(sensor.get_x_threshold().unwrap(), 127);
+        assert_eq!(sensor.get_y_threshold().unwrap(), -128);
+        assert_eq!(sensor.get_z_threshold().unwrap(), 0);
+        sensor.into_inner().done();
+    }
+
+    // Gain/offset getters (0x09, 0x0A, 0x0B)
+    #[test]
+    fn get_magnetic_gain_and_offsets() {
+        let address = 0x22u8;
+        let mut expectations = init_expectations(address, &default_config());
+        expectations.push(I2cTransaction::write_read(address, vec![0x09], vec![0xAB]));
+        expectations.push(I2cTransaction::write_read(address, vec![0x0A], vec![0xFF])); // -1
+        expectations.push(I2cTransaction::write_read(address, vec![0x0B], vec![0x55]));
+        let i2c = I2cMock::new(&expectations);
+        let sensor = Tmag5273::new(i2c, DeviceVariant::B1);
+        let mut sensor = sensor.init(&default_config()).unwrap();
+        assert_eq!(sensor.get_magnetic_gain().unwrap(), 0xAB);
+        assert_eq!(sensor.get_magnetic_offset_1().unwrap(), -1);
+        assert_eq!(sensor.get_magnetic_offset_2().unwrap(), 0x55);
+        sensor.into_inner().done();
+    }
+
+    // is_conversion_complete
+    #[test]
+    fn is_conversion_complete_returns_true_when_set() {
+        let address = 0x22u8;
+        let mut expectations = init_expectations(address, &default_config());
+        // CONV_STATUS with RESULT_STATUS bit set
+        expectations.push(I2cTransaction::write_read(address, vec![0x18], vec![0x01]));
+        let i2c = I2cMock::new(&expectations);
+        let sensor = Tmag5273::new(i2c, DeviceVariant::B1);
+        let mut sensor = sensor.init(&default_config()).unwrap();
+        assert!(sensor.is_conversion_complete().unwrap());
+        sensor.into_inner().done();
+    }
+
+    #[test]
+    fn is_conversion_complete_returns_false_when_clear() {
+        let address = 0x22u8;
+        let mut expectations = init_expectations(address, &default_config());
+        expectations.push(I2cTransaction::write_read(address, vec![0x18], vec![0x00]));
+        let i2c = I2cMock::new(&expectations);
+        let sensor = Tmag5273::new(i2c, DeviceVariant::B1);
+        let mut sensor = sensor.init(&default_config()).unwrap();
+        assert!(!sensor.is_conversion_complete().unwrap());
+        sensor.into_inner().done();
+    }
+
+    // conversion_time
+    #[test]
+    fn conversion_time_returns_expected_micros() {
+        let address = 0x22u8;
+        let expectations = init_expectations(address, &default_config());
+        let i2c = I2cMock::new(&expectations);
+        let sensor = Tmag5273::new(i2c, DeviceVariant::B1);
+        let sensor = sensor.init(&default_config()).unwrap();
+        let ct = sensor.conversion_time();
+        // Default: X1 averaging, XYZ+temp → should be > 0
+        assert!(u32::from(ct) > 0);
+        sensor.into_inner().done();
+    }
+
+    // Debug impl
+    #[test]
+    fn debug_impl_contains_variant_and_address() {
+        let address = 0x22u8;
+        let expectations = init_expectations(address, &default_config());
+        let i2c = I2cMock::new(&expectations);
+        let sensor = Tmag5273::new(i2c, DeviceVariant::B1);
+        let sensor = sensor.init(&default_config()).unwrap();
+        let debug = alloc::format!("{:?}", sensor);
+        assert!(debug.contains("Tmag5273"));
+        assert!(debug.contains("B1"));
+        sensor.into_inner().done();
+    }
+
+    // ConfigBuilder::default()
+    #[test]
+    fn config_builder_default_equals_new() {
+        let from_default = ConfigBuilder::default().build().unwrap();
+        let from_new = ConfigBuilder::new().build().unwrap();
+        assert_eq!(
+            from_default.to_register_writes(),
+            from_new.to_register_writes()
+        );
+    }
+
+    // ConfigBuilder setter coverage — exercise setters that aren't used elsewhere
+    #[test]
+    fn config_builder_all_setters() {
+        let config = ConfigBuilder::new()
+            .xy_range(Range::Low)
+            .z_range(Range::Low)
+            .power_mode(PowerMode::LowNoise)
+            .trigger_mode(TriggerMode::IntPin)
+            .glitch_filter(false)
+            .temp_coefficient(TempCoefficient::Ceramic)
+            .diagnostics(crate::Diagnostics::Warn)
+            .build()
+            .unwrap();
+        // Just verify it builds without error — the register values are
+        // tested by the getter round-trip tests above.
+        let _ = config.to_register_writes();
     }
 }
