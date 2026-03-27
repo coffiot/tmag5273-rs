@@ -35,7 +35,7 @@ RESET := \033[0m
 #	Phony declarations
 # --------------------------------------------------------------------------- #
 
-.PHONY: help test test-all test-crc test-defmt lint check doc \
+.PHONY: help test test-all test-crc test-defmt test-minimal lint check check-hil check-size check-all doc \
         hil-test hil-build size clean
 
 # --------------------------------------------------------------------------- #
@@ -45,25 +45,47 @@ RESET := \033[0m
 ##@ Library (host — no hardware required)
 
 test: ## Run unit tests (default features, ~185 tests)
-	cargo test -p tmag5273
+	cargo test
 
 test-all: ## Run unit tests with all features (~190 tests)
-	cargo test -p tmag5273 --all-features
+	cargo test --all-features
 
 test-crc: ## Run unit tests with CRC feature (~190 tests)
-	cargo test -p tmag5273 --features crc
+	cargo test --features crc
 
-test-defmt: ## Verify feature gates are additive (no default features)
-	cargo test -p tmag5273 --no-default-features
+test-defmt: ## Run unit tests with defmt feature
+	cargo test --features defmt
+
+test-minimal: ## Verify feature gates are additive (no default features)
+	cargo test --no-default-features
 
 lint: ## Run clippy on the library crate
-	cargo clippy -p tmag5273 --all-features -- -D warnings
+	cargo clippy --all-features -- -D warnings
 
-check: ## Verify bare-metal compilation (no std/alloc)
-	cargo check -p tmag5273 --target thumbv7em-none-eabihf
+check: ## Verify driver compiles on ARM, RISC-V and Xtensa (no std/alloc)
+	@printf "$(BOLD)Checking driver (thumbv7em-none-eabihf)...$(RESET)\n"
+	cargo check --target thumbv7em-none-eabihf
+	@printf "$(BOLD)Checking driver (riscv32imc-unknown-none-elf)...$(RESET)\n"
+	cargo check --target riscv32imc-unknown-none-elf
+	@printf "$(BOLD)Checking driver (xtensa-esp32s3-none-elf)...$(RESET)\n"
+	@$(ESP_ENV) $(CARGO_ESP) check --target xtensa-esp32s3-none-elf -Zbuild-std=core
+
+check-hil: ## Verify HIL crate compiles (requires esp toolchain)
+	@$(ESP_ENV) ( cd $(HIL_DIR) && $(CARGO_ESP) check --release )
+
+check-size: ## Verify size harness compiles (requires esp toolchain)
+	@$(ESP_ENV) ( cd $(SIZE_DIR) && $(CARGO_ESP) check --release )
+
+check-all: ## Run all compilation checks (driver + HIL + size)
+	@$(MAKE) check
+	@printf "$(BOLD)Checking HIL (xtensa-esp32s3-none-elf)...$(RESET)\n"
+	@$(MAKE) check-hil
+	@printf "$(BOLD)Checking size harness (xtensa-esp32s3-none-elf)...$(RESET)\n"
+	@$(MAKE) check-size
+	@printf "\n$(BOLD)All checks passed.$(RESET)\n"
 
 doc: ## Build docs locally with feature annotations
-	cargo doc -p tmag5273 --all-features --open
+	cargo doc --all-features --open
 
 size: ## Report .text size per feature combo (requires esp toolchain)
 	@$(ESP_ENV) \
