@@ -1106,13 +1106,15 @@ impl<I2C: I2c, D: DelayNs> Tmag5273<I2C, Configured, D> {
         );
         self.write_register(register::T_CONFIG, t_new)?;
 
-        // Hysteresis: DEVICE_CONFIG_2[7:5] — read-modify-write.
+        // Threshold hysteresis: DEVICE_CONFIG_2[7:5] — read-modify-write.
+        // THR_HYST is a mode selector (0=Signed, 1=SymmetricBand), NOT a
+        // hysteresis magnitude.  Values 2–7 are reserved per SBASAI4 Table 8-4.
         let dc2 = self.read_register(register::DEVICE_CONFIG_2)?;
         let dc2 = register::insert(
             dc2,
             register::THR_HYST_MASK,
             register::THR_HYST_SHIFT,
-            config.hysteresis & 0x07, // clamp to 3-bit
+            config.hysteresis as u8,
         );
         self.write_register(register::DEVICE_CONFIG_2, dc2)?;
 
@@ -1487,14 +1489,15 @@ impl<I2C: I2c, D: DelayNs> Tmag5273<I2C, Configured, D> {
         ) == 0)
     }
 
-    /// Read the threshold hysteresis value from register `DEVICE_CONFIG_2`.
+    /// Read the Threshold hysteresis from register `DEVICE_CONFIG_2`.
     ///
-    /// Returns the raw 3-bit hysteresis field (0--7).
+    /// Returns the raw `THR_HYST` field value.  Only 0 and 1 are valid
+    /// per the TI datasheet; values 2–7 are reserved.
     ///
     /// # Errors
     ///
     /// Returns [`Error::I2c`] on bus communication failure.
-    pub fn get_hysteresis(&mut self) -> Result<u8, Error<I2C::Error>> {
+    pub fn get_threshold_hysteresis_raw(&mut self) -> Result<u8, Error<I2C::Error>> {
         let raw = self.read_register(register::DEVICE_CONFIG_2)?;
         Ok(register::extract(
             raw,
@@ -2344,9 +2347,9 @@ mod tests {
         // T_CONFIG read-modify-write: preserve T_CH_EN bit (0x01 from init)
         expectations.push(I2cTransaction::write_read(address, vec![0x07], vec![0x01]));
         expectations.push(I2cTransaction::write(address, vec![0x07, 0x07])); // temp=3 << 1 | T_CH_EN=1
-        // DEVICE_CONFIG_2 read-modify-write: hysteresis=2 in bits [7:5]
+        // DEVICE_CONFIG_2 read-modify-write: threshold_hysteresis=SymmetricBand(1) in bits [7:5]
         expectations.push(I2cTransaction::write_read(address, vec![0x01], vec![0x02]));
-        expectations.push(I2cTransaction::write(address, vec![0x01, 0x42])); // 0x02 | (2 << 5) = 0x42
+        expectations.push(I2cTransaction::write(address, vec![0x01, 0x22])); // 0x02 | (1 << 5) = 0x22
         // SENSOR_CONFIG_2 read-modify-write: direction=Below(1) in bit [5]
         expectations.push(I2cTransaction::write_read(address, vec![0x03], vec![0x03]));
         expectations.push(I2cTransaction::write(address, vec![0x03, 0x23])); // 0x03 | (1 << 5) = 0x23
@@ -2362,7 +2365,7 @@ mod tests {
                 y: -5,
                 z: 10,
                 temperature: 3,
-                hysteresis: 2,
+                hysteresis: crate::config::ThresholdHysteresis::SymmetricBand,
                 direction: ThresholdDirection::Below,
             })
             .unwrap();
@@ -3362,7 +3365,7 @@ mod tests {
         let address = 0x22u8;
         let mut expectations = init_expectations(address, &default_config());
 
-        // INT_CONFIG_1 full write: threshold INT + Pulse10us + IntPin mode
+        // INT_CONFIG_1 full write: threshold INT + Pulse10us + ThroughInt mode
         // = 0b0110_0100 = 0x64 (same result as original magic value)
         expectations.push(I2cTransaction::write(address, vec![0x08, 0x64]));
 
@@ -4192,19 +4195,19 @@ mod tests {
     }
 
     #[test]
-    fn get_hysteresis_reads_3bit_value() {
+    fn get_threshold_hysteresis_raw_reads_field() {
         let address = 0x22u8;
         let mut expectations = init_expectations(address, &default_config());
-        // THR_HYST = 0b101 (5) in bits [7:5]
+        // THR_HYST = 0b001 (1 = SymmetricBand) in bits [7:5]
         expectations.push(I2cTransaction::write_read(
             address,
             vec![0x01],
-            vec![0b1010_0000],
+            vec![0b0010_0000],
         ));
         let i2c = I2cMock::new(&expectations);
         let sensor = Tmag5273::new(i2c, DeviceVariant::B1);
         let mut sensor = sensor.init(&default_config()).unwrap();
-        assert_eq!(sensor.get_hysteresis().unwrap(), 5);
+        assert_eq!(sensor.get_threshold_hysteresis_raw().unwrap(), 1);
         sensor.into_inner().done();
     }
 

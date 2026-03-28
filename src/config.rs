@@ -372,6 +372,37 @@ impl Config {
 // Threshold configuration
 // ---------------------------------------------------------------------------
 
+/// Threshold hysteresis mode — maps to the `THR_HYST` field in
+/// `DEVICE_CONFIG_2[7:5]`.
+///
+/// **WARNING:** Despite the TI register name suggesting a magnitude,
+/// `THR_HYST` is a **mode selector** with only two valid values.
+/// Values 2–7 are **reserved** in the TMAG5273 datasheet (SBASAI4
+/// Rev B, Table 8-4) and produce undefined hardware behavior
+/// (observed: continuous INT firing regardless of threshold values).
+///
+/// The `MAG_THR_DIR` bit (threshold direction) is **ignored** when
+/// `THR_HYST > 1` according to the datasheet.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[cfg_attr(feature = "defmt", derive(defmt::Format))]
+#[repr(u8)]
+pub enum ThresholdHysteresis {
+    /// `THR_HYST = 0`: Uses the full 8-bit 2's complement value of each
+    /// `x_THR_CONFIG` register as a signed threshold.  Combined with
+    /// `ThresholdDirection`, creates a one-sided limit check.
+    ///
+    /// Example: X_THR = +10, direction = Above → INT fires when X > +10 LSB.
+    Signed = 0,
+
+    /// `THR_HYST = 1`: Uses the 7 LSB bits of each `x_THR_CONFIG` register
+    /// to create two symmetric thresholds of equal magnitude (one positive,
+    /// one negative).  Creates a ±band around zero.
+    ///
+    /// Example: X_THR = 10 → band is [-10, +10] LSB.  With direction = Above,
+    /// INT fires when |X| > 10 LSB (field goes outside the band).
+    SymmetricBand = 1,
+}
+
 /// Per-axis threshold configuration for magnetic field and temperature.
 ///
 /// Threshold values are signed 8-bit integers in sensor-native units.
@@ -389,13 +420,21 @@ pub struct ThresholdConfig {
     pub z: i8,
     /// Temperature threshold in sensor-native units (each LSB ≈ 1 °C).
     pub temperature: i8,
-    /// Hysteresis level (0–7). Higher values widen the dead-band around the
-    /// threshold to reduce false triggers from noise.
+    /// Threshold hysteresis mode (maps to `THR_HYST` register field).
     ///
-    /// Values above 7 are silently clamped to 3 bits (`& 0x07`) when
-    /// written to the device register.
-    pub hysteresis: u8,
+    /// Selects between signed one-sided thresholds
+    /// ([`ThresholdHysteresis::Signed`]) and symmetric ±band thresholds
+    /// ([`ThresholdHysteresis::SymmetricBand`]).
+    ///
+    /// **Only values 0 and 1 are valid.**  The enum enforces this at the
+    /// type level — values 2–7 are reserved and cause undefined hardware
+    /// behavior (continuous INT firing).
+    pub hysteresis: ThresholdHysteresis,
     /// Whether to trigger on field above or below the threshold.
+    ///
+    /// **Note:** This field is ignored by hardware when
+    /// [`hysteresis`](ThresholdConfig::hysteresis) is
+    /// [`SymmetricBand`](ThresholdHysteresis::SymmetricBand).
     pub direction: ThresholdDirection,
 }
 

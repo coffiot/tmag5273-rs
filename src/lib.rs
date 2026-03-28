@@ -113,7 +113,9 @@ mod error;
 mod register;
 mod types;
 
-pub use config::{CalibrationConfig, Config, ConfigBuilder, InterruptConfig, ThresholdConfig};
+pub use config::{
+    CalibrationConfig, Config, ConfigBuilder, InterruptConfig, ThresholdConfig, ThresholdHysteresis,
+};
 pub use device::{Configured, Tmag5273, Unconfigured};
 pub use error::{ConfigError, Error, InitError};
 pub use types::{
