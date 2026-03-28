@@ -183,8 +183,8 @@ impl ConfigBuilder {
     }
 
     /// Set the temperature compensation coefficient.
-    pub const fn temp_coefficient(mut self, coeff: TempCoefficient) -> Self {
-        self.temp_coefficient = coeff;
+    pub const fn temp_coefficient(mut self, coefficient: TempCoefficient) -> Self {
+        self.temp_coefficient = coefficient;
         self
     }
 

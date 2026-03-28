@@ -150,7 +150,13 @@ impl MagneticChannel {
     }
 }
 
-/// Conversion averaging samples.
+/// Conversion averaging samples (maps to `CONV_AVG` field in
+/// `DEVICE_CONFIG_1[4:2]`).
+///
+/// Values `0b110` and `0b111` are **not defined** in the TI datasheet
+/// (SBASAI4, Table 8-3) and are blocked by this enum.
+///
+/// Reference: TI TMAG5273 datasheet SBASAI4, Table 8-3 (DEVICE_CONFIG_1).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 #[cfg_attr(feature = "defmt", derive(defmt::Format))]
 #[repr(u8)]
@@ -167,6 +173,7 @@ pub enum ConversionAverage {
     X16 = 0b100,
     /// 32x averaging.
     X32 = 0b101,
+    // 0b110 and 0b111 are not defined per TI datasheet — not representable.
 }
 
 impl_try_from_u8!(ConversionAverage {
@@ -214,7 +221,13 @@ impl ConversionAverage {
     }
 }
 
-/// Sleep duration between measurements in wake-up-and-sleep mode.
+/// Sleep duration between measurements in wake-up-and-sleep mode
+/// (maps to `SLEEPTIME` field in `SENSOR_CONFIG_1[3:0]`).
+///
+/// Values `0xD`–`0xF` are **not defined** in the TI datasheet
+/// (SBASAI4, Table 8-5) and are blocked by this enum.
+///
+/// Reference: TI TMAG5273 datasheet SBASAI4, Table 8-5 (SENSOR_CONFIG_1).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 #[cfg_attr(feature = "defmt", derive(defmt::Format))]
 #[repr(u8)]
@@ -245,6 +258,7 @@ pub enum SleepDuration {
     Ms5000 = 0xB,
     /// 20000 ms.
     Ms20000 = 0xC,
+    // 0xD–0xF are not defined per TI datasheet — not representable.
 }
 
 impl_try_from_u8!(SleepDuration {
