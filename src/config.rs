@@ -476,10 +476,25 @@ pub struct InterruptConfig {
 /// Gain and offset corrections are applied by the sensor hardware to
 /// improve measurement accuracy. Use with
 /// [`set_calibration`](crate::Tmag5273::set_calibration).
+///
+/// Reference: TI TMAG5273 datasheet SBASAI4, Tables 8-12 through 8-14.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 #[cfg_attr(feature = "defmt", derive(defmt::Format))]
 pub struct CalibrationConfig {
-    /// Magnetic gain adjustment (raw 8-bit value written to register 0x09).
+    /// Magnetic gain adjustment (raw 8-bit value for `GAIN_VALUE` register).
+    ///
+    /// The hardware interprets this as a fractional multiplier: `gain / 256`.
+    /// **A value of 0 is treated by the device as 1.0** (no adjustment).
+    ///
+    /// | `gain` | Effective multiplier |
+    /// |--------|---------------------|
+    /// | `0`    | 1.0 (no adjustment) |
+    /// | `128`  | 0.5                 |
+    /// | `192`  | 0.75                |
+    /// | `255`  | ≈ 0.996             |
+    ///
+    /// The target axis is selected by [`gain_channel`](Self::gain_channel)
+    /// and [`AngleCalculation`](crate::AngleCalculation).
     pub gain: u8,
     /// Magnetic offset for axis 1 (signed 8-bit, register 0x0A).
     pub offset_1: i8,
