@@ -16,8 +16,8 @@ use crate::types::{
     AngleCalculation, AngleReading, Celsius, ConversionAverage, ConversionStatus, Degrees,
     DeviceStatus, DeviceVariant, Diagnostics, GainChannel, I2cReadMode, IntPinBehavior,
     InterruptMode, MagneticChannel, MagneticReading, Micros, MilliTesla, NoDelay, OperatingMode,
-    PowerMode, Range, SensorReading, SleepDuration, TempCoefficient, ThresholdDirection,
-    TriggerMode, WAKE_DELAY,
+    PowerMode, Range, SensorReading, SleepDuration, TempCoefficient, ThresholdCrossingCount,
+    ThresholdDirection, TriggerMode, WAKE_DELAY,
 };
 
 // ---------------------------------------------------------------------------
@@ -1118,8 +1118,14 @@ impl<I2C: I2c, D: DelayNs> Tmag5273<I2C, Configured, D> {
         );
         self.write_register(register::DEVICE_CONFIG_2, dc2)?;
 
-        // Direction: SENSOR_CONFIG_2[5] — read-modify-write.
+        // Direction + crossing count: SENSOR_CONFIG_2[6:5] — read-modify-write.
         let sc2 = self.read_register(register::SENSOR_CONFIG_2)?;
+        let sc2 = register::insert(
+            sc2,
+            register::THRX_COUNT_MASK,
+            register::THRX_COUNT_SHIFT,
+            config.crossing_count as u8,
+        );
         let sc2 = register::insert(
             sc2,
             register::MAG_THR_DIR_MASK,
@@ -1504,6 +1510,22 @@ impl<I2C: I2c, D: DelayNs> Tmag5273<I2C, Configured, D> {
             register::THR_HYST_MASK,
             register::THR_HYST_SHIFT,
         ))
+    }
+
+    /// Read the threshold crossing count from register `SENSOR_CONFIG_2`.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::InvalidRegisterValue`] if the register contains an
+    /// unrecognized value, or [`Error::I2c`] on bus failure.
+    pub fn get_threshold_crossing_count(
+        &mut self,
+    ) -> Result<ThresholdCrossingCount, Error<I2C::Error>> {
+        self.read_field(
+            register::SENSOR_CONFIG_2,
+            register::THRX_COUNT_MASK,
+            register::THRX_COUNT_SHIFT,
+        )
     }
 
     /// Read the magnetic channel selection from register `SENSOR_CONFIG_1`.
@@ -1968,7 +1990,10 @@ mod tests {
         AngleCalculation, ConversionAverage, MagneticChannel, OperatingMode, PowerMode, Range,
         SleepDuration, TempCoefficient, TriggerMode,
     };
-    use crate::types::{Degrees, GainChannel, IntPinBehavior, InterruptMode, ThresholdDirection};
+    use crate::types::{
+        Degrees, GainChannel, IntPinBehavior, InterruptMode, ThresholdCrossingCount,
+        ThresholdDirection,
+    };
     use embedded_hal_mock::eh1::delay::{CheckedDelay, Transaction as DelayTransaction};
     use embedded_hal_mock::eh1::i2c::{Mock as I2cMock, Transaction as I2cTransaction};
 
@@ -2350,9 +2375,9 @@ mod tests {
         // DEVICE_CONFIG_2 read-modify-write: threshold_hysteresis=SymmetricBand(1) in bits [7:5]
         expectations.push(I2cTransaction::write_read(address, vec![0x01], vec![0x02]));
         expectations.push(I2cTransaction::write(address, vec![0x01, 0x22])); // 0x02 | (1 << 5) = 0x22
-        // SENSOR_CONFIG_2 read-modify-write: direction=Below(1) in bit [5]
+        // SENSOR_CONFIG_2 read-modify-write: crossing_count=Four(1) in bit [6], direction=Below(1) in bit [5]
         expectations.push(I2cTransaction::write_read(address, vec![0x03], vec![0x03]));
-        expectations.push(I2cTransaction::write(address, vec![0x03, 0x23])); // 0x03 | (1 << 5) = 0x23
+        expectations.push(I2cTransaction::write(address, vec![0x03, 0x63])); // 0x03 | (1 << 6) | (1 << 5) = 0x63
 
         let i2c = I2cMock::new(&expectations);
         let sensor = Tmag5273::new(i2c, DeviceVariant::B1);
@@ -2366,6 +2391,7 @@ mod tests {
                 z: 10,
                 temperature: 3,
                 hysteresis: crate::config::ThresholdHysteresis::SymmetricBand,
+                crossing_count: ThresholdCrossingCount::Four,
                 direction: ThresholdDirection::Below,
             })
             .unwrap();

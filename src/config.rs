@@ -8,7 +8,7 @@ use crate::register;
 use crate::types::{
     AngleCalculation, ConversionAverage, Diagnostics, GainChannel, I2cReadMode, IntPinBehavior,
     InterruptMode, MagneticChannel, Micros, OperatingMode, PowerMode, Range, SleepDuration,
-    TempCoefficient, ThresholdDirection, TriggerMode,
+    TempCoefficient, ThresholdCrossingCount, ThresholdDirection, TriggerMode,
 };
 
 /// Validated device configuration for the TMAG5273.
@@ -430,6 +430,13 @@ pub struct ThresholdConfig {
     /// type level — values 2–7 are reserved and cause undefined hardware
     /// behavior (continuous INT firing).
     pub hysteresis: ThresholdHysteresis,
+    /// Number of threshold crossings before the interrupt fires.
+    ///
+    /// Use [`ThresholdCrossingCount::Four`] in noisy environments to
+    /// debounce the threshold comparison.
+    ///
+    /// Default: [`ThresholdCrossingCount::One`] (interrupt on first crossing).
+    pub crossing_count: ThresholdCrossingCount,
     /// Whether to trigger on field above or below the threshold.
     ///
     /// **Note:** This field is ignored by hardware when

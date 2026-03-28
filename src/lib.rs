@@ -123,5 +123,5 @@ pub use types::{
     DeviceStatus, DeviceVariant, Diagnostics, GainChannel, I2cReadMode, IntPinBehavior,
     InterruptMode, MagneticChannel, MagneticReading, Micros, MicrosRange, MilliTesla, NoDelay,
     OperatingMode, PowerMode, Range, SensorReading, SleepDuration, TempCoefficient,
-    ThresholdDirection, TriggerMode, WAKE_DELAY,
+    ThresholdCrossingCount, ThresholdDirection, TriggerMode, WAKE_DELAY,
 };

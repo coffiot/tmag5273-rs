@@ -82,6 +82,9 @@ pub(crate) const SLEEPTIME_SHIFT: u8 = 0;
 // ---------------------------------------------------------------------------
 pub(crate) const SENSOR_CONFIG_2: u8 = 0x03;
 
+pub(crate) const THRX_COUNT_MASK: u8 = 0b0100_0000;
+pub(crate) const THRX_COUNT_SHIFT: u8 = 6;
+
 pub(crate) const MAG_THR_DIR_MASK: u8 = 0b0010_0000;
 pub(crate) const MAG_THR_DIR_SHIFT: u8 = 5;
 
@@ -262,6 +265,7 @@ mod tests {
             (MAG_CH_EN_MASK, MAG_CH_EN_SHIFT, "MAG_CH_EN"),
             (SLEEPTIME_MASK, SLEEPTIME_SHIFT, "SLEEPTIME"),
             // SENSOR_CONFIG_2 (0x03)
+            (THRX_COUNT_MASK, THRX_COUNT_SHIFT, "THRX_COUNT"),
             (MAG_THR_DIR_MASK, MAG_THR_DIR_SHIFT, "MAG_THR_DIR"),
             (MAG_GAIN_CH_MASK, MAG_GAIN_CH_SHIFT, "MAG_GAIN_CH"),
             (ANGLE_EN_MASK, ANGLE_EN_SHIFT, "ANGLE_EN"),
@@ -460,6 +464,8 @@ mod tests {
     #[test]
     fn datasheet_xref_sensor_config_2_fields() {
         assert_eq!(SENSOR_CONFIG_2, 0x03);
+        assert_eq!(THRX_COUNT_MASK, 0x40);
+        assert_eq!(THRX_COUNT_SHIFT, 6);
         assert_eq!(MAG_THR_DIR_MASK, 0x20);
         assert_eq!(MAG_THR_DIR_SHIFT, 5);
         assert_eq!(MAG_GAIN_CH_MASK, 0x10);
@@ -471,9 +477,14 @@ mod tests {
         assert_eq!(Z_RANGE_MASK, 0x01);
         assert_eq!(Z_RANGE_SHIFT, 0);
         assert_eq!(
-            MAG_THR_DIR_MASK | MAG_GAIN_CH_MASK | ANGLE_EN_MASK | X_Y_RANGE_MASK | Z_RANGE_MASK,
-            0x3F,
-            "SENSOR_CONFIG_2 used bits must be 0x3F (bits [7:6] reserved)"
+            THRX_COUNT_MASK
+                | MAG_THR_DIR_MASK
+                | MAG_GAIN_CH_MASK
+                | ANGLE_EN_MASK
+                | X_Y_RANGE_MASK
+                | Z_RANGE_MASK,
+            0x7F,
+            "SENSOR_CONFIG_2 used bits must be 0x7F (bit 7 reserved)"
         );
     }
 
@@ -613,6 +624,7 @@ mod tests {
         assert_pairwise_disjoint(
             "SENSOR_CONFIG_2",
             &[
+                THRX_COUNT_MASK,
                 MAG_THR_DIR_MASK,
                 MAG_GAIN_CH_MASK,
                 ANGLE_EN_MASK,

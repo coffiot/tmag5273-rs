@@ -373,6 +373,30 @@ impl_try_from_u8!(ThresholdDirection {
     1 => Below,
 });
 
+/// Number of threshold crossings before the interrupt is asserted
+/// (maps to `THRX_COUNT` field in `SENSOR_CONFIG_2[6]`).
+///
+/// Use [`Four`](Self::Four) in noisy environments to debounce
+/// the threshold comparison — the interrupt only fires after 4
+/// consecutive threshold crossings.
+///
+/// Reference: TI TMAG5273 datasheet SBASAI4, Table 8-6.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Hash)]
+#[cfg_attr(feature = "defmt", derive(defmt::Format))]
+#[repr(u8)]
+pub enum ThresholdCrossingCount {
+    /// Interrupt after 1 threshold crossing (default).
+    #[default]
+    One = 0,
+    /// Interrupt after 4 threshold crossings (debounce).
+    Four = 1,
+}
+
+impl_try_from_u8!(ThresholdCrossingCount {
+    0 => One,
+    1 => Four,
+});
+
 /// Interrupt routing mode (maps to `INT_MODE` field in `INT_CONFIG_1[4:2]`).
 ///
 /// Controls which pin carries the interrupt signal and whether the interrupt
@@ -1787,6 +1811,13 @@ mod tests {
     #[test]
     fn exhaustive_threshold_direction() {
         assert_exhaustive_try_from::<ThresholdDirection>("ThresholdDirection", 2, |v| v as u8);
+    }
+
+    #[test]
+    fn exhaustive_threshold_crossing_count() {
+        assert_exhaustive_try_from::<ThresholdCrossingCount>("ThresholdCrossingCount", 2, |v| {
+            v as u8
+        });
     }
 
     #[test]
