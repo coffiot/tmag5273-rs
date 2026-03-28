@@ -316,16 +316,25 @@ impl_try_from_u8!(TriggerMode {
     1 => IntPin,
 });
 
-/// Magnetic temperature compensation coefficient.
+/// Magnetic temperature compensation coefficient (maps to `MAG_TEMPCO`
+/// field in `DEVICE_CONFIG_1[6:5]`).
+///
+/// **Note:** Discriminant `0b10` is intentionally skipped — it is
+/// **reserved** in the TI datasheet (SBASAI4, Table 8-3) and must not
+/// be written to the device.  The enum makes this value unrepresentable
+/// at compile time.
+///
+/// Reference: TI TMAG5273 datasheet SBASAI4, Table 8-3 (DEVICE_CONFIG_1).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 #[cfg_attr(feature = "defmt", derive(defmt::Format))]
 #[repr(u8)]
 pub enum TempCoefficient {
-    /// No temperature compensation (0%).
+    /// No temperature compensation (0%).  `MAG_TEMPCO = 00b`.
     None = 0b00,
-    /// NdBFe magnets (0.12%/°C).
+    /// NdBFe magnets (0.12%/°C).  `MAG_TEMPCO = 01b`.
     NdBFe = 0b01,
-    /// Ceramic/Ferrite magnets (0.2%/°C). Note: 0b10 is reserved.
+    // 0b10 is reserved per TI datasheet — not representable.
+    /// Ceramic/Ferrite magnets (0.2%/°C).  `MAG_TEMPCO = 11b`.
     Ceramic = 0b11,
 }
 
