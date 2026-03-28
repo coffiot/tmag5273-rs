@@ -373,29 +373,51 @@ impl_try_from_u8!(ThresholdDirection {
     1 => Below,
 });
 
-/// Interrupt routing mode.
+/// Interrupt routing mode (maps to `INT_MODE` field in `INT_CONFIG_1[4:2]`).
+///
+/// Controls which pin carries the interrupt signal and whether the interrupt
+/// is suppressed when the I2C bus is busy with another device.
+///
+/// **Note:** Latched vs pulsed interrupt behavior is controlled separately
+/// by [`IntPinBehavior`], not by this enum.
+///
+/// Reference: TI TMAG5273 datasheet SBASAI4, Table 8-11.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 #[cfg_attr(feature = "defmt", derive(defmt::Format))]
 #[repr(u8)]
 pub enum InterruptMode {
-    /// No interrupt.
+    /// No interrupt (`INT_MODE = 000b`).
     None = 0b000,
-    /// Interrupt through INT pin.
-    IntPin = 0b001,
-    /// Interrupt through INT pin, latched until cleared by I2C read.
-    IntPinLatched = 0b010,
-    /// Interrupt through SCL (clock stretching).
-    Scl = 0b011,
-    /// Interrupt through SCL, latched until cleared by I2C read.
-    SclLatched = 0b100,
+    /// Interrupt through INT pin (`INT_MODE = 001b`).
+    ThroughInt = 0b001,
+    /// Interrupt through INT pin, except when I2C bus is busy
+    /// (`INT_MODE = 010b`).
+    ///
+    /// The interrupt is suppressed while the I2C bus is in use by another
+    /// device (not this TMAG5273). Use this mode on shared I2C buses to
+    /// prevent interrupt assertions from corrupting ongoing transactions
+    /// with other devices.
+    ThroughIntExceptI2cBusy = 0b010,
+    /// Interrupt through SCL pin (`INT_MODE = 011b`).
+    ///
+    /// TI does not recommend sharing the I2C bus with other devices when
+    /// using SCL for interrupts — the SCL interrupt may corrupt transactions
+    /// with other secondary devices.
+    ThroughScl = 0b011,
+    /// Interrupt through SCL pin, except when I2C bus is busy
+    /// (`INT_MODE = 100b`).
+    ///
+    /// The interrupt and result register updates are suppressed unless the
+    /// TMAG5273 is being actively addressed by the primary.
+    ThroughSclExceptI2cBusy = 0b100,
 }
 
 impl_try_from_u8!(InterruptMode {
     0b000 => None,
-    0b001 => IntPin,
-    0b010 => IntPinLatched,
-    0b011 => Scl,
-    0b100 => SclLatched,
+    0b001 => ThroughInt,
+    0b010 => ThroughIntExceptI2cBusy,
+    0b011 => ThroughScl,
+    0b100 => ThroughSclExceptI2cBusy,
 });
 
 /// INT pin assertion behavior.

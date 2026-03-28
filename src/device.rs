@@ -1335,7 +1335,7 @@ impl<I2C: I2c, D: DelayNs> Tmag5273<I2C, Configured, D> {
         // INT_CONFIG_1: threshold crossing interrupt on INT pin, 10 us pulse.
         // Decomposed from TI datasheet value 0x64 = 0b0110_0100:
         //   RSLT_INT=0, THRESHOLD_INT=1, INT_STATE=1 (Pulse10us),
-        //   INT_MODE=001 (IntPin), MASK_INTB=0
+        //   INT_MODE=001 (ThroughInt), MASK_INTB=0
         let int_config = register::insert(
             0,
             register::THRESHOLD_INT_MASK,
@@ -1350,7 +1350,7 @@ impl<I2C: I2c, D: DelayNs> Tmag5273<I2C, Configured, D> {
             0,
             register::INT_MODE_MASK,
             register::INT_MODE_SHIFT,
-            InterruptMode::IntPin as u8,
+            InterruptMode::ThroughInt as u8,
         );
         self.write_register(register::INT_CONFIG_1, int_config)?;
 
@@ -1367,7 +1367,7 @@ impl<I2C: I2c, D: DelayNs> Tmag5273<I2C, Configured, D> {
             updated,
             register::THR_HYST_MASK,
             register::THR_HYST_SHIFT,
-            1, // TI datasheet recommended hysteresis of 1 (7 LSB)
+            1, // ThresholdMode::SymmetricBand — TI datasheet recommended for wake-up-and-sleep
         );
         self.write_register(register::DEVICE_CONFIG_2, updated)?;
 
@@ -2392,7 +2392,7 @@ mod tests {
 
         sensor
             .set_interrupt(&InterruptConfig {
-                mode: InterruptMode::IntPin,
+                mode: InterruptMode::ThroughInt,
                 on_conversion_complete: false,
                 on_threshold_crossing: true,
                 pin_behavior: IntPinBehavior::Pulse10us,
@@ -2407,10 +2407,10 @@ mod tests {
     fn set_interrupt_all_modes() {
         let modes = [
             (InterruptMode::None, 0b000),
-            (InterruptMode::IntPin, 0b001),
-            (InterruptMode::IntPinLatched, 0b010),
-            (InterruptMode::Scl, 0b011),
-            (InterruptMode::SclLatched, 0b100),
+            (InterruptMode::ThroughInt, 0b001),
+            (InterruptMode::ThroughIntExceptI2cBusy, 0b010),
+            (InterruptMode::ThroughScl, 0b011),
+            (InterruptMode::ThroughSclExceptI2cBusy, 0b100),
         ];
 
         for (mode, expected_bits) in modes {
@@ -2458,7 +2458,7 @@ mod tests {
 
         sensor
             .set_interrupt(&InterruptConfig {
-                mode: InterruptMode::IntPin,
+                mode: InterruptMode::ThroughInt,
                 on_conversion_complete: false,
                 on_threshold_crossing: true,
                 pin_behavior: IntPinBehavior::Pulse10us,
@@ -4291,8 +4291,8 @@ mod tests {
         get_interrupt_mode_reads_int_only,
         get_interrupt_mode,
         0x08,
-        0b0000_0100, // INT_MODE = 1 (IntOnly)
-        InterruptMode::IntPin
+        0b0000_0100, // INT_MODE = 1 (ThroughInt)
+        InterruptMode::ThroughInt
     );
 
     #[test]

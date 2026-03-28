@@ -267,7 +267,7 @@ sensor.set_thresholds(&ThresholdConfig {
 sensor.set_interrupt(&InterruptConfig {
     on_conversion_complete: false,
     on_threshold_crossing: true,
-    mode: InterruptMode::IntPin,
+    mode: InterruptMode::ThroughInt,
     pin_behavior: IntPinBehavior::Pulse10us,
     mask: false,
 })?;
