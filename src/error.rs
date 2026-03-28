@@ -175,6 +175,14 @@ pub enum ConfigError {
         /// Required conversion time.
         conversion: Micros,
     },
+
+    /// INT-pin trigger mode is only available in standby mode.
+    ///
+    /// `TriggerMode::IntPin` requires `OperatingMode::Standby` — in other
+    /// modes the sensor ignores the trigger setting and the INT pin has no
+    /// conversion-trigger effect.
+    #[error("TriggerMode::IntPin requires OperatingMode::Standby")]
+    IntPinTriggerRequiresStandby,
 }
 
 // ---------------------------------------------------------------------------

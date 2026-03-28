@@ -207,6 +207,10 @@ impl ConfigBuilder {
     /// Returns [`ConfigError::AngleRequiresTwoChannels`]
     /// if angle calculation is enabled with fewer than two magnetic channels.
     ///
+    /// Returns [`ConfigError::IntPinTriggerRequiresStandby`]
+    /// if `TriggerMode::IntPin` is used with any mode other than
+    /// `OperatingMode::Standby`.
+    ///
     /// Returns [`ConfigError::SleepShorterThanConversion`]
     /// if the sleep duration is shorter than the conversion time for the
     /// configured averaging and channels.
@@ -216,6 +220,13 @@ impl ConfigBuilder {
             && self.magnetic_channels.axis_count() < 2
         {
             return Err(ConfigError::AngleRequiresTwoChannels);
+        }
+
+        // INT-pin trigger is only meaningful in standby mode.
+        if matches!(self.trigger_mode, TriggerMode::IntPin)
+            && !matches!(self.operating_mode, OperatingMode::Standby)
+        {
+            return Err(ConfigError::IntPinTriggerRequiresStandby);
         }
 
         // Sleep must be long enough for at least one full conversion.
@@ -610,6 +621,50 @@ mod tests {
             .conversion_average(ConversionAverage::X32)
             .magnetic_channels(MagneticChannel::XYZ)
             .temperature_enabled(true)
+            .build();
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn int_pin_trigger_with_standby_ok() {
+        let result = ConfigBuilder::new()
+            .operating_mode(OperatingMode::Standby)
+            .trigger_mode(TriggerMode::IntPin)
+            .build();
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn int_pin_trigger_with_continuous_rejected() {
+        let result = ConfigBuilder::new()
+            .operating_mode(OperatingMode::ContinuousMeasure)
+            .trigger_mode(TriggerMode::IntPin)
+            .build();
+        assert_eq!(
+            result.unwrap_err(),
+            ConfigError::IntPinTriggerRequiresStandby,
+        );
+    }
+
+    #[test]
+    fn int_pin_trigger_with_wakeup_sleep_rejected() {
+        let result = ConfigBuilder::new()
+            .operating_mode(OperatingMode::WakeUpAndSleep)
+            .trigger_mode(TriggerMode::IntPin)
+            .sleep_duration(SleepDuration::Ms5)
+            .build();
+        assert_eq!(
+            result.unwrap_err(),
+            ConfigError::IntPinTriggerRequiresStandby,
+        );
+    }
+
+    #[test]
+    fn i2c_command_trigger_with_continuous_ok() {
+        // I2cCommand trigger is the default and works in all modes.
+        let result = ConfigBuilder::new()
+            .operating_mode(OperatingMode::ContinuousMeasure)
+            .trigger_mode(TriggerMode::I2cCommand)
             .build();
         assert!(result.is_ok());
     }

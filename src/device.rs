@@ -4463,6 +4463,7 @@ mod tests {
     #[test]
     fn config_builder_all_setters() {
         let config = ConfigBuilder::new()
+            .operating_mode(OperatingMode::Standby)
             .xy_range(Range::Low)
             .z_range(Range::Low)
             .power_mode(PowerMode::LowNoise)
