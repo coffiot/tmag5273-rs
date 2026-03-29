@@ -100,6 +100,33 @@ impl<I2C, State, D> fmt::Debug for Tmag5273<I2C, State, D> {
     }
 }
 
+// ---------------------------------------------------------------------------
+// State-independent accessors
+// ---------------------------------------------------------------------------
+
+impl<I2C, State, D> Tmag5273<I2C, State, D> {
+    /// Returns the device variant (auto-detected or user-provided).
+    ///
+    /// When constructed via [`detect()`](Self::detect) or [`scan()`](Self::scan),
+    /// this is the variant resolved from the hardware `DEVICE_ID` register.
+    /// When constructed via [`new()`](Self::new), this is the variant passed by
+    /// the caller.
+    #[inline]
+    pub fn variant(&self) -> DeviceVariant {
+        self.variant
+    }
+
+    /// Returns the 7-bit I2C address the driver is currently using.
+    ///
+    /// This is the factory-default address for the variant unless
+    /// [`change_address()`](Self::change_address) was called, in which
+    /// case it reflects the new address.
+    #[inline]
+    pub fn address(&self) -> u8 {
+        self.address
+    }
+}
+
 // Compile-time size assertion — should be ~16 bytes on ESP32 (I2C handle ~4 bytes + fields).
 // NoDelay is a ZST, so adding D = NoDelay has zero size impact.
 const _: () = assert!(
