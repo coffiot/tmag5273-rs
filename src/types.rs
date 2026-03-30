@@ -1237,6 +1237,13 @@ mod tests {
     }
 
     #[test]
+    fn celsius_from_raw_i16_min() {
+        // T = 25.0 + (-32768.0 - 17508.0) / 60.1 ≈ -811.6
+        let c = Celsius::from_raw(i16::MIN);
+        assert!(approx_eq(c.0, -811.6), "expected ~-811.6, got {}", c.0);
+    }
+
+    #[test]
     fn temp_raw_max() {
         // T = 25.0 + (32767 - 17508) / 60.1 ≈ 279.0
         let c = Celsius::from_raw(i16::MAX);
