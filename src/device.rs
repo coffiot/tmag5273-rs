@@ -446,8 +446,9 @@ impl<I2C: I2c, D: DelayNs> Tmag5273<I2C, Unconfigured, D> {
         // 4b. Clear stale fault flags so subsequent read_status() returns fresh state.
         self.write_register(register::DEVICE_STATUS, 0x0F)?;
 
-        // 5. Clear POR flag by reading CONV_STATUS
-        let _ = self.read_register(register::CONV_STATUS)?;
+        // 5. Clear POR flag — bit 4 is R/W1CP (write-1-to-clear-pulse),
+        // so we must WRITE 0x10 (bit 4 = 1) rather than read.
+        self.write_register(register::CONV_STATUS, 0x10)?;
 
         defmt_debug!(
             "init OK: variant={:?}, addr=0x{:02X}",
@@ -1400,7 +1401,7 @@ impl<I2C: I2c, D: DelayNs> Tmag5273<I2C, Configured, D> {
             updated,
             register::THR_HYST_MASK,
             register::THR_HYST_SHIFT,
-            1, // ThresholdMode::SymmetricBand — TI datasheet recommended for wake-up-and-sleep
+            crate::config::ThresholdHysteresis::SymmetricBand as u8, // TI datasheet recommended for W&S
         );
         self.write_register(register::DEVICE_CONFIG_2, updated)?;
 
@@ -1522,21 +1523,21 @@ impl<I2C: I2c, D: DelayNs> Tmag5273<I2C, Configured, D> {
         ) == 0)
     }
 
-    /// Read the Threshold hysteresis from register `DEVICE_CONFIG_2`.
-    ///
-    /// Returns the raw `THR_HYST` field value.  Only 0 and 1 are valid
-    /// per the TI datasheet; values 2–7 are reserved.
+    /// Read the threshold hysteresis mode from register `DEVICE_CONFIG_2`.
     ///
     /// # Errors
     ///
+    /// Returns [`Error::InvalidRegisterValue`] if the register contains a
+    /// reserved value (2–7).
     /// Returns [`Error::I2c`] on bus communication failure.
-    pub fn get_threshold_hysteresis_raw(&mut self) -> Result<u8, Error<I2C::Error>> {
-        let raw = self.read_register(register::DEVICE_CONFIG_2)?;
-        Ok(register::extract(
-            raw,
+    pub fn get_threshold_hysteresis(
+        &mut self,
+    ) -> Result<crate::config::ThresholdHysteresis, Error<I2C::Error>> {
+        self.read_field(
+            register::DEVICE_CONFIG_2,
             register::THR_HYST_MASK,
             register::THR_HYST_SHIFT,
-        ))
+        )
     }
 
     /// Read the threshold crossing count from register `SENSOR_CONFIG_2`.
@@ -2213,8 +2214,8 @@ mod tests {
             I2cTransaction::write_read(address, vec![0x1C], vec![0x00]),
             // Clear stale fault flags (DEVICE_STATUS = 0x0F)
             I2cTransaction::write(address, vec![0x1C, 0x0F]),
-            // Read conv status (clear POR)
-            I2cTransaction::write_read(address, vec![0x18], vec![0x00]),
+            // Clear POR flag — write 0x10 (bit 4 = 1) via W1CP mechanism
+            I2cTransaction::write(address, vec![0x18, 0x10]),
         ]
     }
 
@@ -4148,11 +4149,12 @@ mod tests {
         i2c_expectations.push(I2cTransaction::write_read(address, vec![0x18], vec![0x01]));
 
         let i2c = I2cMock::new(&i2c_expectations);
-        // Two delays: 80 µs wake from init, 125 µs conversion time
-        // (X1 averaging, XYZ channels, temp enabled = (1×25)×4 + 25 = 125 µs)
+        // Two delays: 80 µs wake from init, 100 µs conversion time
+        // (X1 averaging, XYZ channels, temp enabled = (1×25)×3 + 25 = 100 µs)
+        // Note: temp doesn't add time at CONV_AVG=000b (datasheet §5.11 note 2)
         let delay = CheckedDelay::new(&[
             DelayTransaction::delay_us(80),
-            DelayTransaction::delay_us(125),
+            DelayTransaction::delay_us(100),
         ]);
 
         let sensor = Tmag5273::new_with_delay(i2c, DeviceVariant::B1, delay);
@@ -4248,10 +4250,30 @@ mod tests {
     }
 
     #[test]
-    fn get_threshold_hysteresis_raw_reads_field() {
+    fn get_threshold_hysteresis_signed() {
         let address = 0x22u8;
         let mut expectations = init_expectations(address, &default_config());
-        // THR_HYST = 0b001 (1 = SymmetricBand) in bits [7:5]
+        // THR_HYST = 0b000 (Signed) in bits [7:5]
+        expectations.push(I2cTransaction::write_read(
+            address,
+            vec![0x01],
+            vec![0b0000_0000],
+        ));
+        let i2c = I2cMock::new(&expectations);
+        let sensor = Tmag5273::new(i2c, DeviceVariant::B1);
+        let mut sensor = sensor.init(&default_config()).unwrap();
+        assert_eq!(
+            sensor.get_threshold_hysteresis().unwrap(),
+            crate::config::ThresholdHysteresis::Signed,
+        );
+        sensor.into_inner().done();
+    }
+
+    #[test]
+    fn get_threshold_hysteresis_symmetric_band() {
+        let address = 0x22u8;
+        let mut expectations = init_expectations(address, &default_config());
+        // THR_HYST = 0b001 (SymmetricBand) in bits [7:5]
         expectations.push(I2cTransaction::write_read(
             address,
             vec![0x01],
@@ -4260,7 +4282,30 @@ mod tests {
         let i2c = I2cMock::new(&expectations);
         let sensor = Tmag5273::new(i2c, DeviceVariant::B1);
         let mut sensor = sensor.init(&default_config()).unwrap();
-        assert_eq!(sensor.get_threshold_hysteresis_raw().unwrap(), 1);
+        assert_eq!(
+            sensor.get_threshold_hysteresis().unwrap(),
+            crate::config::ThresholdHysteresis::SymmetricBand,
+        );
+        sensor.into_inner().done();
+    }
+
+    #[test]
+    fn get_threshold_hysteresis_reserved_returns_error() {
+        let address = 0x22u8;
+        let mut expectations = init_expectations(address, &default_config());
+        // THR_HYST = 0b010 (reserved) in bits [7:5]
+        expectations.push(I2cTransaction::write_read(
+            address,
+            vec![0x01],
+            vec![0b0100_0000],
+        ));
+        let i2c = I2cMock::new(&expectations);
+        let sensor = Tmag5273::new(i2c, DeviceVariant::B1);
+        let mut sensor = sensor.init(&default_config()).unwrap();
+        assert!(matches!(
+            sensor.get_threshold_hysteresis(),
+            Err(Error::InvalidRegisterValue { register: 0x01, value: 2 }),
+        ));
         sensor.into_inner().done();
     }
 

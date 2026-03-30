@@ -194,13 +194,21 @@ impl ConversionAverage {
     /// where `avg` is the averaging exponent (0 for X1, 5 for X32) and
     /// `num_channels` includes magnetic axes plus temperature (if enabled).
     ///
-    /// This follows the Zephyr RTOS driver's conversion time calculation.
+    /// Per datasheet Section 5.11 note (2): "When CONV_AVG = 000b, the
+    /// conversion time doesn't change with the T_CH_EN bit setting."
+    /// Temperature only adds a measurement slot when averaging is enabled.
+    ///
+    /// This follows the Zephyr RTOS driver's conversion time calculation
+    /// with the CONV_AVG=000b temperature correction from the datasheet.
     pub const fn conversion_time(
         self,
         channels: MagneticChannel,
         temperature_enabled: bool,
     ) -> Micros {
-        let temp_channel: u32 = if temperature_enabled { 1 } else { 0 };
+        // Temperature doesn't add conversion time at CONV_AVG = 000b (X1)
+        // per datasheet Section 5.11 note (2).
+        let temp_adds_slot = !matches!(self, Self::X1);
+        let temp_channel: u32 = if temperature_enabled && temp_adds_slot { 1 } else { 0 };
         let num_channels = channels.measurement_slots() as u32 + temp_channel;
         let samples_per_channel = 1u32 << (self as u32);
         let us = samples_per_channel * 25 * num_channels + 25;
@@ -687,7 +695,14 @@ impl From<MilliTesla> for f32 {
 }
 
 impl MilliTesla {
-    /// Construct from a raw 16-bit 2's complement ADC code (datasheet eq. 10).
+    /// Construct from a raw 16-bit 2's complement ADC code.
+    ///
+    /// The sign is **negated** relative to TI datasheet equation 10
+    /// (`B = raw / 32768 × range`). This follows the Zephyr RTOS and
+    /// Linux kernel driver convention: positive [`MilliTesla`] values
+    /// indicate a magnetic south pole approaching the sensor's sensitive
+    /// face, while the TI raw encoding produces positive ADC codes for
+    /// north poles (datasheet §6.3.1).
     #[inline]
     pub(crate) fn from_raw(raw: i16, range_mt: f32) -> Self {
         Self(-(raw as f32) * range_mt * INV_32768)

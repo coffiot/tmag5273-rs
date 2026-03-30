@@ -414,6 +414,11 @@ pub enum ThresholdHysteresis {
     SymmetricBand = 1,
 }
 
+impl_try_from_u8!(ThresholdHysteresis {
+    0 => Signed,
+    1 => SymmetricBand,
+});
+
 /// Per-axis threshold configuration for magnetic field and temperature.
 ///
 /// Threshold values are signed 8-bit integers in sensor-native units.
@@ -556,7 +561,7 @@ mod tests {
     #[test]
     fn build_wakeup_sleep_accepts_ms1_with_default_x1_averaging() {
         // Ms1 (1000 µs) is a valid sleep with the default X1 averaging.
-        // X1 + XYZ + temp = 125 µs conversion, well under 1000 µs.
+        // X1 + XYZ + temp = 100 µs conversion, well under 1000 µs.
         let result = ConfigBuilder::new()
             .operating_mode(OperatingMode::WakeUpAndSleep)
             .sleep_duration(SleepDuration::Ms1)
@@ -587,10 +592,11 @@ mod tests {
     }
 
     #[test]
-    fn conversion_time_default_config_returns_125us() {
+    fn conversion_time_default_config_returns_100us() {
         let config = ConfigBuilder::new().build().unwrap();
-        // Default: X1, XYZ, temp enabled → 125 us
-        assert_eq!(config.conversion_time().0, 125);
+        // Default: X1, XYZ, temp enabled → 100 us
+        // (temp doesn't add time at CONV_AVG=000b per datasheet §5.11 note 2)
+        assert_eq!(config.conversion_time().0, 100);
     }
 
     #[test]
