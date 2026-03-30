@@ -118,6 +118,7 @@ pub use config::{
 };
 pub use device::{Configured, Tmag5273, Unconfigured};
 pub use error::{ConfigError, Error, InitError};
+pub use register::{X_THR_CONFIG, Y_THR_CONFIG, Z_THR_CONFIG};
 pub use types::{
     AngleCalculation, AngleReading, Celsius, ConversionAverage, ConversionStatus, Degrees,
     DeviceStatus, DeviceVariant, Diagnostics, GainChannel, I2cReadMode, IntPinBehavior,

@@ -27,162 +27,261 @@ pub(crate) const fn insert(register: u8, mask: u8, shift: u8, value: u8) -> u8 {
 /// From TI datasheet SBASAI4 Rev C, Section 7.5.1.1: setting bit 7 of
 /// the register address during an I2C read initiates a conversion and
 /// returns the register value in a single transaction.
+/// Bit 7 of the register address — OR into address on a read to trigger a new conversion
+/// simultaneously (standby/trigger mode). Datasheet §7.5.1.1.
 pub(crate) const CONVERSION_START_BIT: u8 = 0x80;
 
 // ---------------------------------------------------------------------------
 // 0x00 — DEVICE_CONFIG_1
 // ---------------------------------------------------------------------------
+/// Device configuration register 1 address (0x00). Controls CRC, temp compensation,
+/// conversion averaging, and I2C read mode.
 pub(crate) const DEVICE_CONFIG_1: u8 = 0x00;
 
+/// Bit mask for `CRC_EN` field in `DEVICE_CONFIG_1` — enables I2C CRC-8 appended to reads.
 pub(crate) const CRC_EN_MASK: u8 = 0b1000_0000;
+/// Bit shift for `CRC_EN` field in `DEVICE_CONFIG_1`.
 pub(crate) const CRC_EN_SHIFT: u8 = 7;
 
+/// Bit mask for `MAG_TEMPCO` field in `DEVICE_CONFIG_1` — selects magnetic temperature
+/// compensation coefficient (None / NdBFe / Ceramic).
 pub(crate) const MAG_TEMPCO_MASK: u8 = 0b0110_0000;
+/// Bit shift for `MAG_TEMPCO` field in `DEVICE_CONFIG_1`.
 pub(crate) const MAG_TEMPCO_SHIFT: u8 = 5;
 
+/// Bit mask for `CONV_AVG` field in `DEVICE_CONFIG_1` — sets conversion averaging (1×–32×).
 pub(crate) const CONV_AVG_MASK: u8 = 0b0001_1100;
+/// Bit shift for `CONV_AVG` field in `DEVICE_CONFIG_1`.
 pub(crate) const CONV_AVG_SHIFT: u8 = 2;
 
+/// Bit mask for `I2C_RD` field in `DEVICE_CONFIG_1` — selects I2C read frame format
+/// (Standard / 1-byte 16-bit / 1-byte 8-bit).
 pub(crate) const I2C_RD_MASK: u8 = 0b0000_0011;
+/// Bit shift for `I2C_RD` field in `DEVICE_CONFIG_1`.
 pub(crate) const I2C_RD_SHIFT: u8 = 0;
 
 // ---------------------------------------------------------------------------
 // 0x01 — DEVICE_CONFIG_2
 // ---------------------------------------------------------------------------
+/// Device configuration register 2 address (0x01). Controls threshold hysteresis,
+/// power mode, glitch filter, trigger mode, and operating mode.
 pub(crate) const DEVICE_CONFIG_2: u8 = 0x01;
 
+/// Bit mask for `THR_HYST` field in `DEVICE_CONFIG_2` — magnetic threshold hysteresis
+/// (Signed / SymmetricBand 1–7 LSB).
 pub(crate) const THR_HYST_MASK: u8 = 0b1110_0000;
+/// Bit shift for `THR_HYST` field in `DEVICE_CONFIG_2`.
 pub(crate) const THR_HYST_SHIFT: u8 = 5;
 
+/// Bit mask for `LP_LN` field in `DEVICE_CONFIG_2` — selects Low-Power vs Low-Noise mode.
 pub(crate) const LP_LN_MASK: u8 = 0b0001_0000;
+/// Bit shift for `LP_LN` field in `DEVICE_CONFIG_2`.
 pub(crate) const LP_LN_SHIFT: u8 = 4;
 
+/// Bit mask for `I2C_GLITCH_FILTER` field in `DEVICE_CONFIG_2` — enables I2C glitch filter.
 pub(crate) const I2C_GLITCH_FILTER_MASK: u8 = 0b0000_1000;
+/// Bit shift for `I2C_GLITCH_FILTER` field in `DEVICE_CONFIG_2`.
 pub(crate) const I2C_GLITCH_FILTER_SHIFT: u8 = 3;
 
+/// Bit mask for `TRIGGER_MODE` field in `DEVICE_CONFIG_2` — selects conversion trigger
+/// source (I2C command vs INT pin).
 pub(crate) const TRIGGER_MODE_MASK: u8 = 0b0000_0100;
+/// Bit shift for `TRIGGER_MODE` field in `DEVICE_CONFIG_2`.
 pub(crate) const TRIGGER_MODE_SHIFT: u8 = 2;
 
+/// Bit mask for `OPERATING_MODE` field in `DEVICE_CONFIG_2` — selects Standby / Sleep /
+/// Continuous / Wake-up-and-Sleep mode.
 pub(crate) const OPERATING_MODE_MASK: u8 = 0b0000_0011;
+/// Bit shift for `OPERATING_MODE` field in `DEVICE_CONFIG_2`.
 pub(crate) const OPERATING_MODE_SHIFT: u8 = 0;
 
 // ---------------------------------------------------------------------------
 // 0x02 — SENSOR_CONFIG_1
 // ---------------------------------------------------------------------------
+/// Sensor configuration register 1 address (0x02). Controls magnetic channel selection
+/// and wake-up/sleep duration.
 pub(crate) const SENSOR_CONFIG_1: u8 = 0x02;
 
+/// Bit mask for `MAG_CH_EN` field in `SENSOR_CONFIG_1` — selects which magnetic axes
+/// to measure (Off / X / Y / XY / Z / ZX / YZ / XYZ / pseudo-simultaneous pairs).
 pub(crate) const MAG_CH_EN_MASK: u8 = 0b1111_0000;
+/// Bit shift for `MAG_CH_EN` field in `SENSOR_CONFIG_1`.
 pub(crate) const MAG_CH_EN_SHIFT: u8 = 4;
 
+/// Bit mask for `SLEEPTIME` field in `SENSOR_CONFIG_1` — sets sleep interval in
+/// wake-up-and-sleep mode (1 ms–1000 ms).
 pub(crate) const SLEEPTIME_MASK: u8 = 0b0000_1111;
+/// Bit shift for `SLEEPTIME` field in `SENSOR_CONFIG_1`.
 pub(crate) const SLEEPTIME_SHIFT: u8 = 0;
 
 // ---------------------------------------------------------------------------
 // 0x03 — SENSOR_CONFIG_2
 // ---------------------------------------------------------------------------
+/// Sensor configuration register 2 address (0x03). Controls threshold crossing count,
+/// direction, gain channel, angle calculation, and magnetic range.
 pub(crate) const SENSOR_CONFIG_2: u8 = 0x03;
 
+/// Bit mask for `THRX_COUNT` field in `SENSOR_CONFIG_2` — number of consecutive threshold
+/// crossings required to assert INT (1 or 4).
 pub(crate) const THRX_COUNT_MASK: u8 = 0b0100_0000;
+/// Bit shift for `THRX_COUNT` field in `SENSOR_CONFIG_2`.
 pub(crate) const THRX_COUNT_SHIFT: u8 = 6;
 
+/// Bit mask for `MAG_THR_DIR` field in `SENSOR_CONFIG_2` — selects threshold crossing
+/// direction (Above / Below).
 pub(crate) const MAG_THR_DIR_MASK: u8 = 0b0010_0000;
+/// Bit shift for `MAG_THR_DIR` field in `SENSOR_CONFIG_2`.
 pub(crate) const MAG_THR_DIR_SHIFT: u8 = 5;
 
+/// Bit mask for `MAG_GAIN_CH` field in `SENSOR_CONFIG_2` — selects which axis receives
+/// the user gain correction (First / Second measurement in pseudo-simultaneous pairs).
 pub(crate) const MAG_GAIN_CH_MASK: u8 = 0b0001_0000;
+/// Bit shift for `MAG_GAIN_CH` field in `SENSOR_CONFIG_2`.
 pub(crate) const MAG_GAIN_CH_SHIFT: u8 = 4;
 
+/// Bit mask for `ANGLE_EN` field in `SENSOR_CONFIG_2` — enables CORDIC angle calculation
+/// and selects axis pair (None / XY / YZ / XZ).
 pub(crate) const ANGLE_EN_MASK: u8 = 0b0000_1100;
+/// Bit shift for `ANGLE_EN` field in `SENSOR_CONFIG_2`.
 pub(crate) const ANGLE_EN_SHIFT: u8 = 2;
 
+/// Bit mask for `X_Y_RANGE` field in `SENSOR_CONFIG_2` — selects XY magnetic range
+/// (Low / High). Range values differ by device variant (x1 vs x2).
 pub(crate) const X_Y_RANGE_MASK: u8 = 0b0000_0010;
+/// Bit shift for `X_Y_RANGE` field in `SENSOR_CONFIG_2`.
 pub(crate) const X_Y_RANGE_SHIFT: u8 = 1;
 
+/// Bit mask for `Z_RANGE` field in `SENSOR_CONFIG_2` — selects Z magnetic range
+/// (Low / High). Range values differ by device variant (x1 vs x2).
 pub(crate) const Z_RANGE_MASK: u8 = 0b0000_0001;
+/// Bit shift for `Z_RANGE` field in `SENSOR_CONFIG_2`.
 pub(crate) const Z_RANGE_SHIFT: u8 = 0;
 
 // ---------------------------------------------------------------------------
 // 0x04 — X_THR_CONFIG
 // ---------------------------------------------------------------------------
-pub(crate) const X_THR_CONFIG: u8 = 0x04;
+/// X-axis magnetic threshold configuration register address (0x04).
+pub const X_THR_CONFIG: u8 = 0x04;
 
 // ---------------------------------------------------------------------------
 // 0x05 — Y_THR_CONFIG
 // ---------------------------------------------------------------------------
-pub(crate) const Y_THR_CONFIG: u8 = 0x05;
+/// Y-axis magnetic threshold configuration register address (0x05).
+pub const Y_THR_CONFIG: u8 = 0x05;
 
 // ---------------------------------------------------------------------------
 // 0x06 — Z_THR_CONFIG
 // ---------------------------------------------------------------------------
-pub(crate) const Z_THR_CONFIG: u8 = 0x06;
+/// Z-axis magnetic threshold configuration register address (0x06).
+pub const Z_THR_CONFIG: u8 = 0x06;
 
 // ---------------------------------------------------------------------------
 // 0x07 — T_CONFIG
 // ---------------------------------------------------------------------------
+/// Temperature configuration register address (0x07). Holds 7-bit temperature
+/// threshold (bits [7:1]) and temperature channel enable (bit 0).
 pub(crate) const T_CONFIG: u8 = 0x07;
 
+/// Bit mask for the 7-bit temperature threshold field in `T_CONFIG` (bits [7:1]).
 pub(crate) const T_THR_CONFIG_MASK: u8 = 0b1111_1110;
+/// Bit shift for the temperature threshold field in `T_CONFIG`.
 pub(crate) const T_THR_CONFIG_SHIFT: u8 = 1;
 
+/// Bit mask for `T_CH_EN` in `T_CONFIG` — enables the temperature measurement channel.
 pub(crate) const T_CH_EN_MASK: u8 = 0b0000_0001;
+/// Bit shift for `T_CH_EN` in `T_CONFIG`.
 pub(crate) const T_CH_EN_SHIFT: u8 = 0;
 
 // ---------------------------------------------------------------------------
 // 0x08 — INT_CONFIG_1
 // ---------------------------------------------------------------------------
+/// Interrupt configuration register 1 address (0x08). Controls INT pin mode,
+/// trigger sources, pin behavior (latched/pulsed), and INT masking.
 pub(crate) const INT_CONFIG_1: u8 = 0x08;
 
+/// Bit mask for `RSLT_INT` in `INT_CONFIG_1` — asserts INT on conversion complete.
 pub(crate) const RSLT_INT_MASK: u8 = 0b1000_0000;
+/// Bit shift for `RSLT_INT` in `INT_CONFIG_1`.
 pub(crate) const RSLT_INT_SHIFT: u8 = 7;
 
+/// Bit mask for `THRESHOLD_INT` in `INT_CONFIG_1` — asserts INT on threshold crossing.
 pub(crate) const THRESHOLD_INT_MASK: u8 = 0b0100_0000;
+/// Bit shift for `THRESHOLD_INT` in `INT_CONFIG_1`.
 pub(crate) const THRESHOLD_INT_SHIFT: u8 = 6;
 
+/// Bit mask for `INT_STATE` in `INT_CONFIG_1` — selects INT pin behavior
+/// (0 = Latched, 1 = 10 µs pulse).
 pub(crate) const INT_STATE_MASK: u8 = 0b0010_0000;
+/// Bit shift for `INT_STATE` in `INT_CONFIG_1`.
 pub(crate) const INT_STATE_SHIFT: u8 = 5;
 
+/// Bit mask for `INT_MODE` field in `INT_CONFIG_1` — selects INT routing
+/// (None / Through INT / Through INT except I2C busy / Through SCL / Through SCL except I2C busy).
 pub(crate) const INT_MODE_MASK: u8 = 0b0001_1100;
+/// Bit shift for `INT_MODE` field in `INT_CONFIG_1`.
 pub(crate) const INT_MODE_SHIFT: u8 = 2;
 
+/// Bit mask for `MASK_INTB` in `INT_CONFIG_1` — masks the INT pin output when set.
 pub(crate) const MASK_INTB_MASK: u8 = 0b0000_0001;
+/// Bit shift for `MASK_INTB` in `INT_CONFIG_1`.
 pub(crate) const MASK_INTB_SHIFT: u8 = 0;
 
 // ---------------------------------------------------------------------------
 // 0x09 — MAG_GAIN_CONFIG
 // ---------------------------------------------------------------------------
+/// Magnetic gain configuration register address (0x09). Holds the 8-bit user
+/// gain correction coefficient applied to the selected axis pair.
 pub(crate) const MAG_GAIN_CONFIG: u8 = 0x09;
 
 // ---------------------------------------------------------------------------
 // 0x0A — MAG_OFFSET_CONFIG_1
 // ---------------------------------------------------------------------------
+/// Magnetic offset configuration register 1 address (0x0A). Holds the 8-bit
+/// signed offset correction for the first axis in the selected measurement pair.
 pub(crate) const MAG_OFFSET_CONFIG_1: u8 = 0x0A;
 
 // ---------------------------------------------------------------------------
 // 0x0B — MAG_OFFSET_CONFIG_2
 // ---------------------------------------------------------------------------
+/// Magnetic offset configuration register 2 address (0x0B). Holds the 8-bit
+/// signed offset correction for the second axis in the selected measurement pair.
 pub(crate) const MAG_OFFSET_CONFIG_2: u8 = 0x0B;
 
 // ---------------------------------------------------------------------------
 // 0x0C — I2C_ADDRESS (read-only)
 // ---------------------------------------------------------------------------
+/// I2C address register address (0x0C). Contains the 7-bit I2C address in bits [7:1]
+/// and the address-update-enable flag in bit 0. Write-protected until bit 0 is set.
 pub(crate) const I2C_ADDRESS: u8 = 0x0C;
 
+/// Bit mask for the 7-bit I2C address field in `I2C_ADDRESS` register (bits [7:1]).
 pub(crate) const I2C_ADDRESS_BITS_MASK: u8 = 0b1111_1110;
+/// Bit shift for the I2C address field in `I2C_ADDRESS` register.
 pub(crate) const I2C_ADDRESS_BITS_SHIFT: u8 = 1;
 
+/// Bit mask for `I2C_ADDRESS_UPDATE_EN` in `I2C_ADDRESS` — must be set to 1 before
+/// writing a new I2C address; self-clears after the address is latched.
 pub(crate) const I2C_ADDRESS_UPDATE_EN_MASK: u8 = 0b0000_0001;
+/// Bit shift for `I2C_ADDRESS_UPDATE_EN` in `I2C_ADDRESS`.
 pub(crate) const I2C_ADDRESS_UPDATE_EN_SHIFT: u8 = 0;
 
 // ---------------------------------------------------------------------------
 // 0x0D — DEVICE_ID (read-only)
 // ---------------------------------------------------------------------------
+/// Device ID register address (0x0D). Bits [1:0] hold the version code that
+/// identifies the device variant (A1/A2 = 0, B1/B2 = 1, C1/C2 = 2, D1/D2 = 3).
 pub(crate) const DEVICE_ID: u8 = 0x0D;
 
+/// Bit mask for the `VERSION` field in `DEVICE_ID` (bits [1:0]).
 pub(crate) const VERSION_MASK: u8 = 0b0000_0011;
+/// Bit shift for the `VERSION` field in `DEVICE_ID`.
 pub(crate) const VERSION_SHIFT: u8 = 0;
 
 // ---------------------------------------------------------------------------
 // 0x0E — MANUFACTURER_ID_LSB (read-only)
 // ---------------------------------------------------------------------------
+/// Manufacturer ID LSB register address (0x0E). Two-byte burst read from here
+/// returns [LSB=0x49, MSB=0x54], forming the 16-bit ASCII code for "TI" (0x5449).
 pub(crate) const MANUFACTURER_ID_LSB: u8 = 0x0E;
 
 /// Expected 16-bit manufacturer ID: ASCII "TI" = 0x5449.
@@ -191,12 +290,16 @@ pub(crate) const MANUFACTURER_ID_EXPECTED: u16 = 0x5449;
 // ---------------------------------------------------------------------------
 // 0x10 — T_MSB_RESULT (read-only)
 // ---------------------------------------------------------------------------
+/// Temperature result MSB register address (0x10). A 2-byte burst read from here
+/// returns [T_MSB, T_LSB] (0x10–0x11); the 16-bit raw value maps to °C.
 pub(crate) const T_MSB_RESULT: u8 = 0x10;
 // 0x11 T_LSB_RESULT — implicit via burst read (MSB + 1)
 
 // ---------------------------------------------------------------------------
 // 0x12 — X_MSB_RESULT (read-only, burst reads X/Y/Z from here)
 // ---------------------------------------------------------------------------
+/// X-axis result MSB register address (0x12). A 6-byte burst read from here
+/// returns [X_MSB, X_LSB, Y_MSB, Y_LSB, Z_MSB, Z_LSB] (0x12–0x17).
 #[cfg_attr(feature = "crc", allow(dead_code))]
 pub(crate) const X_MSB_RESULT: u8 = 0x12;
 // 0x13–0x17 X_LSB, Y_MSB/LSB, Z_MSB/LSB — implicit via 6-byte burst from X_MSB
@@ -204,27 +307,38 @@ pub(crate) const X_MSB_RESULT: u8 = 0x12;
 // ---------------------------------------------------------------------------
 // 0x18 — CONV_STATUS (read-only)
 // ---------------------------------------------------------------------------
+/// Conversion status register address (0x18). Contains data-ready flag, diagnostic
+/// fail flag, channel result flags, and POR (power-on-reset) status.
 pub(crate) const CONV_STATUS: u8 = 0x18;
 
 // CONV_STATUS field masks live in types.rs (ConversionStatus::from_register)
+/// Bit mask for `RESULT_STATUS` in `CONV_STATUS` — set when a new conversion result
+/// is available (data ready).
 pub(crate) const RESULT_STATUS_MASK: u8 = 0b0000_0001;
+/// Bit shift for `RESULT_STATUS` in `CONV_STATUS`.
 pub(crate) const RESULT_STATUS_SHIFT: u8 = 0;
 
 // ---------------------------------------------------------------------------
 // 0x19 — ANGLE_RESULT_MSB (read-only)
 // ---------------------------------------------------------------------------
+/// Angle result MSB register address (0x19). A 2-byte burst read from here
+/// returns [ANGLE_MSB, ANGLE_LSB] (0x19–0x1A); the 12.4 fixed-point value is in degrees.
 pub(crate) const ANGLE_RESULT_MSB: u8 = 0x19;
 // 0x1A ANGLE_RESULT_LSB — implicit via burst read (MSB + 1)
 
 // ---------------------------------------------------------------------------
 // 0x1B — MAGNITUDE_RESULT (read-only, used in CRC path of read_angle)
 // ---------------------------------------------------------------------------
+/// Magnitude result register address (0x1B). Holds the 8-bit CORDIC vector magnitude.
+/// Only read in the CRC code path (3-byte burst: ANGLE_MSB, ANGLE_LSB, MAGNITUDE).
 #[cfg_attr(not(feature = "crc"), allow(dead_code))]
 pub(crate) const MAGNITUDE_RESULT: u8 = 0x1B;
 
 // ---------------------------------------------------------------------------
 // 0x1C — DEVICE_STATUS (read-only)
 // ---------------------------------------------------------------------------
+/// Device status register address (0x1C). Contains fault flags: VCC undervoltage,
+/// oscillator error, OTP CRC error, and INT pin error. Write 1 to clear latched bits.
 pub(crate) const DEVICE_STATUS: u8 = 0x1C;
 
 // DEVICE_STATUS field masks live in types.rs (DeviceStatus::from_register)

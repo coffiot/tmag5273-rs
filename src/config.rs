@@ -527,6 +527,7 @@ pub struct CalibrationConfig {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::register;
 
     #[test]
     fn builder_defaults_match_sparkfun_begin() {
@@ -587,7 +588,11 @@ mod tests {
         assert_eq!(sc2 & 0x0C, 0x00); // angle = None
 
         // Verify T_CONFIG: temperature enabled
-        let tc = writes.iter().find(|(addr, _)| *addr == 0x07).unwrap().1;
+        let tc = writes
+            .iter()
+            .find(|(addr, _)| *addr == register::T_CONFIG)
+            .unwrap()
+            .1;
         assert_eq!(tc & 0x01, 0x01);
     }
 

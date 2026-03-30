@@ -2038,18 +2038,17 @@ fn crc8(data: &[u8]) -> u8 {
 mod tests {
     extern crate alloc;
 
+    use super::*;
+
     use alloc::vec;
     use alloc::vec::Vec;
 
-    use super::*;
     use crate::config::{CalibrationConfig, ConfigBuilder, InterruptConfig, ThresholdConfig};
+    use crate::register;
     use crate::types::{
-        AngleCalculation, ConversionAverage, MagneticChannel, OperatingMode, PowerMode, Range,
-        SleepDuration, TempCoefficient, TriggerMode,
-    };
-    use crate::types::{
-        Degrees, GainChannel, IntPinBehavior, InterruptMode, ThresholdCrossingCount,
-        ThresholdDirection,
+        AngleCalculation, ConversionAverage, Degrees, GainChannel, IntPinBehavior, InterruptMode,
+        MagneticChannel, OperatingMode, PowerMode, Range, SleepDuration, TempCoefficient,
+        ThresholdCrossingCount, ThresholdDirection, TriggerMode,
     };
     use embedded_hal_mock::eh1::delay::{CheckedDelay, Transaction as DelayTransaction};
     use embedded_hal_mock::eh1::i2c::{Mock as I2cMock, Transaction as I2cTransaction};
@@ -2070,7 +2069,7 @@ mod tests {
         let address = 0x22u8;
         let expectations = [
             I2cTransaction::write(address, vec![]),
-            I2cTransaction::write_read(address, vec![0x0D], vec![0x01]),
+            I2cTransaction::write_read(address, vec![register::DEVICE_ID], vec![0x01]),
         ];
         let i2c = I2cMock::new(&expectations);
 
@@ -2083,7 +2082,7 @@ mod tests {
         let address = 0x22u8;
         let expectations = [
             I2cTransaction::write(address, vec![]),
-            I2cTransaction::write_read(address, vec![0x0D], vec![0x02]),
+            I2cTransaction::write_read(address, vec![register::DEVICE_ID], vec![0x02]),
         ];
         let i2c = I2cMock::new(&expectations);
 
@@ -2095,7 +2094,7 @@ mod tests {
     fn detect_a1_succeeds() {
         let expectations = [
             I2cTransaction::write(0x35, vec![]),
-            I2cTransaction::write_read(0x35, vec![0x0D], vec![0x01]),
+            I2cTransaction::write_read(0x35, vec![register::DEVICE_ID], vec![0x01]),
         ];
         let i2c = I2cMock::new(&expectations);
 
@@ -2110,7 +2109,7 @@ mod tests {
             // Wake-up write
             I2cTransaction::write(address, vec![]),
             // DEVICE_ID read NACKs
-            I2cTransaction::write_read(address, vec![0x0D], vec![0x00]).with_error(
+            I2cTransaction::write_read(address, vec![register::DEVICE_ID], vec![0x00]).with_error(
                 embedded_hal::i2c::ErrorKind::NoAcknowledge(
                     embedded_hal::i2c::NoAcknowledgeSource::Address,
                 ),
@@ -2129,7 +2128,7 @@ mod tests {
         let expectations = [
             I2cTransaction::write(address, vec![]),
             // Returns version 3 — not a valid TMAG5273 version
-            I2cTransaction::write_read(address, vec![0x0D], vec![0x03]),
+            I2cTransaction::write_read(address, vec![register::DEVICE_ID], vec![0x03]),
         ];
         let i2c = I2cMock::new(&expectations);
 
@@ -2143,7 +2142,7 @@ mod tests {
         let address = 0x30u8;
         let expectations = [
             I2cTransaction::write(address, vec![]),
-            I2cTransaction::write_read(address, vec![0x0D], vec![0x01]),
+            I2cTransaction::write_read(address, vec![register::DEVICE_ID], vec![0x01]),
         ];
         let i2c = I2cMock::new(&expectations);
 
@@ -2158,7 +2157,7 @@ mod tests {
     fn nack_at(address: u8) -> Vec<I2cTransaction> {
         vec![
             I2cTransaction::write(address, vec![]),
-            I2cTransaction::write_read(address, vec![0x0D], vec![0x00]).with_error(
+            I2cTransaction::write_read(address, vec![register::DEVICE_ID], vec![0x00]).with_error(
                 embedded_hal::i2c::ErrorKind::NoAcknowledge(
                     embedded_hal::i2c::NoAcknowledgeSource::Address,
                 ),
@@ -2170,7 +2169,7 @@ mod tests {
     fn respond_at(address: u8, version: u8) -> Vec<I2cTransaction> {
         vec![
             I2cTransaction::write(address, vec![]),
-            I2cTransaction::write_read(address, vec![0x0D], vec![version]),
+            I2cTransaction::write_read(address, vec![register::DEVICE_ID], vec![version]),
         ]
     }
 
@@ -2226,25 +2225,35 @@ mod tests {
             // Wake-up: empty write (device may NACK — ignored by driver)
             I2cTransaction::write(address, vec![]),
             // Disable interrupts before config (INT_CONFIG_1 = 0x00)
-            I2cTransaction::write(address, vec![0x08, 0x00]),
+            I2cTransaction::write(address, vec![register::INT_CONFIG_1, 0x00]),
             // Burst read manufacturer ID (0x0E..=0x0F) → [LSB=0x49, MSB=0x54]
-            I2cTransaction::write_read(address, vec![0x0E], vec![0x49, 0x54]),
+            I2cTransaction::write_read(
+                address,
+                vec![register::MANUFACTURER_ID_LSB],
+                vec![0x49, 0x54],
+            ),
             // Read device ID (0x0D) → version 1 (B1 variant)
-            I2cTransaction::write_read(address, vec![0x0D], vec![0x01]),
+            I2cTransaction::write_read(address, vec![register::DEVICE_ID], vec![0x01]),
             // Burst write config registers 0x00-0x03
             // dc1 already includes CRC_EN bit via to_register_writes()
             I2cTransaction::write(
                 address,
-                vec![0x00, writes[0].1, writes[1].1, writes[2].1, writes[3].1],
+                vec![
+                    register::DEVICE_CONFIG_1,
+                    writes[0].1,
+                    writes[1].1,
+                    writes[2].1,
+                    writes[3].1,
+                ],
             ),
             // Separate write for T_CONFIG (0x07)
             I2cTransaction::write(address, vec![writes[4].0, writes[4].1]),
             // Read device status
-            I2cTransaction::write_read(address, vec![0x1C], vec![0x00]),
+            I2cTransaction::write_read(address, vec![register::DEVICE_STATUS], vec![0x00]),
             // Clear stale fault flags (DEVICE_STATUS = 0x0F)
-            I2cTransaction::write(address, vec![0x1C, 0x0F]),
+            I2cTransaction::write(address, vec![register::DEVICE_STATUS, 0x0F]),
             // Clear POR flag — write 0x10 (bit 4 = 1) via W1CP mechanism
-            I2cTransaction::write(address, vec![0x18, 0x10]),
+            I2cTransaction::write(address, vec![register::CONV_STATUS, 0x10]),
         ]
     }
 
@@ -2272,9 +2281,9 @@ mod tests {
             // Wake-up: empty write
             I2cTransaction::write(0x22, vec![]),
             // Disable interrupts before config
-            I2cTransaction::write(0x22, vec![0x08, 0x00]),
+            I2cTransaction::write(0x22, vec![register::INT_CONFIG_1, 0x00]),
             // Burst read manufacturer ID — return wrong ID
-            I2cTransaction::write_read(0x22, vec![0x0E], vec![0x00, 0x00]),
+            I2cTransaction::write_read(0x22, vec![register::MANUFACTURER_ID_LSB], vec![0x00, 0x00]),
         ];
         let i2c = I2cMock::new(&expectations);
         let sensor = Tmag5273::new(i2c, DeviceVariant::B1);
@@ -2292,11 +2301,11 @@ mod tests {
             // Wake-up: empty write
             I2cTransaction::write(0x22, vec![]),
             // Disable interrupts before config
-            I2cTransaction::write(0x22, vec![0x08, 0x00]),
+            I2cTransaction::write(0x22, vec![register::INT_CONFIG_1, 0x00]),
             // Burst read manufacturer ID — correct
-            I2cTransaction::write_read(0x22, vec![0x0E], vec![0x49, 0x54]),
+            I2cTransaction::write_read(0x22, vec![register::MANUFACTURER_ID_LSB], vec![0x49, 0x54]),
             // Return version 2 when B1 expects version 1
-            I2cTransaction::write_read(0x22, vec![0x0D], vec![0x02]),
+            I2cTransaction::write_read(0x22, vec![register::DEVICE_ID], vec![0x02]),
         ];
         let i2c = I2cMock::new(&expectations);
         let sensor = Tmag5273::new(i2c, DeviceVariant::B1);
@@ -2320,7 +2329,7 @@ mod tests {
         // Burst read X/Y/Z: 6 bytes from register 0x12
         expectations.push(I2cTransaction::write_read(
             0x22,
-            vec![0x12],
+            vec![register::X_MSB_RESULT],
             vec![0x40, 0x00, 0x20, 0x00, 0x10, 0x00], // X=16384, Y=8192, Z=4096
         ));
 
@@ -2353,7 +2362,7 @@ mod tests {
         #[cfg(not(feature = "crc"))]
         expectations.push(I2cTransaction::write_read(
             0x22,
-            vec![0x10],
+            vec![register::T_MSB_RESULT],
             vec![0x44, 0x64],
         ));
         #[cfg(feature = "crc")]
@@ -2362,7 +2371,7 @@ mod tests {
             let crc = super::crc8(&[0x44, 0x10, 0x45, 0x44, 0x64]);
             expectations.push(I2cTransaction::write_read(
                 0x22,
-                vec![0x10],
+                vec![register::T_MSB_RESULT],
                 vec![0x44, 0x64, crc],
             ));
         }
@@ -2401,7 +2410,11 @@ mod tests {
 
         // Poll max_polls times (10 for X1), all return not-ready
         for _ in 0..config.conversion_average.max_polls() {
-            expectations.push(I2cTransaction::write_read(address, vec![0x18], vec![0x00]));
+            expectations.push(I2cTransaction::write_read(
+                address,
+                vec![register::CONV_STATUS],
+                vec![0x00],
+            ));
         }
 
         let i2c = I2cMock::new(&expectations);
@@ -2423,18 +2436,48 @@ mod tests {
         let mut expectations = init_expectations(address, &default_config());
 
         // set_thresholds: 3 direct writes + 3 read-modify-writes
-        expectations.push(I2cTransaction::write(address, vec![0x04, 0x05])); // X threshold = 5
-        expectations.push(I2cTransaction::write(address, vec![0x05, 0xFB])); // Y threshold = -5 (0xFB)
-        expectations.push(I2cTransaction::write(address, vec![0x06, 0x0A])); // Z threshold = 10
+        expectations.push(I2cTransaction::write(
+            address,
+            vec![register::X_THR_CONFIG, 0x05],
+        )); // X threshold = 5
+        expectations.push(I2cTransaction::write(
+            address,
+            vec![register::Y_THR_CONFIG, 0xFB],
+        )); // Y threshold = -5 (0xFB)
+        expectations.push(I2cTransaction::write(
+            address,
+            vec![register::Z_THR_CONFIG, 0x0A],
+        )); // Z threshold = 10
         // T_CONFIG read-modify-write: preserve T_CH_EN bit (0x01 from init)
-        expectations.push(I2cTransaction::write_read(address, vec![0x07], vec![0x01]));
-        expectations.push(I2cTransaction::write(address, vec![0x07, 0x07])); // temp=3 << 1 | T_CH_EN=1
+        expectations.push(I2cTransaction::write_read(
+            address,
+            vec![register::T_CONFIG],
+            vec![0x01],
+        ));
+        expectations.push(I2cTransaction::write(
+            address,
+            vec![register::T_CONFIG, 0x07],
+        )); // temp=3 << 1 | T_CH_EN=1
         // DEVICE_CONFIG_2 read-modify-write: threshold_hysteresis=SymmetricBand(1) in bits [7:5]
-        expectations.push(I2cTransaction::write_read(address, vec![0x01], vec![0x02]));
-        expectations.push(I2cTransaction::write(address, vec![0x01, 0x22])); // 0x02 | (1 << 5) = 0x22
+        expectations.push(I2cTransaction::write_read(
+            address,
+            vec![register::DEVICE_CONFIG_2],
+            vec![0x02],
+        ));
+        expectations.push(I2cTransaction::write(
+            address,
+            vec![register::DEVICE_CONFIG_2, 0x22],
+        )); // 0x02 | (1 << 5) = 0x22
         // SENSOR_CONFIG_2 read-modify-write: crossing_count=Four(1) in bit [6], direction=Below(1) in bit [5]
-        expectations.push(I2cTransaction::write_read(address, vec![0x03], vec![0x03]));
-        expectations.push(I2cTransaction::write(address, vec![0x03, 0x63])); // 0x03 | (1 << 6) | (1 << 5) = 0x63
+        expectations.push(I2cTransaction::write_read(
+            address,
+            vec![register::SENSOR_CONFIG_2],
+            vec![0x03],
+        ));
+        expectations.push(I2cTransaction::write(
+            address,
+            vec![register::SENSOR_CONFIG_2, 0x63],
+        )); // 0x03 | (1 << 6) | (1 << 5) = 0x63
 
         let i2c = I2cMock::new(&expectations);
         let sensor = Tmag5273::new(i2c, DeviceVariant::B1);
@@ -2466,7 +2509,10 @@ mod tests {
         // INT_CONFIG_1 full write:
         // RSLT_INT=0 | THRESHOLD_INT=1 | INT_STATE=1 | INT_MODE=001 | MASK_INTB=0 | INT_PINSTATE=0
         // = 0b0110_0100 = 0x64 (matches SparkFun's setupWakeUpAndSleep hardcoded value)
-        expectations.push(I2cTransaction::write(address, vec![0x08, 0x64]));
+        expectations.push(I2cTransaction::write(
+            address,
+            vec![register::INT_CONFIG_1, 0x64],
+        ));
 
         let i2c = I2cMock::new(&expectations);
         let sensor = Tmag5273::new(i2c, DeviceVariant::B1);
@@ -2501,7 +2547,10 @@ mod tests {
             let mut expectations = init_expectations(address, &default_config());
 
             let expected_byte = expected_bits << 2; // INT_MODE is bits [4:2]
-            expectations.push(I2cTransaction::write(address, vec![0x08, expected_byte]));
+            expectations.push(I2cTransaction::write(
+                address,
+                vec![register::INT_CONFIG_1, expected_byte],
+            ));
 
             let i2c = I2cMock::new(&expectations);
             let sensor = Tmag5273::new(i2c, DeviceVariant::B1);
@@ -2532,7 +2581,10 @@ mod tests {
 
         // INT_CONFIG_1: THRESHOLD_INT=1 | INT_STATE=1 | INT_MODE=001 | MASK_INTB=1
         // = 0b0110_0101 = 0x65
-        expectations.push(I2cTransaction::write(address, vec![0x08, 0x65]));
+        expectations.push(I2cTransaction::write(
+            address,
+            vec![register::INT_CONFIG_1, 0x65],
+        ));
 
         let i2c = I2cMock::new(&expectations);
         let sensor = Tmag5273::new(i2c, DeviceVariant::B1);
@@ -2558,7 +2610,11 @@ mod tests {
         let mut expectations = init_expectations(address, &default_config());
 
         // Read INT_CONFIG_1 returning 0x01 (only MASK_INTB set at bit 0)
-        expectations.push(I2cTransaction::write_read(address, vec![0x08], vec![0x01]));
+        expectations.push(I2cTransaction::write_read(
+            address,
+            vec![register::INT_CONFIG_1],
+            vec![0x01],
+        ));
 
         let i2c = I2cMock::new(&expectations);
         let sensor = Tmag5273::new(i2c, DeviceVariant::B1);
@@ -2576,7 +2632,11 @@ mod tests {
 
         // INT_CONFIG_1 byte: THRESHOLD_INT=1 | INT_STATE=1 | INT_MODE=001 | MASK_INTB=1
         // = 0b0110_0101 = 0x65
-        expectations.push(I2cTransaction::write_read(address, vec![0x08], vec![0x65]));
+        expectations.push(I2cTransaction::write_read(
+            address,
+            vec![register::INT_CONFIG_1],
+            vec![0x65],
+        ));
 
         let i2c = I2cMock::new(&expectations);
         let sensor = Tmag5273::new(i2c, DeviceVariant::B1);
@@ -2601,14 +2661,30 @@ mod tests {
         let mut expectations = init_expectations(address, &default_config());
 
         // MAG_GAIN_CONFIG (0x09)
-        expectations.push(I2cTransaction::write(address, vec![0x09, 0x80]));
+        expectations.push(I2cTransaction::write(
+            address,
+            vec![register::MAG_GAIN_CONFIG, 0x80],
+        ));
         // MAG_OFFSET_CONFIG_1 (0x0A) — NOT 0x0B!
-        expectations.push(I2cTransaction::write(address, vec![0x0A, 0xF0])); // -16 as u8
+        expectations.push(I2cTransaction::write(
+            address,
+            vec![register::MAG_OFFSET_CONFIG_1, 0xF0],
+        )); // -16 as u8
         // MAG_OFFSET_CONFIG_2 (0x0B) — correct register, avoids Arduino bug
-        expectations.push(I2cTransaction::write(address, vec![0x0B, 0x10])); // +16
+        expectations.push(I2cTransaction::write(
+            address,
+            vec![register::MAG_OFFSET_CONFIG_2, 0x10],
+        )); // +16
         // SENSOR_CONFIG_2 read-modify-write: gain_channel=Second(1) in bit [4]
-        expectations.push(I2cTransaction::write_read(address, vec![0x03], vec![0x03]));
-        expectations.push(I2cTransaction::write(address, vec![0x03, 0x13])); // 0x03 | (1 << 4) = 0x13
+        expectations.push(I2cTransaction::write_read(
+            address,
+            vec![register::SENSOR_CONFIG_2],
+            vec![0x03],
+        ));
+        expectations.push(I2cTransaction::write(
+            address,
+            vec![register::SENSOR_CONFIG_2, 0x13],
+        )); // 0x03 | (1 << 4) = 0x13
 
         let i2c = I2cMock::new(&expectations);
         let sensor = Tmag5273::new(i2c, DeviceVariant::B1);
@@ -2633,11 +2709,27 @@ mod tests {
         let address = 0x22u8;
         let mut expectations = init_expectations(address, &default_config());
 
-        expectations.push(I2cTransaction::write(address, vec![0x09, 0x00])); // gain
-        expectations.push(I2cTransaction::write(address, vec![0x0A, 0x00])); // offset_1 → 0x0A
-        expectations.push(I2cTransaction::write(address, vec![0x0B, 0xFF])); // offset_2 → 0x0B (NOT 0x0A)
-        expectations.push(I2cTransaction::write_read(address, vec![0x03], vec![0x03]));
-        expectations.push(I2cTransaction::write(address, vec![0x03, 0x03])); // gain_channel=First, preserve bits
+        expectations.push(I2cTransaction::write(
+            address,
+            vec![register::MAG_GAIN_CONFIG, 0x00],
+        )); // gain
+        expectations.push(I2cTransaction::write(
+            address,
+            vec![register::MAG_OFFSET_CONFIG_1, 0x00],
+        )); // offset_1
+        expectations.push(I2cTransaction::write(
+            address,
+            vec![register::MAG_OFFSET_CONFIG_2, 0xFF],
+        )); // offset_2
+        expectations.push(I2cTransaction::write_read(
+            address,
+            vec![register::SENSOR_CONFIG_2],
+            vec![0x03],
+        ));
+        expectations.push(I2cTransaction::write(
+            address,
+            vec![register::SENSOR_CONFIG_2, 0x03],
+        )); // gain_channel=First, preserve bits
 
         let i2c = I2cMock::new(&expectations);
         let sensor = Tmag5273::new(i2c, DeviceVariant::B1);
@@ -2667,12 +2759,15 @@ mod tests {
         // Write I2C_ADDRESS register (0x0C) at OLD address:
         // bits [7:1] = new_addr, bit [0] = 1 (update enable)
         let reg_val = (new_addr << 1) | 0x01;
-        expectations.push(I2cTransaction::write(old_addr, vec![0x0C, reg_val]));
+        expectations.push(I2cTransaction::write(
+            old_addr,
+            vec![register::I2C_ADDRESS, reg_val],
+        ));
 
         // Verify at NEW address: burst read manufacturer ID [LSB=0x49, MSB=0x54]
         expectations.push(I2cTransaction::write_read(
             new_addr,
-            vec![0x0E],
+            vec![register::MANUFACTURER_ID_LSB],
             vec![0x49, 0x54],
         ));
 
@@ -2694,12 +2789,15 @@ mod tests {
 
         // Write succeeds at old address
         let reg_val = (new_addr << 1) | 0x01;
-        expectations.push(I2cTransaction::write(old_addr, vec![0x0C, reg_val]));
+        expectations.push(I2cTransaction::write(
+            old_addr,
+            vec![register::I2C_ADDRESS, reg_val],
+        ));
 
         // Verify at new address: burst read returns wrong manufacturer ID
         expectations.push(I2cTransaction::write_read(
             new_addr,
-            vec![0x0E],
+            vec![register::MANUFACTURER_ID_LSB],
             vec![0x00, 0x00],
         ));
 
@@ -2760,8 +2858,15 @@ mod tests {
         let mut expectations = init_expectations(address, &default_config());
 
         // Read DEVICE_CONFIG_1, then write with CRC_EN=1 (bit 7 set).
-        expectations.push(I2cTransaction::write_read(address, vec![0x00], vec![0x00]));
-        expectations.push(I2cTransaction::write(address, vec![0x00, 0x80]));
+        expectations.push(I2cTransaction::write_read(
+            address,
+            vec![register::DEVICE_CONFIG_1],
+            vec![0x00],
+        ));
+        expectations.push(I2cTransaction::write(
+            address,
+            vec![register::DEVICE_CONFIG_1, 0x80],
+        ));
 
         let i2c = I2cMock::new(&expectations);
         let sensor = Tmag5273::new(i2c, DeviceVariant::B1);
@@ -2779,8 +2884,15 @@ mod tests {
         let mut expectations = init_expectations(address, &default_config());
 
         // Read DEVICE_CONFIG_1 with CRC_EN=1, then write with CRC_EN=0.
-        expectations.push(I2cTransaction::write_read(address, vec![0x00], vec![0x80]));
-        expectations.push(I2cTransaction::write(address, vec![0x00, 0x00]));
+        expectations.push(I2cTransaction::write_read(
+            address,
+            vec![register::DEVICE_CONFIG_1],
+            vec![0x80],
+        ));
+        expectations.push(I2cTransaction::write(
+            address,
+            vec![register::DEVICE_CONFIG_1, 0x00],
+        ));
 
         let i2c = I2cMock::new(&expectations);
         let sensor = Tmag5273::new(i2c, DeviceVariant::B1);
@@ -2814,7 +2926,11 @@ mod tests {
         let mut expectations = init_expectations(address, &default_config());
 
         // Return DEVICE_CONFIG_1 with CRC_EN=1.
-        expectations.push(I2cTransaction::write_read(address, vec![0x00], vec![0x80]));
+        expectations.push(I2cTransaction::write_read(
+            address,
+            vec![register::DEVICE_CONFIG_1],
+            vec![0x80],
+        ));
 
         let i2c = I2cMock::new(&expectations);
         let sensor = Tmag5273::new(i2c, DeviceVariant::B1);
@@ -2832,7 +2948,11 @@ mod tests {
         let mut expectations = init_expectations(address, &default_config());
 
         // Return DEVICE_CONFIG_1 with CRC_EN=0.
-        expectations.push(I2cTransaction::write_read(address, vec![0x00], vec![0x00]));
+        expectations.push(I2cTransaction::write_read(
+            address,
+            vec![register::DEVICE_CONFIG_1],
+            vec![0x00],
+        ));
 
         let i2c = I2cMock::new(&expectations);
         let sensor = Tmag5273::new(i2c, DeviceVariant::B1);
@@ -2852,8 +2972,15 @@ mod tests {
         let mut expectations = init_expectations(address, &default_config());
 
         // Read DEVICE_CONFIG_1, then write with I2C_RD=0x01 (OneByte16Bit).
-        expectations.push(I2cTransaction::write_read(address, vec![0x00], vec![0x00]));
-        expectations.push(I2cTransaction::write(address, vec![0x00, 0x01]));
+        expectations.push(I2cTransaction::write_read(
+            address,
+            vec![register::DEVICE_CONFIG_1],
+            vec![0x00],
+        ));
+        expectations.push(I2cTransaction::write(
+            address,
+            vec![register::DEVICE_CONFIG_1, 0x01],
+        ));
 
         let i2c = I2cMock::new(&expectations);
         let sensor = Tmag5273::new(i2c, DeviceVariant::B1);
@@ -2871,7 +2998,11 @@ mod tests {
         let mut expectations = init_expectations(address, &default_config());
 
         // Return DEVICE_CONFIG_1 with I2C_RD=0x02 (OneByte8Bit).
-        expectations.push(I2cTransaction::write_read(address, vec![0x00], vec![0x02]));
+        expectations.push(I2cTransaction::write_read(
+            address,
+            vec![register::DEVICE_CONFIG_1],
+            vec![0x02],
+        ));
 
         let i2c = I2cMock::new(&expectations);
         let sensor = Tmag5273::new(i2c, DeviceVariant::B1);
@@ -2889,8 +3020,15 @@ mod tests {
         let mut expectations = init_expectations(address, &default_config());
 
         // set_read_mode to OneByte16Bit: read-modify-write on DEVICE_CONFIG_1
-        expectations.push(I2cTransaction::write_read(address, vec![0x00], vec![0x00]));
-        expectations.push(I2cTransaction::write(address, vec![0x00, 0x01]));
+        expectations.push(I2cTransaction::write_read(
+            address,
+            vec![register::DEVICE_CONFIG_1],
+            vec![0x00],
+        ));
+        expectations.push(I2cTransaction::write(
+            address,
+            vec![register::DEVICE_CONFIG_1, 0x01],
+        ));
 
         let i2c = I2cMock::new(&expectations);
         let sensor = Tmag5273::new(i2c, DeviceVariant::B1);
@@ -2910,8 +3048,15 @@ mod tests {
         let mut expectations = init_expectations(address, &default_config());
 
         // set_read_mode to OneByte8Bit
-        expectations.push(I2cTransaction::write_read(address, vec![0x00], vec![0x00]));
-        expectations.push(I2cTransaction::write(address, vec![0x00, 0x02]));
+        expectations.push(I2cTransaction::write_read(
+            address,
+            vec![register::DEVICE_CONFIG_1],
+            vec![0x00],
+        ));
+        expectations.push(I2cTransaction::write(
+            address,
+            vec![register::DEVICE_CONFIG_1, 0x02],
+        ));
 
         let i2c = I2cMock::new(&expectations);
         let sensor = Tmag5273::new(i2c, DeviceVariant::B1);
@@ -2933,7 +3078,11 @@ mod tests {
         let mut expectations = init_expectations(address, &default_config());
 
         // Return DEVICE_STATUS with INTB_RB=1 (bit 4 set) and no faults.
-        expectations.push(I2cTransaction::write_read(address, vec![0x1C], vec![0x10]));
+        expectations.push(I2cTransaction::write_read(
+            address,
+            vec![register::DEVICE_STATUS],
+            vec![0x10],
+        ));
 
         let i2c = I2cMock::new(&expectations);
         let sensor = Tmag5273::new(i2c, DeviceVariant::B1);
@@ -2951,7 +3100,11 @@ mod tests {
         let mut expectations = init_expectations(address, &default_config());
 
         // Return DEVICE_STATUS with INTB_RB=0, no faults.
-        expectations.push(I2cTransaction::write_read(address, vec![0x1C], vec![0x00]));
+        expectations.push(I2cTransaction::write_read(
+            address,
+            vec![register::DEVICE_STATUS],
+            vec![0x00],
+        ));
 
         let i2c = I2cMock::new(&expectations);
         let sensor = Tmag5273::new(i2c, DeviceVariant::B1);
@@ -3004,7 +3157,11 @@ mod tests {
         // DEVICE_CONFIG_2 with operating_mode = WakeUpAndSleep (0b11) in
         // bits [1:0], plus LP_LN=1 (bit 4) to verify field isolation.
         // Register value: 0b0001_0011 = 0x13
-        expectations.push(I2cTransaction::write_read(address, vec![0x01], vec![0x13]));
+        expectations.push(I2cTransaction::write_read(
+            address,
+            vec![register::DEVICE_CONFIG_2],
+            vec![0x13],
+        ));
 
         let i2c = I2cMock::new(&expectations);
         let sensor = Tmag5273::new(i2c, DeviceVariant::B1);
@@ -3025,7 +3182,11 @@ mod tests {
         // SENSOR_CONFIG_1 with MAG_CH_EN = XYZ (0x7) in bits [7:4],
         // SLEEPTIME = Ms5 (0x1) in bits [3:0].
         // Register value: 0b0111_0001 = 0x71
-        expectations.push(I2cTransaction::write_read(address, vec![0x02], vec![0x71]));
+        expectations.push(I2cTransaction::write_read(
+            address,
+            vec![register::SENSOR_CONFIG_1],
+            vec![0x71],
+        ));
 
         let i2c = I2cMock::new(&expectations);
         let sensor = Tmag5273::new(i2c, DeviceVariant::B1);
@@ -3046,7 +3207,11 @@ mod tests {
         // CONV_STATUS with SET_COUNT=5 (bits [7:5] = 0b101), POR=1 (bit 4),
         // DIAG=1 (bit 1), RESULT=1 (bit 0).
         // 0b1011_0011 = 0xB3
-        expectations.push(I2cTransaction::write_read(address, vec![0x18], vec![0xB3]));
+        expectations.push(I2cTransaction::write_read(
+            address,
+            vec![register::CONV_STATUS],
+            vec![0xB3],
+        ));
 
         let i2c = I2cMock::new(&expectations);
         let sensor = Tmag5273::new(i2c, DeviceVariant::B1);
@@ -3070,7 +3235,11 @@ mod tests {
         let mut expectations = init_expectations(address, &default_config());
 
         // CONV_STATUS with DIAG_FAIL=0 (bit 1 clear)
-        expectations.push(I2cTransaction::write_read(address, vec![0x18], vec![0x00]));
+        expectations.push(I2cTransaction::write_read(
+            address,
+            vec![register::CONV_STATUS],
+            vec![0x00],
+        ));
         // No DEVICE_STATUS read should follow.
 
         let i2c = I2cMock::new(&expectations);
@@ -3091,10 +3260,18 @@ mod tests {
         let mut expectations = init_expectations(address, &default_config());
 
         // CONV_STATUS with DIAG_FAIL=1 (bit 1 set) → 0x02
-        expectations.push(I2cTransaction::write_read(address, vec![0x18], vec![0x02]));
+        expectations.push(I2cTransaction::write_read(
+            address,
+            vec![register::CONV_STATUS],
+            vec![0x02],
+        ));
         // Driver should then read DEVICE_STATUS (0x1C) to get fault details.
         // Return VCC undervoltage (bit 0) + oscillator error (bit 3) = 0x09.
-        expectations.push(I2cTransaction::write_read(address, vec![0x1C], vec![0x09]));
+        expectations.push(I2cTransaction::write_read(
+            address,
+            vec![register::DEVICE_STATUS],
+            vec![0x09],
+        ));
 
         let i2c = I2cMock::new(&expectations);
         let sensor = Tmag5273::new(i2c, DeviceVariant::B1);
@@ -3119,7 +3296,7 @@ mod tests {
         // 7-byte burst: X_MSB, X_LSB, Y_MSB, Y_LSB, Z_MSB, Z_LSB, CONV_STATUS
         vec![I2cTransaction::write_read(
             address,
-            vec![0x12],
+            vec![register::X_MSB_RESULT],
             vec![0x40, 0x00, 0x20, 0x00, 0x10, 0x00, conv_status],
         )]
     }
@@ -3136,7 +3313,11 @@ mod tests {
         // 7-byte burst with DIAG_FAIL=1 (bit 1 set → 0x02)
         expectations.extend(diag_read_magnetic_expectations(address, 0x02));
         // Halt reads DEVICE_STATUS (0x1C) on fault → VCC undervoltage (0x01)
-        expectations.push(I2cTransaction::write_read(address, vec![0x1C], vec![0x01]));
+        expectations.push(I2cTransaction::write_read(
+            address,
+            vec![register::DEVICE_STATUS],
+            vec![0x01],
+        ));
 
         let i2c = I2cMock::new(&expectations);
         let sensor = Tmag5273::new(i2c, DeviceVariant::B1);
@@ -3230,7 +3411,7 @@ mod tests {
         // Off: standard 6-byte burst, no CONV_STATUS byte
         expectations.push(I2cTransaction::write_read(
             address,
-            vec![0x12],
+            vec![register::X_MSB_RESULT],
             vec![0x40, 0x00, 0x20, 0x00, 0x10, 0x00],
         ));
 
@@ -3258,11 +3439,15 @@ mod tests {
         // CONV_STATUS with DIAG_FAIL=1 (bit 1 → 0x02) at buf[8]
         expectations.push(I2cTransaction::write_read(
             address,
-            vec![0x10],
+            vec![register::T_MSB_RESULT],
             vec![0x44, 0x64, 0x40, 0x00, 0x20, 0x00, 0x10, 0x00, 0x02],
         ));
         // Halt reads DEVICE_STATUS → VCC undervoltage (0x01)
-        expectations.push(I2cTransaction::write_read(address, vec![0x1C], vec![0x01]));
+        expectations.push(I2cTransaction::write_read(
+            address,
+            vec![register::DEVICE_STATUS],
+            vec![0x01],
+        ));
 
         let i2c = I2cMock::new(&expectations);
         let sensor = Tmag5273::new(i2c, DeviceVariant::B1);
@@ -3290,13 +3475,21 @@ mod tests {
         // read_register_pair(T_MSB_RESULT) → 2 bytes
         expectations.push(I2cTransaction::write_read(
             address,
-            vec![0x10],
+            vec![register::T_MSB_RESULT],
             vec![0x44, 0x64],
         ));
         // read_and_check_diag → read CONV_STATUS (0x18) with DIAG_FAIL=1
-        expectations.push(I2cTransaction::write_read(address, vec![0x18], vec![0x02]));
+        expectations.push(I2cTransaction::write_read(
+            address,
+            vec![register::CONV_STATUS],
+            vec![0x02],
+        ));
         // Halt reads DEVICE_STATUS → oscillator error (0x08)
-        expectations.push(I2cTransaction::write_read(address, vec![0x1C], vec![0x08]));
+        expectations.push(I2cTransaction::write_read(
+            address,
+            vec![register::DEVICE_STATUS],
+            vec![0x08],
+        ));
 
         let i2c = I2cMock::new(&expectations);
         let sensor = Tmag5273::new(i2c, DeviceVariant::B1);
@@ -3322,11 +3515,15 @@ mod tests {
         // read_register_pair(T_MSB_RESULT)
         expectations.push(I2cTransaction::write_read(
             address,
-            vec![0x10],
+            vec![register::T_MSB_RESULT],
             vec![0x44, 0x64],
         ));
         // read_and_check_diag → read CONV_STATUS with DIAG_FAIL=1
-        expectations.push(I2cTransaction::write_read(address, vec![0x18], vec![0x02]));
+        expectations.push(I2cTransaction::write_read(
+            address,
+            vec![register::CONV_STATUS],
+            vec![0x02],
+        ));
         // Warn+defmt logging is gated with not(test) so no DEVICE_STATUS read in tests.
 
         let i2c = I2cMock::new(&expectations);
@@ -3351,11 +3548,15 @@ mod tests {
         // read_register_pair(T_MSB_RESULT)
         expectations.push(I2cTransaction::write_read(
             address,
-            vec![0x10],
+            vec![register::T_MSB_RESULT],
             vec![0x44, 0x64],
         ));
         // read_and_check_diag → read CONV_STATUS with DIAG_FAIL=1
-        expectations.push(I2cTransaction::write_read(address, vec![0x18], vec![0x02]));
+        expectations.push(I2cTransaction::write_read(
+            address,
+            vec![register::CONV_STATUS],
+            vec![0x02],
+        ));
         // Ignore: no DEVICE_STATUS read
 
         let i2c = I2cMock::new(&expectations);
@@ -3381,7 +3582,7 @@ mod tests {
         // X = 0x4000 (16384), Y = 0x2000 (8192), Z = 0x1000 (4096)
         expectations.push(I2cTransaction::write_read(
             address,
-            vec![0x10],
+            vec![register::T_MSB_RESULT],
             vec![0x44, 0x64, 0x40, 0x00, 0x20, 0x00, 0x10, 0x00],
         ));
 
@@ -3415,8 +3616,15 @@ mod tests {
         let mut expectations = init_expectations(address, &default_config());
 
         // set_read_mode to OneByte16Bit: read-modify-write on DEVICE_CONFIG_1
-        expectations.push(I2cTransaction::write_read(address, vec![0x00], vec![0x00]));
-        expectations.push(I2cTransaction::write(address, vec![0x00, 0x01]));
+        expectations.push(I2cTransaction::write_read(
+            address,
+            vec![register::DEVICE_CONFIG_1],
+            vec![0x00],
+        ));
+        expectations.push(I2cTransaction::write(
+            address,
+            vec![register::DEVICE_CONFIG_1, 0x01],
+        ));
 
         let i2c = I2cMock::new(&expectations);
         let sensor = Tmag5273::new(i2c, DeviceVariant::B1);
@@ -3446,7 +3654,7 @@ mod tests {
         // 8-byte burst read — temperature registers contain undefined data
         expectations.push(I2cTransaction::write_read(
             address,
-            vec![0x10],
+            vec![register::T_MSB_RESULT],
             vec![0xFF, 0xFF, 0x40, 0x00, 0x20, 0x00, 0x10, 0x00],
         ));
 
@@ -3474,14 +3682,24 @@ mod tests {
 
         // INT_CONFIG_1 full write: threshold INT + Pulse10us + ThroughInt mode
         // = 0b0110_0100 = 0x64 (same result as original magic value)
-        expectations.push(I2cTransaction::write(address, vec![0x08, 0x64]));
+        expectations.push(I2cTransaction::write(
+            address,
+            vec![register::INT_CONFIG_1, 0x64],
+        ));
 
         // DEVICE_CONFIG_2 read-modify-write:
         // Read current value (e.g. 0x02 = ContinuousMeasure mode from init)
-        expectations.push(I2cTransaction::write_read(address, vec![0x01], vec![0x02]));
+        expectations.push(I2cTransaction::write_read(
+            address,
+            vec![register::DEVICE_CONFIG_2],
+            vec![0x02],
+        ));
         // Write back with OperatingMode=WakeUpAndSleep (0b11) + THR_HYST=1 (0b001 << 5)
         // 0x02 & ~0b1110_0011 = 0x00, then | (1 << 5) | 0x03 = 0x23
-        expectations.push(I2cTransaction::write(address, vec![0x01, 0x23]));
+        expectations.push(I2cTransaction::write(
+            address,
+            vec![register::DEVICE_CONFIG_2, 0x23],
+        ));
 
         let i2c = I2cMock::new(&expectations);
         let sensor = Tmag5273::new(i2c, DeviceVariant::B1);
@@ -3508,7 +3726,11 @@ mod tests {
         // Sign extend 7-bit: bit 6 set (0x40), so 123 | 0x80 = 0xFB as i8 = -5.
 
         // Return T_CONFIG with threshold=-5 encoded: 0xF7
-        expectations.push(I2cTransaction::write_read(address, vec![0x07], vec![0xF7]));
+        expectations.push(I2cTransaction::write_read(
+            address,
+            vec![register::T_CONFIG],
+            vec![0xF7],
+        ));
 
         let i2c = I2cMock::new(&expectations);
         let sensor = Tmag5273::new(i2c, DeviceVariant::B1);
@@ -3530,7 +3752,11 @@ mod tests {
         // With T_CH_EN=1: 0x14 | 0x01 = 0x15.
         // Extract: (0x15 & 0xFE) >> 1 = 0x0A = 10.
         // Bit 6 clear, so no sign extension: result = 10.
-        expectations.push(I2cTransaction::write_read(address, vec![0x07], vec![0x15]));
+        expectations.push(I2cTransaction::write_read(
+            address,
+            vec![register::T_CONFIG],
+            vec![0x15],
+        ));
 
         let i2c = I2cMock::new(&expectations);
         let sensor = Tmag5273::new(i2c, DeviceVariant::B1);
@@ -3579,7 +3805,7 @@ mod tests {
         // Burst read X/Y/Z: 6 bytes from register 0x12 (same raw bytes)
         expectations.push(I2cTransaction::write_read(
             address,
-            vec![0x12],
+            vec![register::X_MSB_RESULT],
             vec![0x40, 0x00, 0x20, 0x00, 0x10, 0x00],
         ));
 
@@ -3609,7 +3835,7 @@ mod tests {
         // Burst read still happens (6 bytes), raw values don't matter
         expectations.push(I2cTransaction::write_read(
             address,
-            vec![0x12],
+            vec![register::X_MSB_RESULT],
             vec![0x00, 0x00, 0x00, 0x00, 0x00, 0x00],
         ));
 
@@ -3641,7 +3867,7 @@ mod tests {
         #[cfg(not(feature = "crc"))]
         expectations.push(I2cTransaction::write_read(
             address,
-            vec![0x19],
+            vec![register::ANGLE_RESULT_MSB],
             vec![0x0B, 0x40, 0x2A], // raw_angle=0x0B40 → 180.0°, magnitude=42
         ));
         // With CRC: read_register_pair(0x19) + read_register(0x1B)
@@ -3649,12 +3875,12 @@ mod tests {
         {
             expectations.push(I2cTransaction::write_read(
                 address,
-                vec![0x19],
+                vec![register::ANGLE_RESULT_MSB],
                 vec![0x0B, 0x40, 0xA9], // CRC = 0xA9
             ));
             expectations.push(I2cTransaction::write_read(
                 address,
-                vec![0x1B],
+                vec![register::MAGNITUDE_RESULT],
                 vec![0x2A], // magnitude = 42
             ));
         }
@@ -3692,8 +3918,15 @@ mod tests {
         let mut expectations = init_expectations(address, &default_config());
 
         // set_read_mode to OneByte16Bit: read-modify-write on DEVICE_CONFIG_1 (0x00)
-        expectations.push(I2cTransaction::write_read(address, vec![0x00], vec![0x00]));
-        expectations.push(I2cTransaction::write(address, vec![0x00, 0x01]));
+        expectations.push(I2cTransaction::write_read(
+            address,
+            vec![register::DEVICE_CONFIG_1],
+            vec![0x00],
+        ));
+        expectations.push(I2cTransaction::write(
+            address,
+            vec![register::DEVICE_CONFIG_1, 0x01],
+        ));
 
         let i2c = I2cMock::new(&expectations);
         let sensor = Tmag5273::new(i2c, DeviceVariant::B1);
@@ -3720,9 +3953,19 @@ mod tests {
         // Wake-up write before set_mode
         expectations.push(I2cTransaction::write(address, vec![]));
         // Read DEVICE_CONFIG_2 → current value
-        expectations.push(I2cTransaction::write_read(address, vec![0x01], vec![dc2]));
+        expectations.push(I2cTransaction::write_read(
+            address,
+            vec![register::DEVICE_CONFIG_2],
+            vec![dc2],
+        ));
         // Write back with mode bits [1:0] changed to Standby (0x00)
-        expectations.push(I2cTransaction::write(address, vec![0x01, dc2 & !0x03]));
+        expectations.push(I2cTransaction::write(
+            address,
+            vec![
+                register::DEVICE_CONFIG_2,
+                dc2 & !register::OPERATING_MODE_MASK,
+            ],
+        ));
 
         let i2c = I2cMock::new(&expectations);
         let sensor = Tmag5273::new(i2c, DeviceVariant::B1);
@@ -3743,11 +3986,18 @@ mod tests {
         // Wake-up write before set_mode (via sleep())
         expectations.push(I2cTransaction::write(address, vec![]));
         // Read DEVICE_CONFIG_2 → current value
-        expectations.push(I2cTransaction::write_read(address, vec![0x01], vec![dc2]));
+        expectations.push(I2cTransaction::write_read(
+            address,
+            vec![register::DEVICE_CONFIG_2],
+            vec![dc2],
+        ));
         // Write back with mode bits [1:0] = 0x01 (Sleep)
         expectations.push(I2cTransaction::write(
             address,
-            vec![0x01, (dc2 & !0x03) | 0x01],
+            vec![
+                register::DEVICE_CONFIG_2,
+                (dc2 & !register::OPERATING_MODE_MASK) | 0x01,
+            ],
         ));
 
         let i2c = I2cMock::new(&expectations);
@@ -3771,16 +4021,25 @@ mod tests {
         expectations.push(I2cTransaction::write(address, vec![]));
         // First read_register NACKs
         expectations.push(
-            I2cTransaction::write_read(address, vec![0x01], vec![dc2]).with_error(
-                embedded_hal::i2c::ErrorKind::NoAcknowledge(
+            I2cTransaction::write_read(address, vec![register::DEVICE_CONFIG_2], vec![dc2])
+                .with_error(embedded_hal::i2c::ErrorKind::NoAcknowledge(
                     embedded_hal::i2c::NoAcknowledgeSource::Address,
-                ),
-            ),
+                )),
         );
         // Retry: second read_register succeeds
-        expectations.push(I2cTransaction::write_read(address, vec![0x01], vec![dc2]));
+        expectations.push(I2cTransaction::write_read(
+            address,
+            vec![register::DEVICE_CONFIG_2],
+            vec![dc2],
+        ));
         // Write-back with Standby mode
-        expectations.push(I2cTransaction::write(address, vec![0x01, dc2 & !0x03]));
+        expectations.push(I2cTransaction::write(
+            address,
+            vec![
+                register::DEVICE_CONFIG_2,
+                dc2 & !register::OPERATING_MODE_MASK,
+            ],
+        ));
 
         let i2c = I2cMock::new(&expectations);
         let sensor = Tmag5273::new(i2c, DeviceVariant::B1);
@@ -3803,11 +4062,10 @@ mod tests {
         // All 3 attempts NACK
         for _ in 0..3 {
             expectations.push(
-                I2cTransaction::write_read(address, vec![0x01], vec![dc2]).with_error(
-                    embedded_hal::i2c::ErrorKind::NoAcknowledge(
+                I2cTransaction::write_read(address, vec![register::DEVICE_CONFIG_2], vec![dc2])
+                    .with_error(embedded_hal::i2c::ErrorKind::NoAcknowledge(
                         embedded_hal::i2c::NoAcknowledgeSource::Address,
-                    ),
-                ),
+                    )),
             );
         }
 
@@ -3832,7 +4090,7 @@ mod tests {
         expectations.push(I2cTransaction::write(address, vec![]));
         // First read_register returns Bus error — should NOT retry
         expectations.push(
-            I2cTransaction::write_read(address, vec![0x01], vec![dc2])
+            I2cTransaction::write_read(address, vec![register::DEVICE_CONFIG_2], vec![dc2])
                 .with_error(embedded_hal::i2c::ErrorKind::Bus),
         );
         // No further I2C transactions expected — retry is skipped
@@ -3860,7 +4118,11 @@ mod tests {
         // trigger_conversion: read CONV_STATUS with start bit (0x18 | 0x80 = 0x98)
         expectations.push(I2cTransaction::write_read(address, vec![0x98], vec![0x00]));
         // First poll of CONV_STATUS returns result_ready (bit 0 set)
-        expectations.push(I2cTransaction::write_read(address, vec![0x18], vec![0x01]));
+        expectations.push(I2cTransaction::write_read(
+            address,
+            vec![register::CONV_STATUS],
+            vec![0x01],
+        ));
 
         let i2c = I2cMock::new(&expectations);
         let sensor = Tmag5273::new(i2c, DeviceVariant::B1);
@@ -3888,11 +4150,15 @@ mod tests {
         // trigger_conversion: read 0x98 → 0x00
         expectations.push(I2cTransaction::write_read(address, vec![0x98], vec![0x00]));
         // wait_for_conversion: poll 0x18 → ready on first poll
-        expectations.push(I2cTransaction::write_read(address, vec![0x18], vec![0x01]));
+        expectations.push(I2cTransaction::write_read(
+            address,
+            vec![register::CONV_STATUS],
+            vec![0x01],
+        ));
         // read_all: 8-byte burst from T_MSB_RESULT (0x10)
         expectations.push(I2cTransaction::write_read(
             address,
-            vec![0x10],
+            vec![register::T_MSB_RESULT],
             vec![0x44, 0x64, 0x40, 0x00, 0x20, 0x00, 0x10, 0x00],
         ));
 
@@ -3932,13 +4198,13 @@ mod tests {
         // CRC input: [addr<<1|W=0x44, register=0x19, addr<<1|R=0x45, MSB=0x0B, LSB=0x40]
         expectations.push(I2cTransaction::write_read(
             address,
-            vec![0x19],
+            vec![register::ANGLE_RESULT_MSB],
             vec![0x0B, 0x40, 0xA9], // CRC = 0xA9
         ));
         // read_register(MAGNITUDE_RESULT=0x1B) → 1 byte
         expectations.push(I2cTransaction::write_read(
             address,
-            vec![0x1B],
+            vec![register::MAGNITUDE_RESULT],
             vec![0x2A], // magnitude = 42
         ));
 
@@ -3964,7 +4230,7 @@ mod tests {
         // Correct CRC for [0x44, 0x10, 0x45, 0x44, 0x64] is 0x6B
         expectations.push(I2cTransaction::write_read(
             address,
-            vec![0x10],
+            vec![register::T_MSB_RESULT],
             vec![0x44, 0x64, 0xFF], // 0xFF is wrong CRC
         ));
 
@@ -3994,7 +4260,7 @@ mod tests {
         // Block 1: T_MSB(0x10) → [T_MSB=0x44, T_LSB=0x64, X_MSB=0x10, X_LSB=0x00, CRC]
         expectations.push(I2cTransaction::write_read(
             address,
-            vec![0x10],
+            vec![register::T_MSB_RESULT],
             vec![0x44, 0x64, 0x10, 0x00, 0x35],
         ));
         // Block 2: 0x14 → [Y_MSB=0x20, Y_LSB=0x00, Z_MSB=0x30, Z_LSB=0x00, CRC]
@@ -4026,7 +4292,7 @@ mod tests {
         // Temperature bytes are discarded by read_magnetic
         expectations.push(I2cTransaction::write_read(
             address,
-            vec![0x10],
+            vec![register::T_MSB_RESULT],
             vec![0x44, 0x64, 0x10, 0x00, 0x35],
         ));
         // Block 2: 0x14 → [Y_MSB, Y_LSB, Z_MSB, Z_LSB, CRC]
@@ -4056,7 +4322,7 @@ mod tests {
         // Block 1: valid CRC
         expectations.push(I2cTransaction::write_read(
             address,
-            vec![0x10],
+            vec![register::T_MSB_RESULT],
             vec![0x44, 0x64, 0x10, 0x00, 0x35],
         ));
         // Block 2: wrong CRC (0xFF instead of 0x5C)
@@ -4091,7 +4357,11 @@ mod tests {
         expectations.push(I2cTransaction::write_read(address, vec![0x98], vec![0x00]));
         // 100 polls (max_polls for X32), all returning not-ready (0x00)
         for _ in 0..config.conversion_average.max_polls() {
-            expectations.push(I2cTransaction::write_read(address, vec![0x18], vec![0x00]));
+            expectations.push(I2cTransaction::write_read(
+                address,
+                vec![register::CONV_STATUS],
+                vec![0x00],
+            ));
         }
 
         let i2c = I2cMock::new(&expectations);
@@ -4131,9 +4401,19 @@ mod tests {
         // Wake-up write before set_mode
         i2c_expectations.push(I2cTransaction::write(address, vec![]));
         // set_mode(Standby): read DEVICE_CONFIG_2 → current value
-        i2c_expectations.push(I2cTransaction::write_read(address, vec![0x01], vec![dc2]));
+        i2c_expectations.push(I2cTransaction::write_read(
+            address,
+            vec![register::DEVICE_CONFIG_2],
+            vec![dc2],
+        ));
         // Write back with mode bits [1:0] = Standby (0x00)
-        i2c_expectations.push(I2cTransaction::write(address, vec![0x01, dc2 & !0x03]));
+        i2c_expectations.push(I2cTransaction::write(
+            address,
+            vec![
+                register::DEVICE_CONFIG_2,
+                dc2 & !register::OPERATING_MODE_MASK,
+            ],
+        ));
 
         let i2c = I2cMock::new(&i2c_expectations);
         // Three wake delays: init(80), set_mode pre-read(80), set_mode post-write(80)
@@ -4163,11 +4443,18 @@ mod tests {
         // Wake-up write before set_mode (via sleep())
         i2c_expectations.push(I2cTransaction::write(address, vec![]));
         // sleep() → set_mode(Sleep): read DEVICE_CONFIG_2
-        i2c_expectations.push(I2cTransaction::write_read(address, vec![0x01], vec![dc2]));
+        i2c_expectations.push(I2cTransaction::write_read(
+            address,
+            vec![register::DEVICE_CONFIG_2],
+            vec![dc2],
+        ));
         // Write back with mode bits [1:0] = Sleep (0x01)
         i2c_expectations.push(I2cTransaction::write(
             address,
-            vec![0x01, (dc2 & !0x03) | 0x01],
+            vec![
+                register::DEVICE_CONFIG_2,
+                (dc2 & !register::OPERATING_MODE_MASK) | 0x01,
+            ],
         ));
 
         let i2c = I2cMock::new(&i2c_expectations);
@@ -4199,7 +4486,11 @@ mod tests {
         // trigger_conversion: read CONV_STATUS with start bit (0x98)
         i2c_expectations.push(I2cTransaction::write_read(address, vec![0x98], vec![0x00]));
         // wait_for_conversion: first poll returns ready (bit 0 set)
-        i2c_expectations.push(I2cTransaction::write_read(address, vec![0x18], vec![0x01]));
+        i2c_expectations.push(I2cTransaction::write_read(
+            address,
+            vec![register::CONV_STATUS],
+            vec![0x01],
+        ));
 
         let i2c = I2cMock::new(&i2c_expectations);
         // Two delays: 80 µs wake from init, 100 µs conversion time
@@ -4246,7 +4537,7 @@ mod tests {
     getter_test!(
         get_temp_coefficient_reads_ndbfe,
         get_temp_coefficient,
-        0x00,
+        register::DEVICE_CONFIG_1,
         0b0010_0000, // MAG_TEMPCO = 1 (NdBFe)
         TempCoefficient::NdBFe
     );
@@ -4254,7 +4545,7 @@ mod tests {
     getter_test!(
         get_conversion_average_reads_x16,
         get_conversion_average,
-        0x00,
+        register::DEVICE_CONFIG_1,
         0b0001_0000, // CONV_AVG = 0b100 (X16)
         ConversionAverage::X16
     );
@@ -4281,7 +4572,11 @@ mod tests {
         let address = 0x22u8;
         let mut expectations = init_expectations(address, &default_config());
         // I2C_GLITCH_FILTER bit 3 = 0 means filter ENABLED
-        expectations.push(I2cTransaction::write_read(address, vec![0x01], vec![0x00]));
+        expectations.push(I2cTransaction::write_read(
+            address,
+            vec![register::DEVICE_CONFIG_2],
+            vec![0x00],
+        ));
         let i2c = I2cMock::new(&expectations);
         let sensor = Tmag5273::new(i2c, DeviceVariant::B1);
         let mut sensor = sensor.init(&default_config()).unwrap();
@@ -4294,7 +4589,11 @@ mod tests {
         let address = 0x22u8;
         let mut expectations = init_expectations(address, &default_config());
         // I2C_GLITCH_FILTER bit 3 = 1 means filter DISABLED
-        expectations.push(I2cTransaction::write_read(address, vec![0x01], vec![0x08]));
+        expectations.push(I2cTransaction::write_read(
+            address,
+            vec![register::DEVICE_CONFIG_2],
+            vec![0x08],
+        ));
         let i2c = I2cMock::new(&expectations);
         let sensor = Tmag5273::new(i2c, DeviceVariant::B1);
         let mut sensor = sensor.init(&default_config()).unwrap();
@@ -4309,7 +4608,7 @@ mod tests {
         // THR_HYST = 0b000 (Signed) in bits [7:5]
         expectations.push(I2cTransaction::write_read(
             address,
-            vec![0x01],
+            vec![register::DEVICE_CONFIG_2],
             vec![0b0000_0000],
         ));
         let i2c = I2cMock::new(&expectations);
@@ -4329,7 +4628,7 @@ mod tests {
         // THR_HYST = 0b001 (SymmetricBand) in bits [7:5]
         expectations.push(I2cTransaction::write_read(
             address,
-            vec![0x01],
+            vec![register::DEVICE_CONFIG_2],
             vec![0b0010_0000],
         ));
         let i2c = I2cMock::new(&expectations);
@@ -4349,7 +4648,7 @@ mod tests {
         // THR_HYST = 0b010 (reserved) in bits [7:5]
         expectations.push(I2cTransaction::write_read(
             address,
-            vec![0x01],
+            vec![register::DEVICE_CONFIG_2],
             vec![0b0100_0000],
         ));
         let i2c = I2cMock::new(&expectations);
@@ -4358,7 +4657,7 @@ mod tests {
         assert!(matches!(
             sensor.get_threshold_hysteresis(),
             Err(Error::InvalidRegisterValue {
-                register: 0x01,
+                register: register::DEVICE_CONFIG_2,
                 value: 2
             }),
         ));
@@ -4420,7 +4719,11 @@ mod tests {
     fn get_temperature_enabled_true() {
         let address = 0x22u8;
         let mut expectations = init_expectations(address, &default_config());
-        expectations.push(I2cTransaction::write_read(address, vec![0x07], vec![0x01]));
+        expectations.push(I2cTransaction::write_read(
+            address,
+            vec![register::T_CONFIG],
+            vec![0x01],
+        ));
         let i2c = I2cMock::new(&expectations);
         let sensor = Tmag5273::new(i2c, DeviceVariant::B1);
         let mut sensor = sensor.init(&default_config()).unwrap();
@@ -4432,7 +4735,11 @@ mod tests {
     fn get_temperature_enabled_false() {
         let address = 0x22u8;
         let mut expectations = init_expectations(address, &default_config());
-        expectations.push(I2cTransaction::write_read(address, vec![0x07], vec![0x00]));
+        expectations.push(I2cTransaction::write_read(
+            address,
+            vec![register::T_CONFIG],
+            vec![0x00],
+        ));
         let i2c = I2cMock::new(&expectations);
         let sensor = Tmag5273::new(i2c, DeviceVariant::B1);
         let mut sensor = sensor.init(&default_config()).unwrap();
@@ -4444,7 +4751,7 @@ mod tests {
     getter_test!(
         get_interrupt_mode_reads_int_only,
         get_interrupt_mode,
-        0x08,
+        register::INT_CONFIG_1,
         0b0000_0100, // INT_MODE = 1 (ThroughInt)
         InterruptMode::ThroughInt
     );
@@ -4454,7 +4761,11 @@ mod tests {
         let address = 0x22u8;
         let mut expectations = init_expectations(address, &default_config());
         // RSLT_INT bit 7 = 1
-        expectations.push(I2cTransaction::write_read(address, vec![0x08], vec![0x80]));
+        expectations.push(I2cTransaction::write_read(
+            address,
+            vec![register::INT_CONFIG_1],
+            vec![0x80],
+        ));
         let i2c = I2cMock::new(&expectations);
         let sensor = Tmag5273::new(i2c, DeviceVariant::B1);
         let mut sensor = sensor.init(&default_config()).unwrap();
@@ -4467,7 +4778,11 @@ mod tests {
         let address = 0x22u8;
         let mut expectations = init_expectations(address, &default_config());
         // THRESHOLD_INT bit 6 = 1
-        expectations.push(I2cTransaction::write_read(address, vec![0x08], vec![0x40]));
+        expectations.push(I2cTransaction::write_read(
+            address,
+            vec![register::INT_CONFIG_1],
+            vec![0x40],
+        ));
         let i2c = I2cMock::new(&expectations);
         let sensor = Tmag5273::new(i2c, DeviceVariant::B1);
         let mut sensor = sensor.init(&default_config()).unwrap();
@@ -4480,7 +4795,11 @@ mod tests {
         let address = 0x22u8;
         let mut expectations = init_expectations(address, &default_config());
         // INT_STATE bit 5 = 1 (pulsed)
-        expectations.push(I2cTransaction::write_read(address, vec![0x08], vec![0x20]));
+        expectations.push(I2cTransaction::write_read(
+            address,
+            vec![register::INT_CONFIG_1],
+            vec![0x20],
+        ));
         let i2c = I2cMock::new(&expectations);
         let sensor = Tmag5273::new(i2c, DeviceVariant::B1);
         let mut sensor = sensor.init(&default_config()).unwrap();
@@ -4496,9 +4815,21 @@ mod tests {
     fn get_xyz_thresholds_signed() {
         let address = 0x22u8;
         let mut expectations = init_expectations(address, &default_config());
-        expectations.push(I2cTransaction::write_read(address, vec![0x04], vec![0x7F]));
-        expectations.push(I2cTransaction::write_read(address, vec![0x05], vec![0x80])); // -128
-        expectations.push(I2cTransaction::write_read(address, vec![0x06], vec![0x00]));
+        expectations.push(I2cTransaction::write_read(
+            address,
+            vec![register::X_THR_CONFIG],
+            vec![0x7F],
+        ));
+        expectations.push(I2cTransaction::write_read(
+            address,
+            vec![register::Y_THR_CONFIG],
+            vec![0x80],
+        )); // -128
+        expectations.push(I2cTransaction::write_read(
+            address,
+            vec![register::Z_THR_CONFIG],
+            vec![0x00],
+        ));
         let i2c = I2cMock::new(&expectations);
         let sensor = Tmag5273::new(i2c, DeviceVariant::B1);
         let mut sensor = sensor.init(&default_config()).unwrap();
@@ -4513,9 +4844,21 @@ mod tests {
     fn get_magnetic_gain_and_offsets() {
         let address = 0x22u8;
         let mut expectations = init_expectations(address, &default_config());
-        expectations.push(I2cTransaction::write_read(address, vec![0x09], vec![0xAB]));
-        expectations.push(I2cTransaction::write_read(address, vec![0x0A], vec![0xFF])); // -1
-        expectations.push(I2cTransaction::write_read(address, vec![0x0B], vec![0x55]));
+        expectations.push(I2cTransaction::write_read(
+            address,
+            vec![register::MAG_GAIN_CONFIG],
+            vec![0xAB],
+        ));
+        expectations.push(I2cTransaction::write_read(
+            address,
+            vec![register::MAG_OFFSET_CONFIG_1],
+            vec![0xFF],
+        )); // -1
+        expectations.push(I2cTransaction::write_read(
+            address,
+            vec![register::MAG_OFFSET_CONFIG_2],
+            vec![0x55],
+        ));
         let i2c = I2cMock::new(&expectations);
         let sensor = Tmag5273::new(i2c, DeviceVariant::B1);
         let mut sensor = sensor.init(&default_config()).unwrap();
@@ -4531,7 +4874,11 @@ mod tests {
         let address = 0x22u8;
         let mut expectations = init_expectations(address, &default_config());
         // CONV_STATUS with RESULT_STATUS bit set
-        expectations.push(I2cTransaction::write_read(address, vec![0x18], vec![0x01]));
+        expectations.push(I2cTransaction::write_read(
+            address,
+            vec![register::CONV_STATUS],
+            vec![0x01],
+        ));
         let i2c = I2cMock::new(&expectations);
         let sensor = Tmag5273::new(i2c, DeviceVariant::B1);
         let mut sensor = sensor.init(&default_config()).unwrap();
@@ -4543,7 +4890,11 @@ mod tests {
     fn is_conversion_complete_returns_false_when_clear() {
         let address = 0x22u8;
         let mut expectations = init_expectations(address, &default_config());
-        expectations.push(I2cTransaction::write_read(address, vec![0x18], vec![0x00]));
+        expectations.push(I2cTransaction::write_read(
+            address,
+            vec![register::CONV_STATUS],
+            vec![0x00],
+        ));
         let i2c = I2cMock::new(&expectations);
         let sensor = Tmag5273::new(i2c, DeviceVariant::B1);
         let mut sensor = sensor.init(&default_config()).unwrap();
@@ -4621,20 +4972,30 @@ mod tests {
 
         // Write I2C_ADDRESS register (0x0C) at OLD address
         let reg_val = (new_addr << 1) | 0x01;
-        expectations.push(I2cTransaction::write(old_addr, vec![0x0C, reg_val]));
+        expectations.push(I2cTransaction::write(
+            old_addr,
+            vec![register::I2C_ADDRESS, reg_val],
+        ));
 
         // Verification read at NEW address returns I2C error
         expectations.push(
-            I2cTransaction::write_read(new_addr, vec![0x0E], vec![0x00, 0x00]).with_error(
-                embedded_hal::i2c::ErrorKind::NoAcknowledge(
-                    embedded_hal::i2c::NoAcknowledgeSource::Address,
-                ),
-            ),
+            I2cTransaction::write_read(
+                new_addr,
+                vec![register::MANUFACTURER_ID_LSB],
+                vec![0x00, 0x00],
+            )
+            .with_error(embedded_hal::i2c::ErrorKind::NoAcknowledge(
+                embedded_hal::i2c::NoAcknowledgeSource::Address,
+            )),
         );
 
         // After failure, driver should revert to old address.
         // Verify by reading a register at the old address.
-        expectations.push(I2cTransaction::write_read(old_addr, vec![0x00], vec![0x00]));
+        expectations.push(I2cTransaction::write_read(
+            old_addr,
+            vec![register::DEVICE_CONFIG_1],
+            vec![0x00],
+        ));
 
         let i2c = I2cMock::new(&expectations);
         let sensor = Tmag5273::new(i2c, DeviceVariant::B1);
@@ -4672,13 +5033,21 @@ mod tests {
         // 3-byte burst read from ANGLE_RESULT_MSB (0x19): angle data
         expectations.push(I2cTransaction::write_read(
             address,
-            vec![0x19],
+            vec![register::ANGLE_RESULT_MSB],
             vec![0x0B, 0x40, 0x2A], // raw_angle=0x0B40, magnitude=42
         ));
         // read_and_check_diag: read CONV_STATUS (0x18) with DIAG_STATUS bit 1 set
-        expectations.push(I2cTransaction::write_read(address, vec![0x18], vec![0x02]));
+        expectations.push(I2cTransaction::write_read(
+            address,
+            vec![register::CONV_STATUS],
+            vec![0x02],
+        ));
         // Halt reads DEVICE_STATUS (0x1C) to get fault flags
-        expectations.push(I2cTransaction::write_read(address, vec![0x1C], vec![0x01]));
+        expectations.push(I2cTransaction::write_read(
+            address,
+            vec![register::DEVICE_STATUS],
+            vec![0x01],
+        ));
 
         let i2c = I2cMock::new(&expectations);
         let sensor = Tmag5273::new(i2c, DeviceVariant::B1);
@@ -4702,8 +5071,15 @@ mod tests {
         let mut expectations = init_expectations(address, &default_config());
 
         // set_read_mode to OneByte16Bit: read-modify-write on DEVICE_CONFIG_1
-        expectations.push(I2cTransaction::write_read(address, vec![0x00], vec![0x00]));
-        expectations.push(I2cTransaction::write(address, vec![0x00, 0x01]));
+        expectations.push(I2cTransaction::write_read(
+            address,
+            vec![register::DEVICE_CONFIG_1],
+            vec![0x00],
+        ));
+        expectations.push(I2cTransaction::write(
+            address,
+            vec![register::DEVICE_CONFIG_1, 0x01],
+        ));
 
         let i2c = I2cMock::new(&expectations);
         let sensor = Tmag5273::new(i2c, DeviceVariant::B1);
@@ -4726,48 +5102,94 @@ mod tests {
 
         // --- set_thresholds writes ---
         // X threshold = 42
-        expectations.push(I2cTransaction::write(address, vec![0x04, 42u8 as u8]));
+        expectations.push(I2cTransaction::write(
+            address,
+            vec![register::X_THR_CONFIG, 42u8 as u8],
+        ));
         // Y threshold = -10 (0xF6)
-        expectations.push(I2cTransaction::write(address, vec![0x05, (-10i8) as u8]));
+        expectations.push(I2cTransaction::write(
+            address,
+            vec![register::Y_THR_CONFIG, (-10i8) as u8],
+        ));
         // Z threshold = 100 (wraps: 100i8 as u8 = 0x64)
-        expectations.push(I2cTransaction::write(address, vec![0x06, 100u8 as u8]));
+        expectations.push(I2cTransaction::write(
+            address,
+            vec![register::Z_THR_CONFIG, 100u8 as u8],
+        ));
         // T_CONFIG read-modify-write: preserve T_CH_EN bit (0x01 from init)
         // temperature=5 → (5 << 1) | T_CH_EN=1 = 0x0B
-        expectations.push(I2cTransaction::write_read(address, vec![0x07], vec![0x01]));
-        expectations.push(I2cTransaction::write(address, vec![0x07, 0x0B]));
+        expectations.push(I2cTransaction::write_read(
+            address,
+            vec![register::T_CONFIG],
+            vec![0x01],
+        ));
+        expectations.push(I2cTransaction::write(
+            address,
+            vec![register::T_CONFIG, 0x0B],
+        ));
         // DEVICE_CONFIG_2 read-modify-write: hysteresis=Signed(0) in bits [7:5]
-        expectations.push(I2cTransaction::write_read(address, vec![0x01], vec![0x02]));
-        expectations.push(I2cTransaction::write(address, vec![0x01, 0x02])); // 0x02 | (0 << 5) = 0x02
+        expectations.push(I2cTransaction::write_read(
+            address,
+            vec![register::DEVICE_CONFIG_2],
+            vec![0x02],
+        ));
+        expectations.push(I2cTransaction::write(
+            address,
+            vec![register::DEVICE_CONFIG_2, 0x02],
+        )); // 0x02 | (0 << 5) = 0x02
         // SENSOR_CONFIG_2 read-modify-write: crossing_count=Four(1) bit [6], direction=Below(1) bit [5]
-        expectations.push(I2cTransaction::write_read(address, vec![0x03], vec![0x03]));
-        expectations.push(I2cTransaction::write(address, vec![0x03, 0x63])); // 0x03 | (1 << 6) | (1 << 5)
+        expectations.push(I2cTransaction::write_read(
+            address,
+            vec![register::SENSOR_CONFIG_2],
+            vec![0x03],
+        ));
+        expectations.push(I2cTransaction::write(
+            address,
+            vec![register::SENSOR_CONFIG_2, 0x63],
+        )); // 0x03 | (1 << 6) | (1 << 5)
 
         // --- getter reads ---
         // get_x_threshold: read X_THR_CONFIG (0x04) → 42
-        expectations.push(I2cTransaction::write_read(address, vec![0x04], vec![42]));
+        expectations.push(I2cTransaction::write_read(
+            address,
+            vec![register::X_THR_CONFIG],
+            vec![42],
+        ));
         // get_y_threshold: read Y_THR_CONFIG (0x05) → 0xF6 (-10)
-        expectations.push(I2cTransaction::write_read(address, vec![0x05], vec![0xF6]));
+        expectations.push(I2cTransaction::write_read(
+            address,
+            vec![register::Y_THR_CONFIG],
+            vec![0xF6],
+        ));
         // get_z_threshold: read Z_THR_CONFIG (0x06) → 100
-        expectations.push(I2cTransaction::write_read(address, vec![0x06], vec![100]));
+        expectations.push(I2cTransaction::write_read(
+            address,
+            vec![register::Z_THR_CONFIG],
+            vec![100],
+        ));
         // get_temperature_threshold: read T_CONFIG (0x07) → temp=5 encoded
         // 5 << 1 | T_CH_EN=1 = 0x0B
-        expectations.push(I2cTransaction::write_read(address, vec![0x07], vec![0x0B]));
+        expectations.push(I2cTransaction::write_read(
+            address,
+            vec![register::T_CONFIG],
+            vec![0x0B],
+        ));
         // get_threshold_hysteresis: read DEVICE_CONFIG_2 (0x01) → Signed (0b000 in bits [7:5])
         expectations.push(I2cTransaction::write_read(
             address,
-            vec![0x01],
+            vec![register::DEVICE_CONFIG_2],
             vec![0b0000_0010],
         ));
         // get_threshold_crossing_count: read SENSOR_CONFIG_2 (0x03) → Four (bit 6 set)
         expectations.push(I2cTransaction::write_read(
             address,
-            vec![0x03],
+            vec![register::SENSOR_CONFIG_2],
             vec![0b0100_0000],
         ));
         // get_threshold_direction: read SENSOR_CONFIG_2 (0x03) → Below (bit 5 set)
         expectations.push(I2cTransaction::write_read(
             address,
-            vec![0x03],
+            vec![register::SENSOR_CONFIG_2],
             vec![0b0010_0000],
         ));
 
