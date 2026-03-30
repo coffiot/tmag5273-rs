@@ -208,7 +208,11 @@ impl ConversionAverage {
         // Temperature doesn't add conversion time at CONV_AVG = 000b (X1)
         // per datasheet Section 5.11 note (2).
         let temp_adds_slot = !matches!(self, Self::X1);
-        let temp_channel: u32 = if temperature_enabled && temp_adds_slot { 1 } else { 0 };
+        let temp_channel: u32 = if temperature_enabled && temp_adds_slot {
+            1
+        } else {
+            0
+        };
         let num_channels = channels.measurement_slots() as u32 + temp_channel;
         let samples_per_channel = 1u32 << (self as u32);
         let us = samples_per_channel * 25 * num_channels + 25;

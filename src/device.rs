@@ -254,26 +254,7 @@ impl<I2C: I2c> Tmag5273<I2C, Unconfigured> {
     /// ranges (0x00–0x07 or 0x78–0x7F). This catches wiring mistakes
     /// during development without adding runtime cost in release builds.
     pub fn new_with_address(i2c: I2C, variant: DeviceVariant, address: u8) -> Self {
-        let addr = address & 0x7F;
-        debug_assert!(
-            (0x08..=0x77).contains(&addr),
-            "I2C address 0x{addr:02X} is in the reserved range (valid: 0x08–0x77)"
-        );
-        Self {
-            address: addr,
-            i2c,
-            variant,
-            xy_range: Range::Low,
-            z_range: Range::Low,
-            channels: MagneticChannel::Off,
-            angle_enabled: false,
-            temperature_enabled: false,
-            conversion_average: ConversionAverage::X1,
-            read_mode: I2cReadMode::Standard,
-            diagnostics: Diagnostics::Off,
-            delay: NoDelay,
-            _state: PhantomData,
-        }
+        Self::new_with_delay_and_address(i2c, variant, address, NoDelay)
     }
 }
 
@@ -680,14 +661,14 @@ impl<I2C: I2c, D: DelayNs> Tmag5273<I2C, Configured, D> {
     ///
     /// # Errors
     ///
-    /// Returns [`Error::AngleRequiresTwoChannels`] if angle calculation was
+    /// Returns [`Error::AngleNotEnabled`] if angle calculation was
     /// not enabled during initialization.
     /// Returns [`Error::I2c`] on bus communication failure.
     pub fn read_angle(&mut self) -> Result<AngleReading, Error<I2C::Error>> {
         self.require_standard_mode()?;
 
         if !self.angle_enabled {
-            return Err(Error::AngleRequiresTwoChannels);
+            return Err(Error::AngleNotEnabled);
         }
 
         // Without CRC, read all 3 registers (ANGLE_MSB, ANGLE_LSB,
@@ -1742,14 +1723,17 @@ impl<I2C: I2c, D: DelayNs> Tmag5273<I2C, Configured, D> {
 
     /// Read the INT pin assertion behavior from register `INT_CONFIG_1`.
     ///
-    /// Returns `true` for pulsed mode, `false` for latched mode.
-    ///
     /// # Errors
     ///
+    /// Returns [`Error::InvalidRegisterValue`] if the register contains an
+    /// unrecognized value.
     /// Returns [`Error::I2c`] on bus communication failure.
-    pub fn get_interrupt_pin_state(&mut self) -> Result<bool, Error<I2C::Error>> {
-        let raw = self.read_register(register::INT_CONFIG_1)?;
-        Ok(register::extract(raw, register::INT_STATE_MASK, register::INT_STATE_SHIFT) != 0)
+    pub fn get_interrupt_pin_behavior(&mut self) -> Result<IntPinBehavior, Error<I2C::Error>> {
+        self.read_field(
+            register::INT_CONFIG_1,
+            register::INT_STATE_MASK,
+            register::INT_STATE_SHIFT,
+        )
     }
 
     /// Read whether the interrupt pin output is masked from register
@@ -1763,6 +1747,51 @@ impl<I2C: I2c, D: DelayNs> Tmag5273<I2C, Configured, D> {
     pub fn get_interrupt_mask(&mut self) -> Result<bool, Error<I2C::Error>> {
         let raw = self.read_register(register::INT_CONFIG_1)?;
         Ok(register::extract(raw, register::MASK_INTB_MASK, register::MASK_INTB_SHIFT) != 0)
+    }
+
+    /// Read the complete interrupt configuration from register `INT_CONFIG_1`
+    /// in a single I2C transaction.
+    ///
+    /// This is the getter counterpart to
+    /// [`set_interrupt`](Self::set_interrupt) and avoids the overhead of
+    /// multiple register reads that the individual getters would incur.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::InvalidRegisterValue`] if the register contains an
+    /// unrecognized interrupt mode or pin behavior value.
+    /// Returns [`Error::I2c`] on bus communication failure.
+    pub fn get_interrupt(&mut self) -> Result<crate::config::InterruptConfig, Error<I2C::Error>> {
+        let raw = self.read_register(register::INT_CONFIG_1)?;
+
+        let mode_raw = register::extract(raw, register::INT_MODE_MASK, register::INT_MODE_SHIFT);
+        let mode = InterruptMode::try_from(mode_raw).map_err(|_| Error::InvalidRegisterValue {
+            register: register::INT_CONFIG_1,
+            value: mode_raw,
+        })?;
+
+        let pin_raw = register::extract(raw, register::INT_STATE_MASK, register::INT_STATE_SHIFT);
+        let pin_behavior =
+            IntPinBehavior::try_from(pin_raw).map_err(|_| Error::InvalidRegisterValue {
+                register: register::INT_CONFIG_1,
+                value: pin_raw,
+            })?;
+
+        Ok(crate::config::InterruptConfig {
+            mode,
+            on_conversion_complete: register::extract(
+                raw,
+                register::RSLT_INT_MASK,
+                register::RSLT_INT_SHIFT,
+            ) != 0,
+            on_threshold_crossing: register::extract(
+                raw,
+                register::THRESHOLD_INT_MASK,
+                register::THRESHOLD_INT_SHIFT,
+            ) != 0,
+            pin_behavior,
+            mask: register::extract(raw, register::MASK_INTB_MASK, register::MASK_INTB_SHIFT) != 0,
+        })
     }
 
     /// Read the X-axis threshold value from register `X_THR_CONFIG`.
@@ -2537,6 +2566,30 @@ mod tests {
         let mut sensor = sensor.init(&config).unwrap();
 
         assert!(sensor.get_interrupt_mask().unwrap());
+        sensor.into_inner().done();
+    }
+
+    #[test]
+    fn get_interrupt_reads_all_fields_in_one_transaction() {
+        let address = 0x22u8;
+        let mut expectations = init_expectations(address, &default_config());
+
+        // INT_CONFIG_1 byte: THRESHOLD_INT=1 | INT_STATE=1 | INT_MODE=001 | MASK_INTB=1
+        // = 0b0110_0101 = 0x65
+        expectations.push(I2cTransaction::write_read(address, vec![0x08], vec![0x65]));
+
+        let i2c = I2cMock::new(&expectations);
+        let sensor = Tmag5273::new(i2c, DeviceVariant::B1);
+        let config = ConfigBuilder::new().build().unwrap();
+        let mut sensor = sensor.init(&config).unwrap();
+
+        let int_cfg = sensor.get_interrupt().unwrap();
+        assert_eq!(int_cfg.mode, InterruptMode::ThroughInt);
+        assert!(!int_cfg.on_conversion_complete);
+        assert!(int_cfg.on_threshold_crossing);
+        assert_eq!(int_cfg.pin_behavior, IntPinBehavior::Pulse10us);
+        assert!(int_cfg.mask);
+
         sensor.into_inner().done();
     }
 
@@ -3628,7 +3681,7 @@ mod tests {
 
         // No I2C read expected — error returned before bus access
         let err = sensor.read_angle().unwrap_err();
-        assert_eq!(err, Error::AngleRequiresTwoChannels);
+        assert_eq!(err, Error::AngleNotEnabled);
 
         sensor.into_inner().done();
     }
@@ -4304,7 +4357,10 @@ mod tests {
         let mut sensor = sensor.init(&default_config()).unwrap();
         assert!(matches!(
             sensor.get_threshold_hysteresis(),
-            Err(Error::InvalidRegisterValue { register: 0x01, value: 2 }),
+            Err(Error::InvalidRegisterValue {
+                register: 0x01,
+                value: 2
+            }),
         ));
         sensor.into_inner().done();
     }
@@ -4420,7 +4476,7 @@ mod tests {
     }
 
     #[test]
-    fn get_interrupt_pin_state_pulsed() {
+    fn get_interrupt_pin_behavior_pulsed() {
         let address = 0x22u8;
         let mut expectations = init_expectations(address, &default_config());
         // INT_STATE bit 5 = 1 (pulsed)
@@ -4428,7 +4484,10 @@ mod tests {
         let i2c = I2cMock::new(&expectations);
         let sensor = Tmag5273::new(i2c, DeviceVariant::B1);
         let mut sensor = sensor.init(&default_config()).unwrap();
-        assert!(sensor.get_interrupt_pin_state().unwrap());
+        assert_eq!(
+            sensor.get_interrupt_pin_behavior().unwrap(),
+            IntPinBehavior::Pulse10us
+        );
         sensor.into_inner().done();
     }
 

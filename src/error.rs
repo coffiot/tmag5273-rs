@@ -69,10 +69,14 @@ pub enum Error<E> {
     #[error("conversion did not complete within the poll limit")]
     ConversionTimeout,
 
-    /// Angle calculation requires at least two magnetic channels to be
-    /// enabled.
-    #[error("angle calculation requires at least two magnetic channels")]
-    AngleRequiresTwoChannels,
+    /// Angle calculation was not enabled in the configuration.
+    ///
+    /// Enable it via
+    /// [`ConfigBuilder::angle_calculation()`](crate::ConfigBuilder) with
+    /// any value other than [`AngleCalculation::None`](crate::AngleCalculation::None),
+    /// then re-initialize.
+    #[error("angle calculation is not enabled; configure it in ConfigBuilder")]
+    AngleNotEnabled,
 
     /// I2C address change could not be verified at the new address.
     ///
@@ -298,9 +302,9 @@ mod tests {
     }
 
     #[test]
-    fn variant_angle_requires_two_channels() {
-        let err: Error<FakeI2cError> = Error::AngleRequiresTwoChannels;
-        assert_eq!(err, Error::AngleRequiresTwoChannels);
+    fn variant_angle_not_enabled() {
+        let err: Error<FakeI2cError> = Error::AngleNotEnabled;
+        assert_eq!(err, Error::AngleNotEnabled);
     }
 
     #[test]
