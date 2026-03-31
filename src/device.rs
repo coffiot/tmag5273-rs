@@ -2400,7 +2400,11 @@ mod tests {
         let mut expectations = init_expectations(address, &config);
 
         // trigger_conversion: read CONV_STATUS with bit 7 set (0x18 | 0x80 = 0x98)
-        expectations.push(I2cTransaction::write_read(address, vec![0x98], vec![0x00]));
+        expectations.push(I2cTransaction::write_read(
+            address,
+            vec![register::CONV_STATUS | register::CONVERSION_START_BIT],
+            vec![0x00],
+        ));
 
         // Poll max_polls times (10 for X1), all return not-ready
         for _ in 0..config.conversion_average.max_polls() {
@@ -4110,7 +4114,11 @@ mod tests {
 
         let mut expectations = init_expectations(address, &config);
         // trigger_conversion: read CONV_STATUS with start bit (0x18 | 0x80 = 0x98)
-        expectations.push(I2cTransaction::write_read(address, vec![0x98], vec![0x00]));
+        expectations.push(I2cTransaction::write_read(
+            address,
+            vec![register::CONV_STATUS | register::CONVERSION_START_BIT],
+            vec![0x00],
+        ));
         // First poll of CONV_STATUS returns result_ready (bit 0 set)
         expectations.push(I2cTransaction::write_read(
             address,
@@ -4142,7 +4150,11 @@ mod tests {
 
         let mut expectations = init_expectations(address, &config);
         // trigger_conversion: read 0x98 → 0x00
-        expectations.push(I2cTransaction::write_read(address, vec![0x98], vec![0x00]));
+        expectations.push(I2cTransaction::write_read(
+            address,
+            vec![register::CONV_STATUS | register::CONVERSION_START_BIT],
+            vec![0x00],
+        ));
         // wait_for_conversion: poll 0x18 → ready on first poll
         expectations.push(I2cTransaction::write_read(
             address,
@@ -4348,7 +4360,11 @@ mod tests {
 
         let mut expectations = init_expectations(address, &config);
         // trigger_conversion: read 0x98
-        expectations.push(I2cTransaction::write_read(address, vec![0x98], vec![0x00]));
+        expectations.push(I2cTransaction::write_read(
+            address,
+            vec![register::CONV_STATUS | register::CONVERSION_START_BIT],
+            vec![0x00],
+        ));
         // 100 polls (max_polls for X32), all returning not-ready (0x00)
         for _ in 0..config.conversion_average.max_polls() {
             expectations.push(I2cTransaction::write_read(
@@ -4478,7 +4494,11 @@ mod tests {
 
         let mut i2c_expectations = init_expectations(address, &config);
         // trigger_conversion: read CONV_STATUS with start bit (0x98)
-        i2c_expectations.push(I2cTransaction::write_read(address, vec![0x98], vec![0x00]));
+        i2c_expectations.push(I2cTransaction::write_read(
+            address,
+            vec![register::CONV_STATUS | register::CONVERSION_START_BIT],
+            vec![0x00],
+        ));
         // wait_for_conversion: first poll returns ready (bit 0 set)
         i2c_expectations.push(I2cTransaction::write_read(
             address,

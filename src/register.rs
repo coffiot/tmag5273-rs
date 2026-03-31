@@ -311,7 +311,24 @@ pub(crate) const X_MSB_RESULT: u8 = 0x12;
 /// fail flag, channel result flags, and POR (power-on-reset) status.
 pub(crate) const CONV_STATUS: u8 = 0x18;
 
-// CONV_STATUS field masks live in types.rs (ConversionStatus::from_register)
+/// Bit mask for `SET_COUNT` field in `CONV_STATUS` — 3-bit rolling counter incremented
+/// each time a new conversion data set is produced.
+pub(crate) const SET_COUNT_MASK: u8 = 0b1110_0000;
+/// Bit shift for `SET_COUNT` field in `CONV_STATUS`.
+pub(crate) const SET_COUNT_SHIFT: u8 = 5;
+
+/// Bit mask for `POR` field in `CONV_STATUS` — power-on-reset occurred flag (R/W1CP).
+/// Set by hardware on power-up; cleared by writing 1.
+pub(crate) const POR_MASK: u8 = 0b0001_0000;
+/// Bit shift for `POR` field in `CONV_STATUS`.
+pub(crate) const POR_SHIFT: u8 = 4;
+
+/// Bit mask for `DIAG_STATUS` field in `CONV_STATUS` — diagnostic self-test failure
+/// (VCC undervoltage, memory CRC, INT̄ error, or clock error detected).
+pub(crate) const DIAG_STATUS_MASK: u8 = 0b0000_0010;
+/// Bit shift for `DIAG_STATUS` field in `CONV_STATUS`.
+pub(crate) const DIAG_STATUS_SHIFT: u8 = 1;
+
 /// Bit mask for `RESULT_STATUS` in `CONV_STATUS` — set when a new conversion result
 /// is available (data ready).
 pub(crate) const RESULT_STATUS_MASK: u8 = 0b0000_0001;
@@ -341,7 +358,30 @@ pub(crate) const MAGNITUDE_RESULT: u8 = 0x1B;
 /// oscillator error, OTP CRC error, and INT pin error. Write 1 to clear latched bits.
 pub(crate) const DEVICE_STATUS: u8 = 0x1C;
 
-// DEVICE_STATUS field masks live in types.rs (DeviceStatus::from_register)
+/// Bit mask for `INTB_RB` field in `DEVICE_STATUS` — INT̄ pin readback; 1 = inactive (high).
+pub(crate) const INTB_RB_MASK: u8 = 0b0001_0000;
+/// Bit shift for `INTB_RB` field in `DEVICE_STATUS`.
+pub(crate) const INTB_RB_SHIFT: u8 = 4;
+
+/// Bit mask for `OSC_ER` field in `DEVICE_STATUS` — oscillator error detected (R/W1CP).
+pub(crate) const OSC_ER_MASK: u8 = 0b0000_1000;
+/// Bit shift for `OSC_ER` field in `DEVICE_STATUS`.
+pub(crate) const OSC_ER_SHIFT: u8 = 3;
+
+/// Bit mask for `INT_ER` field in `DEVICE_STATUS` — INT̄ pin error detected (R/W1CP).
+pub(crate) const INT_ER_MASK: u8 = 0b0000_0100;
+/// Bit shift for `INT_ER` field in `DEVICE_STATUS`.
+pub(crate) const INT_ER_SHIFT: u8 = 2;
+
+/// Bit mask for `OTP_CRC_ER` field in `DEVICE_STATUS` — OTP CRC error detected (R/W1CP).
+pub(crate) const OTP_CRC_ER_MASK: u8 = 0b0000_0010;
+/// Bit shift for `OTP_CRC_ER` field in `DEVICE_STATUS`.
+pub(crate) const OTP_CRC_ER_SHIFT: u8 = 1;
+
+/// Bit mask for `VCC_UV_ER` field in `DEVICE_STATUS` — VCC undervoltage detected (R/W1CP).
+pub(crate) const VCC_UV_ER_MASK: u8 = 0b0000_0001;
+/// Bit shift for `VCC_UV_ER` field in `DEVICE_STATUS`.
+pub(crate) const VCC_UV_ER_SHIFT: u8 = 0;
 
 // ===========================================================================
 // Tests
@@ -408,7 +448,16 @@ mod tests {
             // DEVICE_ID (0x0D)
             (VER_MASK, VER_SHIFT, "VER"),
             // CONV_STATUS (0x18)
+            (SET_COUNT_MASK, SET_COUNT_SHIFT, "SET_COUNT"),
+            (POR_MASK, POR_SHIFT, "POR"),
+            (DIAG_STATUS_MASK, DIAG_STATUS_SHIFT, "DIAG_STATUS"),
             (RESULT_STATUS_MASK, RESULT_STATUS_SHIFT, "RESULT_STATUS"),
+            // DEVICE_STATUS (0x1C)
+            (INTB_RB_MASK, INTB_RB_SHIFT, "INTB_RB"),
+            (OSC_ER_MASK, OSC_ER_SHIFT, "OSC_ER"),
+            (INT_ER_MASK, INT_ER_SHIFT, "INT_ER"),
+            (OTP_CRC_ER_MASK, OTP_CRC_ER_SHIFT, "OTP_CRC_ER"),
+            (VCC_UV_ER_MASK, VCC_UV_ER_SHIFT, "VCC_UV_ER"),
         ];
 
         for &(mask, shift, name) in fields {
@@ -672,6 +721,55 @@ mod tests {
         );
     }
 
+    // TI datasheet SBASAI4 Rev C, Table 7-24
+    #[test]
+    fn datasheet_xref_conv_status_fields() {
+        assert_eq!(CONV_STATUS, 0x18);
+        assert_eq!(SET_COUNT_MASK, 0xE0);
+        assert_eq!(SET_COUNT_SHIFT, 5);
+        assert_eq!(POR_MASK, 0x10);
+        assert_eq!(POR_SHIFT, 4);
+        assert_eq!(DIAG_STATUS_MASK, 0x02);
+        assert_eq!(DIAG_STATUS_SHIFT, 1);
+        assert_eq!(RESULT_STATUS_MASK, 0x01);
+        assert_eq!(RESULT_STATUS_SHIFT, 0);
+        assert_eq!(
+            SET_COUNT_MASK
+                | POR_MASK
+                | DIAG_STATUS_MASK
+                | RESULT_STATUS_MASK
+                | CONV_STATUS_RESERVED_MASK,
+            0xFF,
+            "CONV_STATUS masks must cover all 8 bits"
+        );
+    }
+
+    // TI datasheet SBASAI4 Rev C, Table 7-29
+    #[test]
+    fn datasheet_xref_device_status_fields() {
+        assert_eq!(DEVICE_STATUS, 0x1C);
+        assert_eq!(INTB_RB_MASK, 0x10);
+        assert_eq!(INTB_RB_SHIFT, 4);
+        assert_eq!(OSC_ER_MASK, 0x08);
+        assert_eq!(OSC_ER_SHIFT, 3);
+        assert_eq!(INT_ER_MASK, 0x04);
+        assert_eq!(INT_ER_SHIFT, 2);
+        assert_eq!(OTP_CRC_ER_MASK, 0x02);
+        assert_eq!(OTP_CRC_ER_SHIFT, 1);
+        assert_eq!(VCC_UV_ER_MASK, 0x01);
+        assert_eq!(VCC_UV_ER_SHIFT, 0);
+        assert_eq!(
+            INTB_RB_MASK
+                | OSC_ER_MASK
+                | INT_ER_MASK
+                | OTP_CRC_ER_MASK
+                | VCC_UV_ER_MASK
+                | DEVICE_STATUS_RESERVED_MASK,
+            0xFF,
+            "DEVICE_STATUS masks must cover all 8 bits"
+        );
+    }
+
     // TI datasheet SBASAI4 Rev C, Table 7-21
     #[test]
     fn datasheet_xref_device_status_bit_positions() {
@@ -779,6 +877,28 @@ mod tests {
         assert_pairwise_disjoint(
             "I2C_ADDRESS",
             &[I2C_ADDRESS_BITS_MASK, I2C_ADDRESS_UPDATE_EN_MASK],
+        );
+        assert_pairwise_disjoint("DEVICE_ID", &[VER_MASK, DEVICE_ID_RESERVED_MASK]);
+        assert_pairwise_disjoint(
+            "CONV_STATUS",
+            &[
+                SET_COUNT_MASK,
+                POR_MASK,
+                DIAG_STATUS_MASK,
+                RESULT_STATUS_MASK,
+                CONV_STATUS_RESERVED_MASK,
+            ],
+        );
+        assert_pairwise_disjoint(
+            "DEVICE_STATUS",
+            &[
+                INTB_RB_MASK,
+                OSC_ER_MASK,
+                INT_ER_MASK,
+                OTP_CRC_ER_MASK,
+                VCC_UV_ER_MASK,
+                DEVICE_STATUS_RESERVED_MASK,
+            ],
         );
     }
 

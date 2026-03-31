@@ -1,6 +1,13 @@
 //! Public types, newtypes, and raw-to-physical conversion helpers for the
 //! TMAG5273 Hall-effect sensor driver.
 
+use crate::register::{
+    DIAG_STATUS_MASK, DIAG_STATUS_SHIFT, INT_ER_MASK, INT_ER_SHIFT, INTB_RB_MASK, INTB_RB_SHIFT,
+    OSC_ER_MASK, OSC_ER_SHIFT, OTP_CRC_ER_MASK, OTP_CRC_ER_SHIFT, POR_MASK, POR_SHIFT,
+    RESULT_STATUS_MASK, RESULT_STATUS_SHIFT, SET_COUNT_MASK, SET_COUNT_SHIFT, VCC_UV_ER_MASK,
+    VCC_UV_ER_SHIFT, extract,
+};
+
 /// I2C read mode for the TMAG5273.
 ///
 /// Controls how the sensor formats I2C read responses. All high-level
@@ -944,17 +951,6 @@ pub struct DeviceStatus {
     pub int_pin_active: bool,
 }
 
-/// Bit position of VCC undervoltage flag in `DEVICE_STATUS`.
-const DEVICE_STATUS_VCC_UV_BIT: u8 = 0;
-/// Bit position of OTP CRC error flag in `DEVICE_STATUS`.
-const DEVICE_STATUS_OTP_CRC_BIT: u8 = 1;
-/// Bit position of internal error flag in `DEVICE_STATUS`.
-const DEVICE_STATUS_INT_ERR_BIT: u8 = 2;
-/// Bit position of oscillator error flag in `DEVICE_STATUS`.
-const DEVICE_STATUS_OSC_ERR_BIT: u8 = 3;
-/// Bit position of INT pin readback flag in `DEVICE_STATUS`.
-const DEVICE_STATUS_INTB_RB_BIT: u8 = 4;
-
 impl DeviceStatus {
     /// Returns `true` if no fault flags are set.
     #[inline]
@@ -966,11 +962,11 @@ impl DeviceStatus {
     #[inline]
     pub const fn from_register(register: u8) -> Self {
         Self {
-            vcc_undervoltage: (register >> DEVICE_STATUS_VCC_UV_BIT) & 1 != 0,
-            otp_crc_error: (register >> DEVICE_STATUS_OTP_CRC_BIT) & 1 != 0,
-            int_error: (register >> DEVICE_STATUS_INT_ERR_BIT) & 1 != 0,
-            oscillator_error: (register >> DEVICE_STATUS_OSC_ERR_BIT) & 1 != 0,
-            int_pin_active: (register >> DEVICE_STATUS_INTB_RB_BIT) & 1 != 0,
+            vcc_undervoltage: extract(register, VCC_UV_ER_MASK, VCC_UV_ER_SHIFT) != 0,
+            otp_crc_error: extract(register, OTP_CRC_ER_MASK, OTP_CRC_ER_SHIFT) != 0,
+            int_error: extract(register, INT_ER_MASK, INT_ER_SHIFT) != 0,
+            oscillator_error: extract(register, OSC_ER_MASK, OSC_ER_SHIFT) != 0,
+            int_pin_active: extract(register, INTB_RB_MASK, INTB_RB_SHIFT) != 0,
         }
     }
 }
@@ -990,24 +986,6 @@ pub struct ConversionStatus {
     pub result_ready: bool,
 }
 
-// CONV_STATUS register bit layout (from TI datasheet SBASAI4 Rev C):
-//   [7:5] SET_COUNT   — rolling conversion counter (3 bits)
-//   [4]   POR         — power-on-reset flag
-//   [3:2] reserved
-//   [1]   DIAG_STATUS — diagnostic self-test fail
-//   [0]   RESULT_STATUS — conversion result ready
-
-/// Bit shift for the 3-bit set counter (bits [7:5]).
-const CONV_STATUS_SET_COUNT_SHIFT: u8 = 5;
-/// Mask for the set counter AFTER shifting.
-const CONV_STATUS_SET_COUNT_MASK: u8 = 0x07;
-/// Bit position of the power-on-reset flag (bit 4).
-const CONV_STATUS_POR_BIT: u8 = 4;
-/// Bit position of the diagnostic fail flag (bit 1).
-const CONV_STATUS_DIAG_BIT: u8 = 1;
-/// Bit position of the result-ready flag (bit 0).
-const CONV_STATUS_READY_BIT: u8 = 0;
-
 impl ConversionStatus {
     /// Returns `true` if a new conversion result is available.
     #[inline]
@@ -1019,10 +997,10 @@ impl ConversionStatus {
     #[inline]
     pub const fn from_register(register: u8) -> Self {
         Self {
-            set_count: (register >> CONV_STATUS_SET_COUNT_SHIFT) & CONV_STATUS_SET_COUNT_MASK,
-            power_on_reset: (register >> CONV_STATUS_POR_BIT) & 1 != 0,
-            diag_fail: (register >> CONV_STATUS_DIAG_BIT) & 1 != 0,
-            result_ready: (register >> CONV_STATUS_READY_BIT) & 1 != 0,
+            set_count: extract(register, SET_COUNT_MASK, SET_COUNT_SHIFT),
+            power_on_reset: extract(register, POR_MASK, POR_SHIFT) != 0,
+            diag_fail: extract(register, DIAG_STATUS_MASK, DIAG_STATUS_SHIFT) != 0,
+            result_ready: extract(register, RESULT_STATUS_MASK, RESULT_STATUS_SHIFT) != 0,
         }
     }
 }
@@ -1043,6 +1021,20 @@ const TADC_T0: f32 = 17508.0;
 /// Reciprocal of the temperature ADC resolution (60.1 codes per degree C).
 const TADC_RES_INV: f32 = 1.0 / 60.1;
 
+// ---------------------------------------------------------------------------
+// The constants above (INV_32768, TSENSE_T0, TADC_T0, TADC_RES_INV) are
+// directly named and specified in the datasheet (electrical characteristics
+// table and Equations 10–13) and belong in register.rs if they were register
+// fields — but they are conversion formula parameters, so they live here.
+//
+// The constants below (ANGLE_INT_MASK, ANGLE_INT_SHIFT, ANGLE_FRAC_MASK,
+// ANGLE_FRAC_SCALE) are NOT named fields in the datasheet register map.
+// §8.1.26–8.1.27 describe ANGLE_RESULT_MSB/LSB as opaque bytes; the internal
+// bit layout is only implied by Equation 14 in §6.5.2.3. These are
+// implementation constants derived by the developer, not datasheet acronyms,
+// which is why they are not in register.rs alongside the named register fields.
+// ---------------------------------------------------------------------------
+
 /// Bit mask for the 9-bit integer part of the angle result.
 const ANGLE_INT_MASK: u16 = 0x1FF;
 
@@ -1062,6 +1054,7 @@ const ANGLE_FRAC_SCALE: f32 = 1.0 / 16.0;
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::register::CONV_AVG_SHIFT;
 
     // Floating-point comparison tolerance.
     const EPSILON: f32 = 0.15;
@@ -1897,8 +1890,6 @@ mod tests {
         // Linux stores pre-shifted values via FIELD_PREP into CONV_AVG_MASK.
         // Our enum stores unshifted raw values (0-5).
         // Comparison: (variant as u8) << CONV_AVG_SHIFT == linux_value
-        use crate::register::CONV_AVG_SHIFT;
-
         let table: &[(ConversionAverage, u8, &str)] = &[
             (ConversionAverage::X1, 0x00, "TMAG5273_AVG_1"),
             (ConversionAverage::X2, 0x04, "TMAG5273_AVG_2"),
