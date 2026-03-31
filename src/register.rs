@@ -405,6 +405,11 @@ pub(crate) const RESULT_STATUS_SHIFT: u8 = 0;
 #[allow(dead_code)]
 pub(crate) const CONV_STATUS_RESERVED_MASK: u8 = 0b0000_1100;
 
+/// Hardware reset value for `CONV_STATUS`: `0x10` (POR flag set on power-up).
+/// Datasheet §8.1.25: "Reset = 10h".
+#[allow(dead_code)]
+pub(crate) const CONV_STATUS_RESET: u8 = 0x10;
+
 // ---------------------------------------------------------------------------
 // 0x19 — ANGLE_RESULT_MSB (read-only)
 // ---------------------------------------------------------------------------
@@ -460,6 +465,11 @@ pub(crate) const VCC_UV_ER_SHIFT: u8 = 0;
 /// Datasheet §8.1.29.
 #[allow(dead_code)]
 pub(crate) const DEVICE_STATUS_RESERVED_MASK: u8 = 0b1110_0000;
+
+/// Hardware reset value for `DEVICE_STATUS`: `0x10` (INTB_RB high at power-up).
+/// Datasheet §8.1.29: "Reset = 10h".
+#[allow(dead_code)]
+pub(crate) const DEVICE_STATUS_RESET: u8 = 0x10;
 
 // ===========================================================================
 // Tests
@@ -874,6 +884,32 @@ mod tests {
                 | DEVICE_STATUS_RESERVED_MASK,
             0xFF,
             "DEVICE_STATUS masks must cover all 8 bits"
+        );
+    }
+
+    // TI datasheet SBASAI4 Rev C, §8.1.25 and §8.1.29 — reset values
+    #[test]
+    fn datasheet_xref_reset_values() {
+        // CONV_STATUS reset = 0x10 → POR bit set
+        assert_eq!(CONV_STATUS_RESET, 0x10);
+        assert_eq!(CONV_STATUS_RESET & POR_MASK, POR_MASK, "POR must be set at reset");
+        assert_eq!(
+            CONV_STATUS_RESET & !POR_MASK & !CONV_STATUS_RESERVED_MASK,
+            0,
+            "only POR should be set in CONV_STATUS reset"
+        );
+
+        // DEVICE_STATUS reset = 0x10 → INTB_RB high
+        assert_eq!(DEVICE_STATUS_RESET, 0x10);
+        assert_eq!(
+            DEVICE_STATUS_RESET & INTB_RB_MASK,
+            INTB_RB_MASK,
+            "INTB_RB must be high at reset"
+        );
+        assert_eq!(
+            DEVICE_STATUS_RESET & !INTB_RB_MASK & !DEVICE_STATUS_RESERVED_MASK,
+            0,
+            "only INTB_RB should be set in DEVICE_STATUS reset"
         );
     }
 
