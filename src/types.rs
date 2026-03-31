@@ -784,11 +784,20 @@ impl Degrees {
     ///
     /// Bits \[12:4\]: 9-bit integer part (0–360).
     /// Bits \[3:0\]: 4-bit fractional part (resolution 1/16 degree).
+    ///
+    /// Returns `None` if the decoded angle exceeds 360°. The hardware CORDIC
+    /// guarantees 0–360° under normal operation; a value above 360° indicates
+    /// a corrupted I2C read (enable the `crc` feature to detect this reliably).
     #[inline]
-    pub(crate) fn from_raw(raw: u16) -> Self {
+    pub(crate) fn from_raw(raw: u16) -> Option<Self> {
         let integer = ((raw >> ANGLE_INT_SHIFT) & ANGLE_INT_MASK) as f32;
         let fraction = (raw & ANGLE_FRAC_MASK) as f32 * ANGLE_FRAC_SCALE;
-        Self(integer + fraction)
+        let angle = integer + fraction;
+        if angle > 360.0 {
+            None
+        } else {
+            Some(Self(angle))
+        }
     }
 }
 
@@ -1275,29 +1284,39 @@ mod tests {
 
     #[test]
     fn angle_zero() {
-        let d = Degrees::from_raw(0x0000);
+        let d = Degrees::from_raw(0x0000).unwrap();
         assert_eq!(d.0, 0.0);
     }
 
     #[test]
     fn angle_180() {
         // 180 << 4 = 0x0B40
-        let d = Degrees::from_raw(0x0B40);
+        let d = Degrees::from_raw(0x0B40).unwrap();
         assert!(approx_eq(d.0, 180.0), "expected 180.0, got {}", d.0);
     }
 
     #[test]
     fn angle_360() {
         // 360 << 4 = 0x1680
-        let d = Degrees::from_raw(0x1680);
+        let d = Degrees::from_raw(0x1680).unwrap();
         assert!(approx_eq(d.0, 360.0), "expected 360.0, got {}", d.0);
     }
 
     #[test]
     fn angle_fractional() {
         // 90 degrees + 8/16 = 90.5 degrees → (90 << 4) | 8 = 0x05A8
-        let d = Degrees::from_raw(0x05A8);
+        let d = Degrees::from_raw(0x05A8).unwrap();
         assert!(approx_eq(d.0, 90.5), "expected 90.5, got {}", d.0);
+    }
+
+    #[test]
+    fn angle_out_of_range_returns_none() {
+        // 0xFFFF → integer = (0xFFFF >> 4) & 0x1FF = 511, frac = 15/16 → 511.9375° → None
+        assert!(Degrees::from_raw(0xFFFF).is_none(), "0xFFFF must be None");
+        // 361° encoded: (361 << 4) = 0x1690 → None
+        assert!(Degrees::from_raw(0x1690).is_none(), "361° must be None");
+        // 360° exactly is still valid
+        assert!(Degrees::from_raw(0x1680).is_some(), "360° must be Some");
     }
 
     // -- DeviceStatus parsing ------------------------------------------------

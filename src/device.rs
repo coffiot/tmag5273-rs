@@ -681,7 +681,10 @@ impl<I2C: I2c, D: DelayNs> Tmag5273<I2C, Configured, D> {
             let raw_angle = u16::from_be_bytes([buf[0], buf[1]]);
             let magnitude = buf[2];
             AngleReading {
-                angle: Degrees::from_raw(raw_angle),
+                angle: Degrees::from_raw(raw_angle).ok_or(Error::InvalidRegisterValue {
+                    register: register::ANGLE_RESULT_MSB,
+                    value: buf[0],
+                })?,
                 magnitude,
             }
         };
@@ -695,7 +698,10 @@ impl<I2C: I2c, D: DelayNs> Tmag5273<I2C, Configured, D> {
             let raw_angle = u16::from_be_bytes(angle_buf);
             let magnitude = self.read_register(register::MAGNITUDE_RESULT)?;
             AngleReading {
-                angle: Degrees::from_raw(raw_angle),
+                angle: Degrees::from_raw(raw_angle).ok_or(Error::InvalidRegisterValue {
+                    register: register::ANGLE_RESULT_MSB,
+                    value: angle_buf[0],
+                })?,
                 magnitude,
             }
         };
