@@ -174,7 +174,7 @@ impl<I2C: I2c> Tmag5273<I2C, Unconfigured> {
         if let Err(e) = i2c.write_read(address, &[register::DEVICE_ID], &mut buf) {
             return Err((Error::I2c(e), i2c));
         }
-        let version = register::extract(buf[0], register::VERSION_MASK, register::VERSION_SHIFT);
+        let version = register::extract(buf[0], register::VER_MASK, register::VER_SHIFT);
 
         match DeviceVariant::from_address_version(address, version) {
             Some(variant) => Ok(Self::new_with_address(i2c, variant, address)),
@@ -388,7 +388,7 @@ impl<I2C: I2c, D: DelayNs> Tmag5273<I2C, Unconfigured, D> {
 
         // 2. Read device ID and verify version matches variant
         let device_id = self.read_register(register::DEVICE_ID)?;
-        let version = register::extract(device_id, register::VERSION_MASK, register::VERSION_SHIFT);
+        let version = register::extract(device_id, register::VER_MASK, register::VER_SHIFT);
 
         if version != self.variant.version() {
             defmt_error!(
@@ -1170,8 +1170,8 @@ impl<I2C: I2c, D: DelayNs> Tmag5273<I2C, Configured, D> {
             u8::from(config.on_conversion_complete),
         ) | register::insert(
             0,
-            register::THRESHOLD_INT_MASK,
-            register::THRESHOLD_INT_SHIFT,
+            register::THRSLD_INT_MASK,
+            register::THRSLD_INT_SHIFT,
             u8::from(config.on_threshold_crossing),
         ) | register::insert(
             0,
@@ -1349,24 +1349,22 @@ impl<I2C: I2c, D: DelayNs> Tmag5273<I2C, Configured, D> {
     pub fn configure_wake_and_sleep(&mut self) -> Result<(), Error<I2C::Error>> {
         // INT_CONFIG_1: threshold crossing interrupt on INT pin, 10 us pulse.
         // Decomposed from TI datasheet value 0x64 = 0b0110_0100:
-        //   RSLT_INT=0, THRESHOLD_INT=1, INT_STATE=1 (Pulse10us),
+        //   RSLT_INT=0, THRSLD_INT=1, INT_STATE=1 (Pulse10us),
         //   INT_MODE=001 (ThroughInt), MASK_INTB=0
-        let int_config = register::insert(
-            0,
-            register::THRESHOLD_INT_MASK,
-            register::THRESHOLD_INT_SHIFT,
-            1,
-        ) | register::insert(
-            0,
-            register::INT_STATE_MASK,
-            register::INT_STATE_SHIFT,
-            IntPinBehavior::Pulse10us as u8,
-        ) | register::insert(
-            0,
-            register::INT_MODE_MASK,
-            register::INT_MODE_SHIFT,
-            InterruptMode::ThroughInt as u8,
-        );
+        let int_config =
+            register::insert(0, register::THRSLD_INT_MASK, register::THRSLD_INT_SHIFT, 1)
+                | register::insert(
+                    0,
+                    register::INT_STATE_MASK,
+                    register::INT_STATE_SHIFT,
+                    IntPinBehavior::Pulse10us as u8,
+                )
+                | register::insert(
+                    0,
+                    register::INT_MODE_MASK,
+                    register::INT_MODE_SHIFT,
+                    InterruptMode::ThroughInt as u8,
+                );
         self.write_register(register::INT_CONFIG_1, int_config)?;
 
         // DEVICE_CONFIG_2: wake-up-and-sleep mode + hysteresis = 1.
@@ -1714,11 +1712,7 @@ impl<I2C: I2c, D: DelayNs> Tmag5273<I2C, Configured, D> {
     /// Returns [`Error::I2c`] on bus communication failure.
     pub fn get_interrupt_on_threshold(&mut self) -> Result<bool, Error<I2C::Error>> {
         let raw = self.read_register(register::INT_CONFIG_1)?;
-        Ok(register::extract(
-            raw,
-            register::THRESHOLD_INT_MASK,
-            register::THRESHOLD_INT_SHIFT,
-        ) != 0)
+        Ok(register::extract(raw, register::THRSLD_INT_MASK, register::THRSLD_INT_SHIFT) != 0)
     }
 
     /// Read the INT pin assertion behavior from register `INT_CONFIG_1`.
@@ -1786,8 +1780,8 @@ impl<I2C: I2c, D: DelayNs> Tmag5273<I2C, Configured, D> {
             ) != 0,
             on_threshold_crossing: register::extract(
                 raw,
-                register::THRESHOLD_INT_MASK,
-                register::THRESHOLD_INT_SHIFT,
+                register::THRSLD_INT_MASK,
+                register::THRSLD_INT_SHIFT,
             ) != 0,
             pin_behavior,
             mask: register::extract(raw, register::MASK_INTB_MASK, register::MASK_INTB_SHIFT) != 0,
@@ -2507,7 +2501,7 @@ mod tests {
         let mut expectations = init_expectations(address, &default_config());
 
         // INT_CONFIG_1 full write:
-        // RSLT_INT=0 | THRESHOLD_INT=1 | INT_STATE=1 | INT_MODE=001 | MASK_INTB=0 | INT_PINSTATE=0
+        // RSLT_INT=0 | THRSLD_INT=1 | INT_STATE=1 | INT_MODE=001 | MASK_INTB=0 | INT_PINSTATE=0
         // = 0b0110_0100 = 0x64 (matches SparkFun's setupWakeUpAndSleep hardcoded value)
         expectations.push(I2cTransaction::write(
             address,
@@ -2579,7 +2573,7 @@ mod tests {
         let address = 0x22u8;
         let mut expectations = init_expectations(address, &default_config());
 
-        // INT_CONFIG_1: THRESHOLD_INT=1 | INT_STATE=1 | INT_MODE=001 | MASK_INTB=1
+        // INT_CONFIG_1: THRSLD_INT=1 | INT_STATE=1 | INT_MODE=001 | MASK_INTB=1
         // = 0b0110_0101 = 0x65
         expectations.push(I2cTransaction::write(
             address,
@@ -2630,7 +2624,7 @@ mod tests {
         let address = 0x22u8;
         let mut expectations = init_expectations(address, &default_config());
 
-        // INT_CONFIG_1 byte: THRESHOLD_INT=1 | INT_STATE=1 | INT_MODE=001 | MASK_INTB=1
+        // INT_CONFIG_1 byte: THRSLD_INT=1 | INT_STATE=1 | INT_MODE=001 | MASK_INTB=1
         // = 0b0110_0101 = 0x65
         expectations.push(I2cTransaction::write_read(
             address,
@@ -4777,7 +4771,7 @@ mod tests {
     fn get_interrupt_on_threshold_true() {
         let address = 0x22u8;
         let mut expectations = init_expectations(address, &default_config());
-        // THRESHOLD_INT bit 6 = 1
+        // THRSLD_INT bit 6 = 1
         expectations.push(I2cTransaction::write_read(
             address,
             vec![register::INT_CONFIG_1],

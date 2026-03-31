@@ -204,10 +204,10 @@ pub(crate) const RSLT_INT_MASK: u8 = 0b1000_0000;
 /// Bit shift for `RSLT_INT` in `INT_CONFIG_1`.
 pub(crate) const RSLT_INT_SHIFT: u8 = 7;
 
-/// Bit mask for `THRESHOLD_INT` in `INT_CONFIG_1` — asserts INT on threshold crossing.
-pub(crate) const THRESHOLD_INT_MASK: u8 = 0b0100_0000;
-/// Bit shift for `THRESHOLD_INT` in `INT_CONFIG_1`.
-pub(crate) const THRESHOLD_INT_SHIFT: u8 = 6;
+/// Bit mask for `THRSLD_INT` in `INT_CONFIG_1` — asserts INT on threshold crossing.
+pub(crate) const THRSLD_INT_MASK: u8 = 0b0100_0000;
+/// Bit shift for `THRSLD_INT` in `INT_CONFIG_1`.
+pub(crate) const THRSLD_INT_SHIFT: u8 = 6;
 
 /// Bit mask for `INT_STATE` in `INT_CONFIG_1` — selects INT pin behavior
 /// (0 = Latched, 1 = 10 µs pulse).
@@ -272,10 +272,10 @@ pub(crate) const I2C_ADDRESS_UPDATE_EN_SHIFT: u8 = 0;
 /// identifies the device variant (A1/A2 = 0, B1/B2 = 1, C1/C2 = 2, D1/D2 = 3).
 pub(crate) const DEVICE_ID: u8 = 0x0D;
 
-/// Bit mask for the `VERSION` field in `DEVICE_ID` (bits [1:0]).
-pub(crate) const VERSION_MASK: u8 = 0b0000_0011;
-/// Bit shift for the `VERSION` field in `DEVICE_ID`.
-pub(crate) const VERSION_SHIFT: u8 = 0;
+/// Bit mask for the `VER` field in `DEVICE_ID` (bits [1:0]).
+pub(crate) const VER_MASK: u8 = 0b0000_0011;
+/// Bit shift for the `VER` field in `DEVICE_ID`.
+pub(crate) const VER_SHIFT: u8 = 0;
 
 // ---------------------------------------------------------------------------
 // 0x0E — MANUFACTURER_ID_LSB (read-only)
@@ -390,7 +390,7 @@ mod tests {
             (T_CH_EN_MASK, T_CH_EN_SHIFT, "T_CH_EN"),
             // INT_CONFIG_1 (0x08)
             (RSLT_INT_MASK, RSLT_INT_SHIFT, "RSLT_INT"),
-            (THRESHOLD_INT_MASK, THRESHOLD_INT_SHIFT, "THRESHOLD_INT"),
+            (THRSLD_INT_MASK, THRSLD_INT_SHIFT, "THRSLD_INT"),
             (INT_STATE_MASK, INT_STATE_SHIFT, "INT_STATE"),
             (INT_MODE_MASK, INT_MODE_SHIFT, "INT_MODE"),
             (MASK_INTB_MASK, MASK_INTB_SHIFT, "MASK_INTB"),
@@ -406,7 +406,7 @@ mod tests {
                 "I2C_ADDRESS_UPDATE_EN",
             ),
             // DEVICE_ID (0x0D)
-            (VERSION_MASK, VERSION_SHIFT, "VERSION"),
+            (VER_MASK, VER_SHIFT, "VER"),
             // CONV_STATUS (0x18)
             (RESULT_STATUS_MASK, RESULT_STATUS_SHIFT, "RESULT_STATUS"),
         ];
@@ -479,7 +479,7 @@ mod tests {
             (X_Y_RANGE_MASK, 0x02, "X_Y_RANGE_MASK = BIT(1)"),
             (ANGLE_EN_MASK, 0x0C, "ANGLE_EN_MASK = GENMASK(3,2)"),
             (T_CH_EN_MASK, 0x01, "T_CH_EN_MASK = BIT(0)"),
-            (VERSION_MASK, 0x03, "VERSION_MASK = GENMASK(1,0)"),
+            (VER_MASK, 0x03, "VER_MASK = GENMASK(1,0)"),
             (RESULT_STATUS_MASK, 0x01, "RESULT_STATUS_MASK = BIT(0)"),
         ];
         for &(rust_const, linux_value, name) in table {
@@ -623,8 +623,8 @@ mod tests {
         assert_eq!(INT_CONFIG_1, 0x08);
         assert_eq!(RSLT_INT_MASK, 0x80);
         assert_eq!(RSLT_INT_SHIFT, 7);
-        assert_eq!(THRESHOLD_INT_MASK, 0x40);
-        assert_eq!(THRESHOLD_INT_SHIFT, 6);
+        assert_eq!(THRSLD_INT_MASK, 0x40);
+        assert_eq!(THRSLD_INT_SHIFT, 6);
         assert_eq!(INT_STATE_MASK, 0x20);
         assert_eq!(INT_STATE_SHIFT, 5);
         assert_eq!(INT_MODE_MASK, 0x1C);
@@ -632,9 +632,14 @@ mod tests {
         assert_eq!(MASK_INTB_MASK, 0x01);
         assert_eq!(MASK_INTB_SHIFT, 0);
         assert_eq!(
-            RSLT_INT_MASK | THRESHOLD_INT_MASK | INT_STATE_MASK | INT_MODE_MASK | MASK_INTB_MASK,
-            0xFD,
-            "INT_CONFIG_1 used bits must be 0xFD (bit 1 reserved)"
+            RSLT_INT_MASK
+                | THRSLD_INT_MASK
+                | INT_STATE_MASK
+                | INT_MODE_MASK
+                | MASK_INTB_MASK
+                | INT_CONFIG_1_RESERVED_MASK,
+            0xFF,
+            "INT_CONFIG_1 masks must cover all 8 bits"
         );
     }
 
@@ -650,6 +655,20 @@ mod tests {
             I2C_ADDRESS_BITS_MASK | I2C_ADDRESS_UPDATE_EN_MASK,
             0xFF,
             "I2C_ADDRESS masks must cover all 8 bits"
+        );
+    }
+
+    // TI datasheet SBASAI4 Rev C, Table 7-19
+    #[test]
+    fn datasheet_xref_device_id_fields() {
+        assert_eq!(DEVICE_ID, 0x0D);
+        assert_eq!(VER_MASK, 0x03);
+        assert_eq!(VER_SHIFT, 0);
+        assert_eq!(DEVICE_ID_RESERVED_MASK, 0xFC);
+        assert_eq!(
+            VER_MASK | DEVICE_ID_RESERVED_MASK,
+            0xFF,
+            "DEVICE_ID masks must cover all 8 bits"
         );
     }
 
@@ -751,7 +770,7 @@ mod tests {
             "INT_CONFIG_1",
             &[
                 RSLT_INT_MASK,
-                THRESHOLD_INT_MASK,
+                THRSLD_INT_MASK,
                 INT_STATE_MASK,
                 INT_MODE_MASK,
                 MASK_INTB_MASK,
