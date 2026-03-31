@@ -4,8 +4,8 @@
 use crate::register::{
     DIAG_STATUS_MASK, DIAG_STATUS_SHIFT, INT_ER_MASK, INT_ER_SHIFT, INTB_RB_MASK, INTB_RB_SHIFT,
     OSC_ER_MASK, OSC_ER_SHIFT, OTP_CRC_ER_MASK, OTP_CRC_ER_SHIFT, POR_MASK, POR_SHIFT,
-    RESULT_STATUS_MASK, RESULT_STATUS_SHIFT, SET_COUNT_MASK, SET_COUNT_SHIFT, VCC_UV_ER_MASK,
-    VCC_UV_ER_SHIFT, extract,
+    RESULT_STATUS_MASK, RESULT_STATUS_SHIFT, SET_COUNT_MASK, SET_COUNT_SHIFT, T_THR_CONFIG_MAX,
+    T_THR_CONFIG_MIN, VCC_UV_ER_MASK, VCC_UV_ER_SHIFT, VER_V1, VER_V2, extract,
 };
 
 /// I2C read mode for the TMAG5273.
@@ -76,13 +76,13 @@ pub enum MagneticChannel {
     YZ = 0x6,
     /// X, Y, and Z axes.
     XYZ = 0x7,
-    /// Pseudo-simultaneous X-Y-X — use with [`AngleCalculation::XY`].
+    /// Pseudo-simultaneous X-Y-X — use with [`AngleEnable::XY`].
     XYX = 0x8,
-    /// Pseudo-simultaneous Y-X-Y — use with [`AngleCalculation::XY`].
+    /// Pseudo-simultaneous Y-X-Y — use with [`AngleEnable::XY`].
     YXY = 0x9,
-    /// Pseudo-simultaneous Y-Z-Y — use with [`AngleCalculation::YZ`].
+    /// Pseudo-simultaneous Y-Z-Y — use with [`AngleEnable::YZ`].
     YZY = 0xA,
-    /// Pseudo-simultaneous X-Z-X — use with [`AngleCalculation::XZ`].
+    /// Pseudo-simultaneous X-Z-X — use with [`AngleEnable::XZ`].
     XZX = 0xB,
 }
 
@@ -250,7 +250,7 @@ impl ConversionAverage {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 #[cfg_attr(feature = "defmt", derive(defmt::Format))]
 #[repr(u8)]
-pub enum SleepDuration {
+pub enum SleepTime {
     /// 1 ms.
     Ms1 = 0x0,
     /// 5 ms.
@@ -280,7 +280,7 @@ pub enum SleepDuration {
     // 0xD–0xF are not defined per TI datasheet — not representable.
 }
 
-impl_try_from_u8!(SleepDuration {
+impl_try_from_u8!(SleepTime {
     0x0 => Ms1,
     0x1 => Ms5,
     0x2 => Ms10,
@@ -296,7 +296,7 @@ impl_try_from_u8!(SleepDuration {
     0xC => Ms20000,
 });
 
-impl SleepDuration {
+impl SleepTime {
     /// Returns the sleep duration in microseconds.
     pub const fn as_micros(self) -> Micros {
         Micros(match self {
@@ -321,14 +321,14 @@ impl SleepDuration {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 #[cfg_attr(feature = "defmt", derive(defmt::Format))]
 #[repr(u8)]
-pub enum PowerMode {
+pub enum PowerNoiseMode {
     /// Low active current mode (default).
     LowActiveCurrent = 0,
     /// Low noise mode.
     LowNoise = 1,
 }
 
-impl_try_from_u8!(PowerMode {
+impl_try_from_u8!(PowerNoiseMode {
     0 => LowActiveCurrent,
     1 => LowNoise,
 });
@@ -361,7 +361,7 @@ impl_try_from_u8!(TriggerMode {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 #[cfg_attr(feature = "defmt", derive(defmt::Format))]
 #[repr(u8)]
-pub enum TempCoefficient {
+pub enum MagneticTempCoefficient {
     /// No temperature compensation (0%).  `MAG_TEMPCO = 00b`.
     None = 0b00,
     /// NdBFe magnets (0.12%/°C).  `MAG_TEMPCO = 01b`.
@@ -371,7 +371,7 @@ pub enum TempCoefficient {
     Ceramic = 0b11,
 }
 
-impl_try_from_u8!(TempCoefficient {
+impl_try_from_u8!(MagneticTempCoefficient {
     0b00 => None,
     0b01 => NdBFe,
     0b11 => Ceramic,
@@ -381,7 +381,7 @@ impl_try_from_u8!(TempCoefficient {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 #[cfg_attr(feature = "defmt", derive(defmt::Format))]
 #[repr(u8)]
-pub enum AngleCalculation {
+pub enum AngleEnable {
     /// Angle calculation disabled.
     None = 0b00,
     /// X-Y plane angle.
@@ -392,7 +392,7 @@ pub enum AngleCalculation {
     XZ = 0b11,
 }
 
-impl_try_from_u8!(AngleCalculation {
+impl_try_from_u8!(AngleEnable {
     0b00 => None,
     0b01 => XY,
     0b10 => YZ,
@@ -403,14 +403,14 @@ impl_try_from_u8!(AngleCalculation {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 #[cfg_attr(feature = "defmt", derive(defmt::Format))]
 #[repr(u8)]
-pub enum ThresholdDirection {
+pub enum MagneticThresholdDirection {
     /// Interrupt when field exceeds threshold (above).
     Above = 0,
     /// Interrupt when field falls below threshold (below).
     Below = 1,
 }
 
-impl_try_from_u8!(ThresholdDirection {
+impl_try_from_u8!(MagneticThresholdDirection {
     0 => Above,
     1 => Below,
 });
@@ -439,13 +439,81 @@ impl_try_from_u8!(ThresholdCrossingCount {
     1 => Four,
 });
 
+/// Temperature threshold register code (7-bit, `T_CONFIG` bits \[7:1\]).
+///
+/// Valid codes per datasheet §8.1.8:
+/// - `0x00` — disabled (no threshold comparison, the default)
+/// - `0x1A`–`0x34` — active threshold (≈ −41 °C to ≈ 170 °C, ~8 °C/LSB)
+///
+/// Construct via [`from_code`](Self::from_code) or use the [`DISABLED`](Self::DISABLED)
+/// constant. Invalid codes are rejected at the type level.
+///
+/// # Examples
+///
+/// ```
+/// use tmag5273::TempThresholdConfig;
+///
+/// // Disabled (default)
+/// let t = TempThresholdConfig::DISABLED;
+/// assert!(!t.is_enabled());
+///
+/// // Valid active threshold
+/// let t = TempThresholdConfig::from_code(0x1A).unwrap();
+/// assert!(t.is_enabled());
+/// assert_eq!(t.code(), 0x1A);
+///
+/// // Invalid code rejected
+/// assert!(TempThresholdConfig::from_code(0x50).is_none());
+/// ```
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Hash)]
+#[cfg_attr(feature = "defmt", derive(defmt::Format))]
+pub struct TempThresholdConfig(u8);
+
+impl TempThresholdConfig {
+    /// No threshold comparison (register code `0x00`). This is the default.
+    pub const DISABLED: Self = Self(0);
+
+    /// Lowest valid active code (from [`register::T_THR_CONFIG_MIN`]).
+    pub const MIN_CODE: u8 = T_THR_CONFIG_MIN;
+
+    /// Highest valid active code (from [`register::T_THR_CONFIG_MAX`]).
+    pub const MAX_CODE: u8 = T_THR_CONFIG_MAX;
+
+    /// Construct from a raw 7-bit register code.
+    ///
+    /// Returns `Some` for `0x00` (disabled) or `0x1A..=0x34` (active range).
+    /// Returns `None` for any other value.
+    #[inline]
+    pub const fn from_code(code: u8) -> Option<Self> {
+        if code == 0 || (code >= Self::MIN_CODE && code <= Self::MAX_CODE) {
+            Some(Self(code))
+        } else {
+            None
+        }
+    }
+
+    /// The raw 7-bit code written to the register.
+    #[inline]
+    pub const fn code(self) -> u8 {
+        self.0
+    }
+
+    /// Returns `true` if this threshold is active (not disabled).
+    #[inline]
+    pub const fn is_enabled(self) -> bool {
+        self.0 != 0
+    }
+}
+
+impl_try_from_u8!(TempThresholdConfig);
+
 /// Interrupt routing mode (maps to `INT_MODE` field in `INT_CONFIG_1[4:2]`).
 ///
 /// Controls which pin carries the interrupt signal and whether the interrupt
 /// is suppressed when the I2C bus is busy with another device.
 ///
 /// **Note:** Latched vs pulsed interrupt behavior is controlled separately
-/// by [`IntPinBehavior`], not by this enum.
+/// by [`InterruptState`], not by this enum.
 ///
 /// Reference: TI TMAG5273 datasheet SBASAI4, Table 8-11.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -490,14 +558,14 @@ impl_try_from_u8!(InterruptMode {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 #[cfg_attr(feature = "defmt", derive(defmt::Format))]
 #[repr(u8)]
-pub enum IntPinBehavior {
+pub enum InterruptState {
     /// INT pin stays asserted until host clears it.
     Latched = 0,
     /// INT pin pulses for 10 µs then deasserts.
     Pulse10us = 1,
 }
 
-impl_try_from_u8!(IntPinBehavior {
+impl_try_from_u8!(InterruptState {
     0 => Latched,
     1 => Pulse10us,
 });
@@ -506,14 +574,14 @@ impl_try_from_u8!(IntPinBehavior {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 #[cfg_attr(feature = "defmt", derive(defmt::Format))]
 #[repr(u8)]
-pub enum GainChannel {
+pub enum MagneticGainChannel {
     /// Apply gain to first axis pair.
     First = 0,
     /// Apply gain to second axis pair.
     Second = 1,
 }
 
-impl_try_from_u8!(GainChannel {
+impl_try_from_u8!(MagneticGainChannel {
     0 => First,
     1 => Second,
 });
@@ -634,14 +702,14 @@ impl DeviceVariant {
     #[inline]
     pub const fn from_address_version(address: u8, version: u8) -> Option<Self> {
         match (address, version) {
-            (I2C_ADDR_A, 1) => Some(Self::A1),
-            (I2C_ADDR_A, 2) => Some(Self::A2),
-            (I2C_ADDR_B, 1) => Some(Self::B1),
-            (I2C_ADDR_B, 2) => Some(Self::B2),
-            (I2C_ADDR_C, 1) => Some(Self::C1),
-            (I2C_ADDR_C, 2) => Some(Self::C2),
-            (I2C_ADDR_D, 1) => Some(Self::D1),
-            (I2C_ADDR_D, 2) => Some(Self::D2),
+            (I2C_ADDR_A, VER_V1) => Some(Self::A1),
+            (I2C_ADDR_A, VER_V2) => Some(Self::A2),
+            (I2C_ADDR_B, VER_V1) => Some(Self::B1),
+            (I2C_ADDR_B, VER_V2) => Some(Self::B2),
+            (I2C_ADDR_C, VER_V1) => Some(Self::C1),
+            (I2C_ADDR_C, VER_V2) => Some(Self::C2),
+            (I2C_ADDR_D, VER_V1) => Some(Self::D1),
+            (I2C_ADDR_D, VER_V2) => Some(Self::D2),
             _ => None,
         }
     }
@@ -661,8 +729,8 @@ impl DeviceVariant {
     #[inline]
     pub const fn version(&self) -> u8 {
         match self {
-            Self::A1 | Self::B1 | Self::C1 | Self::D1 => 1,
-            Self::A2 | Self::B2 | Self::C2 | Self::D2 => 2,
+            Self::A1 | Self::B1 | Self::C1 | Self::D1 => VER_V1,
+            Self::A2 | Self::B2 | Self::C2 | Self::D2 => VER_V2,
         }
     }
 
@@ -1873,12 +1941,12 @@ mod tests {
 
     #[test]
     fn exhaustive_sleep_duration() {
-        assert_exhaustive_try_from::<SleepDuration>("SleepDuration", 13, |v| v as u8);
+        assert_exhaustive_try_from::<SleepTime>("SleepTime", 13, |v| v as u8);
     }
 
     #[test]
     fn exhaustive_power_mode() {
-        assert_exhaustive_try_from::<PowerMode>("PowerMode", 2, |v| v as u8);
+        assert_exhaustive_try_from::<PowerNoiseMode>("PowerNoiseMode", 2, |v| v as u8);
     }
 
     #[test]
@@ -1888,17 +1956,21 @@ mod tests {
 
     #[test]
     fn exhaustive_temp_coefficient() {
-        assert_exhaustive_try_from::<TempCoefficient>("TempCoefficient", 3, |v| v as u8);
+        assert_exhaustive_try_from::<MagneticTempCoefficient>("MagneticTempCoefficient", 3, |v| {
+            v as u8
+        });
     }
 
     #[test]
     fn exhaustive_angle_calculation() {
-        assert_exhaustive_try_from::<AngleCalculation>("AngleCalculation", 4, |v| v as u8);
+        assert_exhaustive_try_from::<AngleEnable>("AngleEnable", 4, |v| v as u8);
     }
 
     #[test]
     fn exhaustive_threshold_direction() {
-        assert_exhaustive_try_from::<ThresholdDirection>("ThresholdDirection", 2, |v| v as u8);
+        assert_exhaustive_try_from::<MagneticThresholdDirection>("ThresholdDirection", 2, |v| {
+            v as u8
+        });
     }
 
     #[test]
@@ -1908,6 +1980,63 @@ mod tests {
         });
     }
 
+    // -- TempThresholdConfig boundaries (§8.1.8) ----------------------------
+
+    #[test]
+    fn temp_threshold_disabled_is_zero() {
+        assert_eq!(TempThresholdConfig::DISABLED.code(), 0);
+        assert!(!TempThresholdConfig::DISABLED.is_enabled());
+    }
+
+    #[test]
+    fn temp_threshold_valid_range_boundaries() {
+        // Below min active code → rejected
+        assert!(TempThresholdConfig::from_code(0x19).is_none());
+        // Min active code → accepted
+        assert!(TempThresholdConfig::from_code(0x1A).is_some());
+        // Max active code → accepted
+        assert!(TempThresholdConfig::from_code(0x34).is_some());
+        // Above max active code → rejected
+        assert!(TempThresholdConfig::from_code(0x35).is_none());
+    }
+
+    #[test]
+    fn temp_threshold_all_valid_codes_accepted() {
+        // Code 0 (disabled)
+        assert!(TempThresholdConfig::try_from(0u8).is_ok());
+        // All active codes
+        for code in 0x1A..=0x34u8 {
+            assert!(
+                TempThresholdConfig::try_from(code).is_ok(),
+                "code 0x{code:02X} should be valid"
+            );
+        }
+    }
+
+    #[test]
+    fn temp_threshold_invalid_codes_rejected() {
+        // Gap between disabled (0) and min active (0x1A)
+        for code in 1..0x1Au8 {
+            assert!(
+                TempThresholdConfig::try_from(code).is_err(),
+                "code 0x{code:02X} should be invalid"
+            );
+        }
+        // Above max active
+        for code in 0x35..=0x7Fu8 {
+            assert!(
+                TempThresholdConfig::try_from(code).is_err(),
+                "code 0x{code:02X} should be invalid"
+            );
+        }
+    }
+
+    #[test]
+    fn temp_threshold_default_is_disabled() {
+        let t = TempThresholdConfig::default();
+        assert_eq!(t, TempThresholdConfig::DISABLED);
+    }
+
     #[test]
     fn exhaustive_interrupt_mode() {
         assert_exhaustive_try_from::<InterruptMode>("InterruptMode", 5, |v| v as u8);
@@ -1915,12 +2044,12 @@ mod tests {
 
     #[test]
     fn exhaustive_int_pin_behavior() {
-        assert_exhaustive_try_from::<IntPinBehavior>("IntPinBehavior", 2, |v| v as u8);
+        assert_exhaustive_try_from::<InterruptState>("InterruptState", 2, |v| v as u8);
     }
 
     #[test]
     fn exhaustive_gain_channel() {
-        assert_exhaustive_try_from::<GainChannel>("GainChannel", 2, |v| v as u8);
+        assert_exhaustive_try_from::<MagneticGainChannel>("MagneticGainChannel", 2, |v| v as u8);
     }
 
     #[test]
@@ -1976,11 +2105,11 @@ mod tests {
 
     #[test]
     fn linux_xref_angle_enable() {
-        let table: &[(AngleCalculation, u8, &str)] = &[
-            (AngleCalculation::None, 0, "TMAG5273_ANGLE_EN_OFF"),
-            (AngleCalculation::XY, 1, "TMAG5273_ANGLE_EN_X_Y"),
-            (AngleCalculation::YZ, 2, "TMAG5273_ANGLE_EN_Y_Z"),
-            (AngleCalculation::XZ, 3, "TMAG5273_ANGLE_EN_X_Z"),
+        let table: &[(AngleEnable, u8, &str)] = &[
+            (AngleEnable::None, 0, "TMAG5273_ANGLE_EN_OFF"),
+            (AngleEnable::XY, 1, "TMAG5273_ANGLE_EN_X_Y"),
+            (AngleEnable::YZ, 2, "TMAG5273_ANGLE_EN_Y_Z"),
+            (AngleEnable::XZ, 3, "TMAG5273_ANGLE_EN_X_Z"),
         ];
         for &(variant, linux_value, name) in table {
             assert_eq!(
@@ -2069,23 +2198,23 @@ mod tests {
         assert_eq!(ConversionAverage::X32.max_polls(), 100);
     }
 
-    // -- coverage: SleepDuration::as_micros for all variants ------------------
+    // -- coverage: SleepTime::as_micros for all variants ------------------
 
     #[test]
     fn sleep_duration_as_micros_all_variants() {
-        assert_eq!(SleepDuration::Ms1.as_micros(), Micros(1_000));
-        assert_eq!(SleepDuration::Ms5.as_micros(), Micros(5_000));
-        assert_eq!(SleepDuration::Ms10.as_micros(), Micros(10_000));
-        assert_eq!(SleepDuration::Ms15.as_micros(), Micros(15_000));
-        assert_eq!(SleepDuration::Ms20.as_micros(), Micros(20_000));
-        assert_eq!(SleepDuration::Ms30.as_micros(), Micros(30_000));
-        assert_eq!(SleepDuration::Ms50.as_micros(), Micros(50_000));
-        assert_eq!(SleepDuration::Ms100.as_micros(), Micros(100_000));
-        assert_eq!(SleepDuration::Ms500.as_micros(), Micros(500_000));
-        assert_eq!(SleepDuration::Ms1000.as_micros(), Micros(1_000_000));
-        assert_eq!(SleepDuration::Ms2000.as_micros(), Micros(2_000_000));
-        assert_eq!(SleepDuration::Ms5000.as_micros(), Micros(5_000_000));
-        assert_eq!(SleepDuration::Ms20000.as_micros(), Micros(20_000_000));
+        assert_eq!(SleepTime::Ms1.as_micros(), Micros(1_000));
+        assert_eq!(SleepTime::Ms5.as_micros(), Micros(5_000));
+        assert_eq!(SleepTime::Ms10.as_micros(), Micros(10_000));
+        assert_eq!(SleepTime::Ms15.as_micros(), Micros(15_000));
+        assert_eq!(SleepTime::Ms20.as_micros(), Micros(20_000));
+        assert_eq!(SleepTime::Ms30.as_micros(), Micros(30_000));
+        assert_eq!(SleepTime::Ms50.as_micros(), Micros(50_000));
+        assert_eq!(SleepTime::Ms100.as_micros(), Micros(100_000));
+        assert_eq!(SleepTime::Ms500.as_micros(), Micros(500_000));
+        assert_eq!(SleepTime::Ms1000.as_micros(), Micros(1_000_000));
+        assert_eq!(SleepTime::Ms2000.as_micros(), Micros(2_000_000));
+        assert_eq!(SleepTime::Ms5000.as_micros(), Micros(5_000_000));
+        assert_eq!(SleepTime::Ms20000.as_micros(), Micros(20_000_000));
     }
 
     // -- coverage: Micros Display impl ----------------------------------------

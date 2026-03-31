@@ -13,11 +13,11 @@ use crate::config::Config;
 use crate::error::{Error, InitError};
 use crate::register;
 use crate::types::{
-    AngleCalculation, AngleReading, Celsius, ConversionAverage, ConversionStatus, Degrees,
-    DeviceStatus, DeviceVariant, Diagnostics, GainChannel, I2cReadMode, IntPinBehavior,
-    InterruptMode, MagneticChannel, MagneticReading, Micros, MilliTesla, NoDelay, OperatingMode,
-    PowerMode, Range, SensorReading, SleepDuration, TempCoefficient, ThresholdCrossingCount,
-    ThresholdDirection, TriggerMode, WAKE_DELAY,
+    AngleEnable, AngleReading, Celsius, ConversionAverage, ConversionStatus, Degrees, DeviceStatus,
+    DeviceVariant, Diagnostics, I2cReadMode, InterruptMode, InterruptState, MagneticChannel,
+    MagneticGainChannel, MagneticReading, MagneticTempCoefficient, MagneticThresholdDirection,
+    Micros, MilliTesla, NoDelay, OperatingMode, PowerNoiseMode, Range, SensorReading, SleepTime,
+    TempThresholdConfig, ThresholdCrossingCount, TriggerMode, WAKE_DELAY,
 };
 
 // ---------------------------------------------------------------------------
@@ -286,7 +286,7 @@ impl<I2C: I2c, D: DelayNs> Tmag5273<I2C, Unconfigured, D> {
     ) -> Self {
         let addr = address & 0x7F;
         debug_assert!(
-            (0x08..=0x77).contains(&addr),
+            (register::I2C_ADDRESS_MIN..=register::I2C_ADDRESS_MAX).contains(&addr),
             "I2C address 0x{addr:02X} is in the reserved range (valid: 0x08–0x77)"
         );
         Self {
@@ -342,7 +342,7 @@ impl<I2C: I2c, D: DelayNs> Tmag5273<I2C, Unconfigured, D> {
             xy_range: config.xy_range,
             z_range: config.z_range,
             channels: config.magnetic_channels,
-            angle_enabled: !matches!(config.angle_calculation, AngleCalculation::None),
+            angle_enabled: !matches!(config.angle_calculation, AngleEnable::None),
             temperature_enabled: config.temperature_enabled,
             conversion_average: config.conversion_average,
             read_mode: I2cReadMode::Standard,
@@ -630,7 +630,7 @@ impl<I2C: I2c, D: DelayNs> Tmag5273<I2C, Configured, D> {
     ///
     /// # Errors
     ///
-    /// Returns [`Error::TemperatureDisabled`] if the temperature channel was
+    /// Returns [`Error::TempDisabled`] if the temperature channel was
     /// disabled in the configuration passed to [`Tmag5273::init`]. Per the TI
     /// datasheet, the `T_MSB_RESULT` / `T_LSB_RESULT` registers contain
     /// *undefined data* when the channel is off — calling this method in that
@@ -643,7 +643,7 @@ impl<I2C: I2c, D: DelayNs> Tmag5273<I2C, Configured, D> {
     pub fn read_temperature(&mut self) -> Result<Celsius, Error<I2C::Error>> {
         if !self.temperature_enabled {
             defmt_error!("read_temperature called but temperature channel is disabled");
-            return Err(Error::TemperatureDisabled);
+            return Err(Error::TempDisabled);
         }
 
         self.require_standard_mode()?;
@@ -657,7 +657,7 @@ impl<I2C: I2c, D: DelayNs> Tmag5273<I2C, Configured, D> {
     /// Read the CORDIC angle calculation result.
     ///
     /// Requires angle calculation to be enabled in the configuration
-    /// (any [`AngleCalculation`] variant other than `None`).
+    /// (any [`AngleEnable`] variant other than `None`).
     ///
     /// # Errors
     ///
@@ -1116,7 +1116,7 @@ impl<I2C: I2c, D: DelayNs> Tmag5273<I2C, Configured, D> {
             t_reg,
             register::T_THR_CONFIG_MASK,
             register::T_THR_CONFIG_SHIFT,
-            config.temperature as u8,
+            config.temperature.code(),
         );
         self.write_register(register::T_CONFIG, t_new)?;
 
@@ -1263,7 +1263,7 @@ impl<I2C: I2c, D: DelayNs> Tmag5273<I2C, Configured, D> {
 
         // Reject addresses outside the usable 7-bit I2C range.
         // 0x00-0x07 and 0x78-0x7F are reserved by the I2C specification.
-        if !(0x08..=0x77).contains(&new_address) {
+        if !(register::I2C_ADDRESS_MIN..=register::I2C_ADDRESS_MAX).contains(&new_address) {
             return Err(Error::AddressChangeFailed {
                 old_address,
                 new_address,
@@ -1362,7 +1362,7 @@ impl<I2C: I2c, D: DelayNs> Tmag5273<I2C, Configured, D> {
                     0,
                     register::INT_STATE_MASK,
                     register::INT_STATE_SHIFT,
-                    IntPinBehavior::Pulse10us as u8,
+                    InterruptState::Pulse10us as u8,
                 )
                 | register::insert(
                     0,
@@ -1421,7 +1421,7 @@ impl<I2C: I2c, D: DelayNs> Tmag5273<I2C, Configured, D> {
     /// Returns [`Error::InvalidRegisterValue`] if the register contains an
     /// unrecognized value.
     /// Returns [`Error::I2c`] on bus communication failure.
-    pub fn get_temp_coefficient(&mut self) -> Result<TempCoefficient, Error<I2C::Error>> {
+    pub fn get_temp_coefficient(&mut self) -> Result<MagneticTempCoefficient, Error<I2C::Error>> {
         self.read_field(
             register::DEVICE_CONFIG_1,
             register::MAG_TEMPCO_MASK,
@@ -1466,7 +1466,7 @@ impl<I2C: I2c, D: DelayNs> Tmag5273<I2C, Configured, D> {
     /// Returns [`Error::InvalidRegisterValue`] if the register contains an
     /// unrecognized value.
     /// Returns [`Error::I2c`] on bus communication failure.
-    pub fn get_power_mode(&mut self) -> Result<PowerMode, Error<I2C::Error>> {
+    pub fn get_power_mode(&mut self) -> Result<PowerNoiseMode, Error<I2C::Error>> {
         self.read_field(
             register::DEVICE_CONFIG_2,
             register::LP_LN_MASK,
@@ -1562,7 +1562,7 @@ impl<I2C: I2c, D: DelayNs> Tmag5273<I2C, Configured, D> {
     /// Returns [`Error::InvalidRegisterValue`] if the register contains an
     /// unrecognized value.
     /// Returns [`Error::I2c`] on bus communication failure.
-    pub fn get_sleep_duration(&mut self) -> Result<SleepDuration, Error<I2C::Error>> {
+    pub fn get_sleep_duration(&mut self) -> Result<SleepTime, Error<I2C::Error>> {
         self.read_field(
             register::SENSOR_CONFIG_1,
             register::SLEEPTIME_MASK,
@@ -1577,7 +1577,7 @@ impl<I2C: I2c, D: DelayNs> Tmag5273<I2C, Configured, D> {
     /// Returns [`Error::InvalidRegisterValue`] if the register contains an
     /// unrecognized value.
     /// Returns [`Error::I2c`] on bus communication failure.
-    pub fn get_angle_calculation(&mut self) -> Result<AngleCalculation, Error<I2C::Error>> {
+    pub fn get_angle_calculation(&mut self) -> Result<AngleEnable, Error<I2C::Error>> {
         self.read_field(
             register::SENSOR_CONFIG_2,
             register::ANGLE_EN_MASK,
@@ -1622,7 +1622,9 @@ impl<I2C: I2c, D: DelayNs> Tmag5273<I2C, Configured, D> {
     /// Returns [`Error::InvalidRegisterValue`] if the register contains an
     /// unrecognized value.
     /// Returns [`Error::I2c`] on bus communication failure.
-    pub fn get_threshold_direction(&mut self) -> Result<ThresholdDirection, Error<I2C::Error>> {
+    pub fn get_threshold_direction(
+        &mut self,
+    ) -> Result<MagneticThresholdDirection, Error<I2C::Error>> {
         self.read_field(
             register::SENSOR_CONFIG_2,
             register::MAG_THR_DIR_MASK,
@@ -1637,7 +1639,7 @@ impl<I2C: I2c, D: DelayNs> Tmag5273<I2C, Configured, D> {
     /// Returns [`Error::InvalidRegisterValue`] if the register contains an
     /// unrecognized value.
     /// Returns [`Error::I2c`] on bus communication failure.
-    pub fn get_gain_channel(&mut self) -> Result<GainChannel, Error<I2C::Error>> {
+    pub fn get_gain_channel(&mut self) -> Result<MagneticGainChannel, Error<I2C::Error>> {
         self.read_field(
             register::SENSOR_CONFIG_2,
             register::MAG_GAIN_CH_MASK,
@@ -1656,31 +1658,28 @@ impl<I2C: I2c, D: DelayNs> Tmag5273<I2C, Configured, D> {
         Ok(register::extract(raw, register::T_CH_EN_MASK, register::T_CH_EN_SHIFT) != 0)
     }
 
-    /// Read the temperature threshold value from register `T_CONFIG`.
+    /// Read the temperature threshold code from register `T_CONFIG`.
     ///
-    /// Returns the signed 7-bit threshold occupying bits \[7:1\] of
-    /// `T_CONFIG`. The 7-bit value is sign-extended to `i8` so negative
-    /// thresholds round-trip correctly through
-    /// [`set_thresholds`](Self::set_thresholds).
+    /// Returns the 7-bit threshold code occupying bits \[7:1\] of `T_CONFIG`
+    /// as a validated [`TempThresholdConfig`]. Valid codes are `0x00`
+    /// (disabled) or `0x1A`–`0x34` (≈ −41 °C to ≈ 170 °C).
     ///
     /// # Errors
     ///
-    /// Returns [`Error::I2c`] on bus communication failure.
-    pub fn get_temperature_threshold(&mut self) -> Result<i8, Error<I2C::Error>> {
+    /// Returns [`Error::I2c`] on bus communication failure, or
+    /// [`Error::InvalidRegisterValue`] if the register contains a code
+    /// outside the valid range (should not occur on correct hardware).
+    pub fn get_temperature_threshold(&mut self) -> Result<TempThresholdConfig, Error<I2C::Error>> {
         let raw = self.read_register(register::T_CONFIG)?;
         let val = register::extract(
             raw,
             register::T_THR_CONFIG_MASK,
             register::T_THR_CONFIG_SHIFT,
         );
-        // Sign-extend from 7 bits: if bit 6 is set, the value is negative
-        // in two's complement. Set bit 7 to propagate the sign into `i8`.
-        let signed = if val & 0x40 != 0 {
-            (val | 0x80) as i8
-        } else {
-            val as i8
-        };
-        Ok(signed)
+        TempThresholdConfig::try_from(val).map_err(|v| Error::InvalidRegisterValue {
+            register: register::T_CONFIG,
+            value: v,
+        })
     }
 
     /// Read the interrupt routing mode from register `INT_CONFIG_1`.
@@ -1727,7 +1726,7 @@ impl<I2C: I2c, D: DelayNs> Tmag5273<I2C, Configured, D> {
     /// Returns [`Error::InvalidRegisterValue`] if the register contains an
     /// unrecognized value.
     /// Returns [`Error::I2c`] on bus communication failure.
-    pub fn get_interrupt_pin_behavior(&mut self) -> Result<IntPinBehavior, Error<I2C::Error>> {
+    pub fn get_interrupt_pin_behavior(&mut self) -> Result<InterruptState, Error<I2C::Error>> {
         self.read_field(
             register::INT_CONFIG_1,
             register::INT_STATE_MASK,
@@ -1771,7 +1770,7 @@ impl<I2C: I2c, D: DelayNs> Tmag5273<I2C, Configured, D> {
 
         let pin_raw = register::extract(raw, register::INT_STATE_MASK, register::INT_STATE_SHIFT);
         let pin_behavior =
-            IntPinBehavior::try_from(pin_raw).map_err(|_| Error::InvalidRegisterValue {
+            InterruptState::try_from(pin_raw).map_err(|_| Error::InvalidRegisterValue {
                 register: register::INT_CONFIG_1,
                 value: pin_raw,
             })?;
@@ -2045,9 +2044,9 @@ mod tests {
     use crate::config::{CalibrationConfig, ConfigBuilder, InterruptConfig, ThresholdConfig};
     use crate::register;
     use crate::types::{
-        AngleCalculation, ConversionAverage, Degrees, GainChannel, IntPinBehavior, InterruptMode,
-        MagneticChannel, OperatingMode, PowerMode, Range, SleepDuration, TempCoefficient,
-        ThresholdCrossingCount, ThresholdDirection, TriggerMode,
+        AngleEnable, ConversionAverage, Degrees, InterruptMode, InterruptState, MagneticChannel,
+        MagneticGainChannel, MagneticTempCoefficient, MagneticThresholdDirection, OperatingMode,
+        PowerNoiseMode, Range, SleepTime, ThresholdCrossingCount, TriggerMode,
     };
     use embedded_hal_mock::eh1::delay::{CheckedDelay, Transaction as DelayTransaction};
     use embedded_hal_mock::eh1::i2c::{Mock as I2cMock, Transaction as I2cTransaction};
@@ -2459,8 +2458,8 @@ mod tests {
         ));
         expectations.push(I2cTransaction::write(
             address,
-            vec![register::T_CONFIG, 0x07],
-        )); // temp=3 << 1 | T_CH_EN=1
+            vec![register::T_CONFIG, 0x35],
+        )); // temp=0x1A << 1 | T_CH_EN=1 = 0x35
         // DEVICE_CONFIG_2 read-modify-write: threshold_hysteresis=SymmetricBand(1) in bits [7:5]
         expectations.push(I2cTransaction::write_read(
             address,
@@ -2492,10 +2491,10 @@ mod tests {
                 x: 5,
                 y: -5,
                 z: 10,
-                temperature: 3,
+                temperature: TempThresholdConfig::from_code(0x1A).unwrap(),
                 hysteresis: crate::config::ThresholdHysteresis::SymmetricBand,
                 crossing_count: ThresholdCrossingCount::Four,
-                direction: ThresholdDirection::Below,
+                direction: MagneticThresholdDirection::Below,
             })
             .unwrap();
 
@@ -2527,7 +2526,7 @@ mod tests {
                 mode: InterruptMode::ThroughInt,
                 on_conversion_complete: false,
                 on_threshold_crossing: true,
-                pin_behavior: IntPinBehavior::Pulse10us,
+                pin_behavior: InterruptState::Pulse10us,
                 mask: false,
             })
             .unwrap();
@@ -2565,7 +2564,7 @@ mod tests {
                     mode,
                     on_conversion_complete: false,
                     on_threshold_crossing: false,
-                    pin_behavior: IntPinBehavior::Latched,
+                    pin_behavior: InterruptState::Latched,
                     mask: false,
                 })
                 .unwrap();
@@ -2599,7 +2598,7 @@ mod tests {
                 mode: InterruptMode::ThroughInt,
                 on_conversion_complete: false,
                 on_threshold_crossing: true,
-                pin_behavior: IntPinBehavior::Pulse10us,
+                pin_behavior: InterruptState::Pulse10us,
                 mask: true,
             })
             .unwrap();
@@ -2650,7 +2649,7 @@ mod tests {
         assert_eq!(int_cfg.mode, InterruptMode::ThroughInt);
         assert!(!int_cfg.on_conversion_complete);
         assert!(int_cfg.on_threshold_crossing);
-        assert_eq!(int_cfg.pin_behavior, IntPinBehavior::Pulse10us);
+        assert_eq!(int_cfg.pin_behavior, InterruptState::Pulse10us);
         assert!(int_cfg.mask);
 
         sensor.into_inner().done();
@@ -2699,7 +2698,7 @@ mod tests {
                 gain: 0x80,
                 offset_1: -16,
                 offset_2: 16,
-                gain_channel: GainChannel::Second,
+                gain_channel: MagneticGainChannel::Second,
             })
             .unwrap();
 
@@ -2744,7 +2743,7 @@ mod tests {
                 gain: 0,
                 offset_1: 0,
                 offset_2: -1, // 0xFF as u8
-                gain_channel: GainChannel::First,
+                gain_channel: MagneticGainChannel::First,
             })
             .unwrap();
 
@@ -3717,22 +3716,17 @@ mod tests {
     // -- Temperature threshold sign extension --------------------------------
 
     #[test]
-    fn temperature_threshold_negative_round_trip() {
+    fn temperature_threshold_min_code_round_trip() {
         let address = 0x22u8;
         let mut expectations = init_expectations(address, &default_config());
 
-        // Write threshold -5 via set_thresholds, then read it back.
-        // -5i8 as u8 = 0xFB, insert into T_CONFIG bits [7:1]:
-        //   insert(current, 0xFE, 1, 0xFB) = (0xFB << 1) & 0xFE = 0xF6
-        // With T_CH_EN=1 preserved: 0xF6 | 0x01 = 0xF7.
-        // Read back: extract(0xF7, 0xFE, 1) = 0x7B = 123.
-        // Sign extend 7-bit: bit 6 set (0x40), so 123 | 0x80 = 0xFB as i8 = -5.
-
-        // Return T_CONFIG with threshold=-5 encoded: 0xF7
+        // Read back code 0x1A (min valid = −41°C).
+        // Register encoding: insert(0x01, 0xFE, 1, 0x1A) = (0x1A << 1) | 0x01 = 0x35.
+        // Extract: (0x35 & 0xFE) >> 1 = 0x1A. Valid → TempThresholdConfig(0x1A).
         expectations.push(I2cTransaction::write_read(
             address,
             vec![register::T_CONFIG],
-            vec![0xF7],
+            vec![0x35],
         ));
 
         let i2c = I2cMock::new(&expectations);
@@ -3741,24 +3735,24 @@ mod tests {
         let mut sensor = sensor.init(&config).unwrap();
 
         let threshold = sensor.get_temperature_threshold().unwrap();
-        assert_eq!(threshold, -5, "expected -5, got {threshold}");
+        assert_eq!(threshold.code(), 0x1A);
+        assert!(threshold.is_enabled());
 
         sensor.into_inner().done();
     }
 
     #[test]
-    fn temperature_threshold_positive_value() {
+    fn temperature_threshold_max_code_round_trip() {
         let address = 0x22u8;
         let mut expectations = init_expectations(address, &default_config());
 
-        // Positive threshold = 10. Insert: (10 << 1) & 0xFE = 0x14.
-        // With T_CH_EN=1: 0x14 | 0x01 = 0x15.
-        // Extract: (0x15 & 0xFE) >> 1 = 0x0A = 10.
-        // Bit 6 clear, so no sign extension: result = 10.
+        // Read back code 0x34 (max valid = 170°C).
+        // Register encoding: (0x34 << 1) | 0x01 = 0x69.
+        // Extract: (0x69 & 0xFE) >> 1 = 0x34.
         expectations.push(I2cTransaction::write_read(
             address,
             vec![register::T_CONFIG],
-            vec![0x15],
+            vec![0x69],
         ));
 
         let i2c = I2cMock::new(&expectations);
@@ -3767,7 +3761,65 @@ mod tests {
         let mut sensor = sensor.init(&config).unwrap();
 
         let threshold = sensor.get_temperature_threshold().unwrap();
-        assert_eq!(threshold, 10, "expected 10, got {threshold}");
+        assert_eq!(threshold.code(), 0x34);
+        assert!(threshold.is_enabled());
+
+        sensor.into_inner().done();
+    }
+
+    #[test]
+    fn temperature_threshold_disabled_round_trip() {
+        let address = 0x22u8;
+        let mut expectations = init_expectations(address, &default_config());
+
+        // Read back code 0x00 (disabled) with T_CH_EN=1.
+        // Register: 0x01. Extract: (0x01 & 0xFE) >> 1 = 0x00.
+        expectations.push(I2cTransaction::write_read(
+            address,
+            vec![register::T_CONFIG],
+            vec![0x01],
+        ));
+
+        let i2c = I2cMock::new(&expectations);
+        let sensor = Tmag5273::new(i2c, DeviceVariant::B1);
+        let config = ConfigBuilder::new().build().unwrap();
+        let mut sensor = sensor.init(&config).unwrap();
+
+        let threshold = sensor.get_temperature_threshold().unwrap();
+        assert_eq!(threshold, TempThresholdConfig::DISABLED);
+        assert!(!threshold.is_enabled());
+
+        sensor.into_inner().done();
+    }
+
+    #[test]
+    fn temperature_threshold_invalid_code_returns_error() {
+        let address = 0x22u8;
+        let mut expectations = init_expectations(address, &default_config());
+
+        // Register contains code 0x50 (outside valid range).
+        // Register: (0x50 << 1) | 0x01 = 0xA1.
+        // Extract: (0xA1 & 0xFE) >> 1 = 0x50. Invalid → Error::InvalidRegisterValue.
+        expectations.push(I2cTransaction::write_read(
+            address,
+            vec![register::T_CONFIG],
+            vec![0xA1],
+        ));
+
+        let i2c = I2cMock::new(&expectations);
+        let sensor = Tmag5273::new(i2c, DeviceVariant::B1);
+        let config = ConfigBuilder::new().build().unwrap();
+        let mut sensor = sensor.init(&config).unwrap();
+
+        let result = sensor.get_temperature_threshold();
+        assert!(result.is_err());
+        assert_eq!(
+            result.unwrap_err(),
+            Error::InvalidRegisterValue {
+                register: register::T_CONFIG,
+                value: 0x50,
+            }
+        );
 
         sensor.into_inner().done();
     }
@@ -3788,7 +3840,7 @@ mod tests {
         let mut sensor = sensor.init(&config).unwrap();
 
         let err = sensor.read_temperature().unwrap_err();
-        assert_eq!(err, Error::TemperatureDisabled);
+        assert_eq!(err, Error::TempDisabled);
 
         sensor.into_inner().done();
     }
@@ -3860,7 +3912,7 @@ mod tests {
     fn read_angle_xy_happy_path() {
         let address = 0x22u8;
         let config = ConfigBuilder::new()
-            .angle_calculation(AngleCalculation::XY)
+            .angle_calculation(AngleEnable::XY)
             .magnetic_channels(MagneticChannel::XY)
             .build()
             .unwrap();
@@ -4199,7 +4251,7 @@ mod tests {
     fn crc_read_angle_validates_checksum() {
         let address = 0x22u8;
         let config = ConfigBuilder::new()
-            .angle_calculation(AngleCalculation::XY)
+            .angle_calculation(AngleEnable::XY)
             .magnetic_channels(MagneticChannel::XY)
             .build()
             .unwrap();
@@ -4558,7 +4610,7 @@ mod tests {
         get_temp_coefficient,
         register::DEVICE_CONFIG_1,
         0b0010_0000, // MAG_TEMPCO = 1 (NdBFe)
-        TempCoefficient::NdBFe
+        MagneticTempCoefficient::NdBFe
     );
 
     getter_test!(
@@ -4575,7 +4627,7 @@ mod tests {
         get_power_mode,
         0x01,
         0b0001_0000, // LP_LN = 1
-        PowerMode::LowNoise
+        PowerNoiseMode::LowNoise
     );
 
     getter_test!(
@@ -4689,7 +4741,7 @@ mod tests {
         get_sleep_duration,
         0x02,
         0b0000_0010, // SLEEPTIME = 0x2 (Ms10)
-        SleepDuration::Ms10
+        SleepTime::Ms10
     );
 
     // SENSOR_CONFIG_2 (0x03) getters
@@ -4698,7 +4750,7 @@ mod tests {
         get_angle_calculation,
         0x03,
         0b0000_0100, // ANGLE_EN = 1 (XY)
-        AngleCalculation::XY
+        AngleEnable::XY
     );
 
     getter_test!(
@@ -4722,7 +4774,7 @@ mod tests {
         get_threshold_direction,
         0x03,
         0b0010_0000, // MAG_THR_DIR = 1 (Below)
-        ThresholdDirection::Below
+        MagneticThresholdDirection::Below
     );
 
     getter_test!(
@@ -4730,7 +4782,7 @@ mod tests {
         get_gain_channel,
         0x03,
         0b0001_0000, // MAG_GAIN_CH = 1 (Second)
-        GainChannel::Second
+        MagneticGainChannel::Second
     );
 
     // T_CONFIG (0x07) getters
@@ -4824,7 +4876,7 @@ mod tests {
         let mut sensor = sensor.init(&default_config()).unwrap();
         assert_eq!(
             sensor.get_interrupt_pin_behavior().unwrap(),
-            IntPinBehavior::Pulse10us
+            InterruptState::Pulse10us
         );
         sensor.into_inner().done();
     }
@@ -5042,7 +5094,7 @@ mod tests {
     fn read_angle_diagnostics_halt_on_failure() {
         let address = 0x22u8;
         let config = ConfigBuilder::new()
-            .angle_calculation(AngleCalculation::XY)
+            .angle_calculation(AngleEnable::XY)
             .magnetic_channels(MagneticChannel::XY)
             .diagnostics(Diagnostics::Halt)
             .build()
@@ -5136,7 +5188,7 @@ mod tests {
             vec![register::Z_THR_CONFIG, 100u8 as u8],
         ));
         // T_CONFIG read-modify-write: preserve T_CH_EN bit (0x01 from init)
-        // temperature=5 → (5 << 1) | T_CH_EN=1 = 0x0B
+        // temperature=0x28 → (0x28 << 1) | T_CH_EN=1 = 0x51
         expectations.push(I2cTransaction::write_read(
             address,
             vec![register::T_CONFIG],
@@ -5144,7 +5196,7 @@ mod tests {
         ));
         expectations.push(I2cTransaction::write(
             address,
-            vec![register::T_CONFIG, 0x0B],
+            vec![register::T_CONFIG, 0x51],
         ));
         // DEVICE_CONFIG_2 read-modify-write: hysteresis=Signed(0) in bits [7:5]
         expectations.push(I2cTransaction::write_read(
@@ -5186,12 +5238,12 @@ mod tests {
             vec![register::Z_THR_CONFIG],
             vec![100],
         ));
-        // get_temperature_threshold: read T_CONFIG (0x07) → temp=5 encoded
-        // 5 << 1 | T_CH_EN=1 = 0x0B
+        // get_temperature_threshold: read T_CONFIG (0x07) → temp=0x28 encoded
+        // 0x28 << 1 | T_CH_EN=1 = 0x51
         expectations.push(I2cTransaction::write_read(
             address,
             vec![register::T_CONFIG],
-            vec![0x0B],
+            vec![0x51],
         ));
         // get_threshold_hysteresis: read DEVICE_CONFIG_2 (0x01) → Signed (0b000 in bits [7:5])
         expectations.push(I2cTransaction::write_read(
@@ -5222,17 +5274,17 @@ mod tests {
                 x: 42,
                 y: -10,
                 z: 100,
-                temperature: 5,
+                temperature: TempThresholdConfig::from_code(0x28).unwrap(),
                 hysteresis: crate::config::ThresholdHysteresis::Signed,
                 crossing_count: ThresholdCrossingCount::Four,
-                direction: ThresholdDirection::Below,
+                direction: MagneticThresholdDirection::Below,
             })
             .unwrap();
 
         assert_eq!(sensor.get_x_threshold().unwrap(), 42);
         assert_eq!(sensor.get_y_threshold().unwrap(), -10);
         assert_eq!(sensor.get_z_threshold().unwrap(), 100);
-        assert_eq!(sensor.get_temperature_threshold().unwrap(), 5);
+        assert_eq!(sensor.get_temperature_threshold().unwrap().code(), 0x28);
         assert_eq!(
             sensor.get_threshold_hysteresis().unwrap(),
             crate::config::ThresholdHysteresis::Signed,
@@ -5243,7 +5295,7 @@ mod tests {
         );
         assert_eq!(
             sensor.get_threshold_direction().unwrap(),
-            ThresholdDirection::Below,
+            MagneticThresholdDirection::Below,
         );
 
         sensor.into_inner().done();
@@ -5267,10 +5319,10 @@ mod tests {
             .operating_mode(OperatingMode::Standby)
             .xy_range(Range::Low)
             .z_range(Range::Low)
-            .power_mode(PowerMode::LowNoise)
+            .power_mode(PowerNoiseMode::LowNoise)
             .trigger_mode(TriggerMode::IntPin)
             .glitch_filter(false)
-            .temp_coefficient(TempCoefficient::Ceramic)
+            .temp_coefficient(MagneticTempCoefficient::Ceramic)
             .diagnostics(crate::Diagnostics::Warn)
             .build()
             .unwrap();

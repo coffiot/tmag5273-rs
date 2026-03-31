@@ -73,7 +73,7 @@ pub enum Error<E> {
     ///
     /// Enable it via
     /// [`ConfigBuilder::angle_calculation()`](crate::ConfigBuilder) with
-    /// any value other than [`AngleCalculation::None`](crate::AngleCalculation::None),
+    /// any value other than [`AngleEnable::None`](crate::AngleEnable::None),
     /// then re-initialize.
     #[error("angle calculation is not enabled; configure it in ConfigBuilder")]
     AngleNotEnabled,
@@ -116,7 +116,7 @@ pub enum Error<E> {
     /// re-initialize, or use [`Tmag5273::read_all`](crate::Tmag5273) which
     /// returns `None` for the temperature field when the channel is disabled.
     #[error("temperature channel is disabled; enable it in ConfigBuilder")]
-    TemperatureDisabled,
+    TempDisabled,
 
     /// Enabling sensor CRC requires the `crc` Cargo feature.
     ///
@@ -345,8 +345,8 @@ mod tests {
 
     #[test]
     fn variant_temperature_disabled() {
-        let err: Error<FakeI2cError> = Error::TemperatureDisabled;
-        assert_eq!(err, Error::TemperatureDisabled);
+        let err: Error<FakeI2cError> = Error::TempDisabled;
+        assert_eq!(err, Error::TempDisabled);
     }
 
     #[test]

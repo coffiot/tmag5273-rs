@@ -85,11 +85,22 @@ macro_rules! defmt_error {
     };
 }
 
-/// Generates a `TryFrom<u8>` impl for a `#[repr(u8)]` enum.
+/// Generates a `TryFrom<u8>` impl. Two forms:
 ///
-/// Each variant is mapped from its discriminant value. Unknown values return
-/// `Err(value)` and emit a `defmt::warn!` when the `defmt` feature is active.
+/// **Enum form** — maps discriminant values to named variants:
+/// ```ignore
+/// impl_try_from_u8!(MyEnum { 0 => A, 1 => B });
+/// ```
+///
+/// **Struct form** — delegates to `from_code(u8) -> Option<Self>`:
+/// ```ignore
+/// impl_try_from_u8!(MyStruct);
+/// ```
+///
+/// Unknown values return `Err(value)` and emit a `defmt::warn!` when the
+/// `defmt` feature is active.
 macro_rules! impl_try_from_u8 {
+    // Enum arm: discrete variant mapping.
     ($enum:ty { $($val:expr => $variant:ident),+ $(,)? }) => {
         impl TryFrom<u8> for $enum {
             type Error = u8;
@@ -100,6 +111,22 @@ macro_rules! impl_try_from_u8 {
                     other => {
                         defmt_warn!("invalid register value: 0x{:02X}", other);
                         Err(other)
+                    }
+                }
+            }
+        }
+    };
+    // Struct arm: delegates to `from_code()` for range-validated newtypes.
+    ($struct:ty) => {
+        impl TryFrom<u8> for $struct {
+            type Error = u8;
+
+            fn try_from(val: u8) -> Result<Self, u8> {
+                match Self::from_code(val) {
+                    Some(val) => Ok(val),
+                    None => {
+                        defmt_warn!("invalid register value: 0x{:02X}", val);
+                        Err(val)
                     }
                 }
             }
@@ -120,9 +147,9 @@ pub use device::{Configured, Tmag5273, Unconfigured};
 pub use error::{ConfigError, Error, InitError};
 pub use register::{X_THR_CONFIG, Y_THR_CONFIG, Z_THR_CONFIG};
 pub use types::{
-    AngleCalculation, AngleReading, Celsius, ConversionAverage, ConversionStatus, Degrees,
-    DeviceStatus, DeviceVariant, Diagnostics, GainChannel, I2cReadMode, IntPinBehavior,
-    InterruptMode, MagneticChannel, MagneticReading, Micros, MicrosRange, MilliTesla, NoDelay,
-    OperatingMode, PowerMode, Range, SensorReading, SleepDuration, TempCoefficient,
-    ThresholdCrossingCount, ThresholdDirection, TriggerMode, WAKE_DELAY,
+    AngleEnable, AngleReading, Celsius, ConversionAverage, ConversionStatus, Degrees, DeviceStatus,
+    DeviceVariant, Diagnostics, I2cReadMode, InterruptMode, InterruptState, MagneticChannel,
+    MagneticGainChannel, MagneticReading, MagneticTempCoefficient, MagneticThresholdDirection,
+    Micros, MicrosRange, MilliTesla, NoDelay, OperatingMode, PowerNoiseMode, Range, SensorReading,
+    SleepTime, TempThresholdConfig, ThresholdCrossingCount, TriggerMode, WAKE_DELAY,
 };

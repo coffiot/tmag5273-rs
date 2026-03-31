@@ -92,27 +92,27 @@ Use `ConfigBuilder` to construct a validated `Config`:
 
 ```rust,no_run
 use tmag5273::{
-    ConfigBuilder, OperatingMode, MagneticChannel, AngleCalculation,
-    ConversionAverage, Range, PowerMode, SleepDuration, TempCoefficient,
+    ConfigBuilder, OperatingMode, MagneticChannel, AngleEnable,
+    ConversionAverage, Range, PowerNoiseMode, SleepTime, MagneticTempCoefficient,
 };
 
 let config = ConfigBuilder::new()
     .operating_mode(OperatingMode::ContinuousMeasure) // default
     .magnetic_channels(MagneticChannel::XYZ)          // default
     .temperature_enabled(true)                         // default
-    .angle_calculation(AngleCalculation::None)         // default
+    .angle_calculation(AngleEnable::None)         // default
     .conversion_average(ConversionAverage::X4)
     .xy_range(Range::High)                             // default: ±80 mT (v1)
     .z_range(Range::High)
-    .power_mode(PowerMode::LowNoise)
-    .temp_coefficient(TempCoefficient::NdBFe)
+    .power_mode(PowerNoiseMode::LowNoise)
+    .temp_coefficient(MagneticTempCoefficient::NdBFe)
     .build()?;
 ```
 
 `build()` validates cross-field constraints before writing any register:
 
-- `AngleCalculation` ≠ `None` requires at least two magnetic channels.
-- `OperatingMode::WakeUpAndSleep` requires `SleepDuration` > 1 ms.
+- `AngleEnable` ≠ `None` requires at least two magnetic channels.
+- `OperatingMode::WakeUpAndSleep` requires `SleepTime` > 1 ms.
 
 ### Defaults (match SparkFun `begin()`)
 
@@ -159,13 +159,13 @@ let temp: tmag5273::Celsius = sensor.read_temperature()?;
 
 ### Angle (CORDIC Engine)
 
-Requires `AngleCalculation` ≠ `None` in the config.
+Requires `AngleEnable` ≠ `None` in the config.
 
 ```rust,no_run
-use tmag5273::{ConfigBuilder, AngleCalculation, MagneticChannel};
+use tmag5273::{ConfigBuilder, AngleEnable, MagneticChannel};
 
 let config = ConfigBuilder::new()
-    .angle_calculation(AngleCalculation::XY)
+    .angle_calculation(AngleEnable::XY)
     .magnetic_channels(MagneticChannel::XY)
     .build()?;
 
@@ -256,7 +256,7 @@ transactions. Manual `check_diag()` works independently of this setting.
 ### Threshold Interrupts
 
 ```rust,no_run
-use tmag5273::{ThresholdConfig, ThresholdDirection, InterruptConfig, InterruptMode, IntPinBehavior};
+use tmag5273::{ThresholdConfig, ThresholdDirection, InterruptConfig, InterruptMode, InterruptState};
 
 sensor.set_thresholds(&ThresholdConfig {
     x: 50, y: 50, z: 50, temperature: 0,
@@ -268,7 +268,7 @@ sensor.set_interrupt(&InterruptConfig {
     on_conversion_complete: false,
     on_threshold_crossing: true,
     mode: InterruptMode::ThroughInt,
-    pin_behavior: IntPinBehavior::Pulse10us,
+    pin_behavior: InterruptState::Pulse10us,
     mask: false,
 })?;
 ```
@@ -276,13 +276,13 @@ sensor.set_interrupt(&InterruptConfig {
 ### Gain / Offset Calibration
 
 ```rust,no_run
-use tmag5273::{CalibrationConfig, GainChannel};
+use tmag5273::{CalibrationConfig, MagneticGainChannel};
 
 sensor.set_calibration(&CalibrationConfig {
     gain: 128,
     offset_1: 0,
     offset_2: 0,
-    gain_channel: GainChannel::X,
+    gain_channel: MagneticGainChannel::X,
 })?;
 ```
 
@@ -321,7 +321,7 @@ sensor.change_address(0x30)?;
 | `AddressChangeFailed { new_address }`      | Device did not respond at new address                                   |
 | `InvalidRegisterValue { register, value }` | Unknown enum value in register                                          |
 | `NonStandardReadMode { mode }`             | High-level read called in non-Standard I2C mode                         |
-| `TemperatureDisabled`                      | `read_temperature()` called with temperature channel disabled in config |
+| `TempDisabled`                      | `read_temperature()` called with temperature channel disabled in config |
 
 `InitError<I2C>` wraps `Error` together with the I2C bus so callers can
 recover the peripheral on initialization failure.

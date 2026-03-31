@@ -192,6 +192,14 @@ pub(crate) const T_THR_CONFIG_MASK: u8 = 0b1111_1110;
 /// Bit shift for the temperature threshold field in `T_CONFIG`.
 pub(crate) const T_THR_CONFIG_SHIFT: u8 = 1;
 
+/// Minimum valid active `T_THR_CONFIG` code: 0x1A (≈ −41 °C).
+/// Datasheet §8.1.8: "threshold codes: −41C = 1Ah".
+pub(crate) const T_THR_CONFIG_MIN: u8 = 0x1A;
+
+/// Maximum valid active `T_THR_CONFIG` code: 0x34 (≈ 170 °C).
+/// Datasheet §8.1.8: "threshold codes: 170C = 34h".
+pub(crate) const T_THR_CONFIG_MAX: u8 = 0x34;
+
 /// Bit mask for `T_CH_EN` in `T_CONFIG` — enables the temperature measurement channel.
 pub(crate) const T_CH_EN_MASK: u8 = 0b0000_0001;
 /// Bit shift for `T_CH_EN` in `T_CONFIG`.
@@ -242,6 +250,11 @@ pub(crate) const MASK_INTB_SHIFT: u8 = 0;
 /// Magnetic gain configuration register address (0x09). Holds the 8-bit user
 /// gain correction coefficient applied to the selected axis pair.
 pub(crate) const MAG_GAIN_CONFIG: u8 = 0x09;
+
+/// `GAIN_VALUE = 0` is interpreted as gain = 1.0 by hardware.
+/// Datasheet §8.1.10: "Gain value of 0 is interpreted as 1."
+#[allow(dead_code)]
+pub(crate) const GAIN_VALUE_IDENTITY: u8 = 0x00;
 
 /// Bit mask for `GAIN_VALUE` field in `MAG_GAIN_CONFIG` — full 8-bit gain coefficient.
 /// Datasheet §8.1.10.
@@ -299,6 +312,19 @@ pub(crate) const I2C_ADDRESS_UPDATE_EN_MASK: u8 = 0b0000_0001;
 /// Bit shift for `I2C_ADDRESS_UPDATE_EN` in `I2C_ADDRESS`.
 pub(crate) const I2C_ADDRESS_UPDATE_EN_SHIFT: u8 = 0;
 
+/// Hardware reset value for `I2C_ADDRESS`: `0x6A` (default address 0x35 in bits [7:1]).
+/// Datasheet §8.1.13: "Reset = 6Ah".
+#[allow(dead_code)]
+pub(crate) const I2C_ADDRESS_RESET: u8 = 0x6A;
+
+/// Lowest usable 7-bit I2C address. Addresses 0x00–0x07 are reserved by
+/// the I2C specification.
+pub(crate) const I2C_ADDRESS_MIN: u8 = 0x08;
+
+/// Highest usable 7-bit I2C address. Addresses 0x78–0x7F are reserved by
+/// the I2C specification.
+pub(crate) const I2C_ADDRESS_MAX: u8 = 0x77;
+
 // ---------------------------------------------------------------------------
 // 0x0D — DEVICE_ID (read-only)
 // ---------------------------------------------------------------------------
@@ -315,6 +341,14 @@ pub(crate) const VER_SHIFT: u8 = 0;
 /// Datasheet §8.1.14.
 #[allow(dead_code)]
 pub(crate) const DEVICE_ID_RESERVED_MASK: u8 = 0b1111_1100;
+
+/// `VER` value for x1 variants (±40/±80 mT range).
+/// Datasheet §8.1.14: "1h = ±40-mT and ±80-mT range".
+pub(crate) const VER_V1: u8 = 0x01;
+
+/// `VER` value for x2 variants (±133/±266 mT range).
+/// Datasheet §8.1.14: "2h = ±133-mT and ±266-mT range".
+pub(crate) const VER_V2: u8 = 0x02;
 
 // ---------------------------------------------------------------------------
 // 0x0E — MANUFACTURER_ID_LSB (read-only)
@@ -414,7 +448,8 @@ pub(crate) const CONV_STATUS_RESET: u8 = 0x10;
 // 0x19 — ANGLE_RESULT_MSB (read-only)
 // ---------------------------------------------------------------------------
 /// Angle result MSB register address (0x19). A 2-byte burst read from here
-/// returns [ANGLE_MSB, ANGLE_LSB] (0x19–0x1A); the 12.4 fixed-point value is in degrees.
+/// returns [ANGLE_MSB, ANGLE_LSB] (0x19–0x1A); the 9.4 fixed-point value is in degrees
+/// (9-bit integer 0–360, 4-bit fraction ×1/16°, 3 MSBs always zero). Datasheet §6.5.2.3.
 pub(crate) const ANGLE_RESULT_MSB: u8 = 0x19;
 /// Angle result LSB register address (0x1A). Always read as the second byte of a
 /// 2-byte (or 3-byte CRC) burst starting at [`ANGLE_RESULT_MSB`] — never addressed directly.
@@ -892,7 +927,11 @@ mod tests {
     fn datasheet_xref_reset_values() {
         // CONV_STATUS reset = 0x10 → POR bit set
         assert_eq!(CONV_STATUS_RESET, 0x10);
-        assert_eq!(CONV_STATUS_RESET & POR_MASK, POR_MASK, "POR must be set at reset");
+        assert_eq!(
+            CONV_STATUS_RESET & POR_MASK,
+            POR_MASK,
+            "POR must be set at reset"
+        );
         assert_eq!(
             CONV_STATUS_RESET & !POR_MASK & !CONV_STATUS_RESERVED_MASK,
             0,
