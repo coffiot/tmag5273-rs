@@ -709,24 +709,30 @@ impl MilliTesla {
     /// Construct from a raw 16-bit 2's complement ADC code.
     ///
     /// The sign is **negated** relative to TI datasheet equation 10
-    /// (`B = raw / 32768 × range`). This follows the Zephyr RTOS and
-    /// Linux kernel driver convention: positive [`MilliTesla`] values
-    /// indicate a magnetic south pole approaching the sensor's sensitive
-    /// face, while the TI raw encoding produces positive ADC codes for
-    /// north poles (datasheet §6.3.1).
+    /// (`B = raw / 32768 × range`). This follows the Linux kernel driver
+    /// convention: positive [`MilliTesla`] values indicate a magnetic south
+    /// pole approaching the sensor's sensitive face, while the TI raw
+    /// encoding produces positive ADC codes for north poles (datasheet §6.3.1).
     #[inline]
     pub(crate) fn from_raw(raw: i16, range_mt: f32) -> Self {
         Self(-(raw as f32) * range_mt * INV_32768)
     }
 
-    /// Construct from the 8-bit magnitude register value (0x1B).
+    /// Construct from the 8-bit CORDIC magnitude register value (0x1B).
     ///
-    /// Treats the byte as the upper 8 bits of a 16-bit signed value and
-    /// applies the standard magnetic conversion. Follows the Zephyr RTOS
-    /// driver's `tmag5273_magnitude_convert()` pattern.
+    /// The CORDIC hardware computes `M = sqrt(Ch1² + Ch2²)` using the same
+    /// unsigned 16-bit scale as the magnetic ADC: 32 768 codes = `range_mt`.
+    /// The register stores only the upper 8 bits of that 16-bit result, so
+    /// `raw = 128` corresponds to a single-axis full-scale vector (one axis at
+    /// `range_mt`, the other at zero). Two axes simultaneously at full scale
+    /// yields `raw ≈ 181` (`√2 × 128`), producing `~√2 × range_mt`.
+    ///
+    /// This gives a **strictly monotonic** unsigned output — every increment of
+    /// `raw` increases the returned value.
     #[inline]
     pub(crate) fn from_magnitude_raw(raw: u8, range_mt: f32) -> Self {
-        Self::from_raw(((raw as u16) << 8) as i16, range_mt)
+        // CORDIC 16-bit scale: 32768 codes = range_mt → upper-byte scale = range_mt / 128.
+        Self(raw as f32 * (range_mt / 128.0))
     }
 }
 
@@ -1430,7 +1436,7 @@ mod tests {
         assert!(s.result_ready);
     }
 
-    // -- Magnitude conversion (Zephyr-inspired) ------------------------------
+    // -- Magnitude conversion (unsigned monotonic CORDIC) --------------------
 
     #[test]
     fn from_magnitude_raw_zero_returns_zero() {
@@ -1439,11 +1445,15 @@ mod tests {
     }
 
     #[test]
-    fn from_magnitude_raw_127_returns_negative() {
-        // raw=127, range=80.0 → (127 << 8) = 32512 as i16
-        // B = -(32512) * 80 / 32768 ≈ -79.375 mT
-        let m = MilliTesla::from_magnitude_raw(127, 80.0);
-        assert!(approx_eq(m.0, -79.375), "expected ~-79.375, got {}", m.0);
+    fn from_magnitude_raw_monotonic() {
+        // Every increment of raw must produce a strictly larger mT value.
+        let range = 80.0_f32;
+        let mut prev = MilliTesla::from_magnitude_raw(0, range).0;
+        for raw in 1u8..=255 {
+            let cur = MilliTesla::from_magnitude_raw(raw, range).0;
+            assert!(cur > prev, "non-monotonic at raw={raw}: {prev} >= {cur}");
+            prev = cur;
+        }
     }
 
     // -- Wake delay constants ------------------------------------------------
@@ -1559,21 +1569,38 @@ mod tests {
         assert_eq!(r.magnitude().0, 0.0);
     }
 
-    // -- MilliTesla::from_magnitude_raw overflow edge cases -------------------
+    // -- MilliTesla::from_magnitude_raw key anchor values --------------------
 
     #[test]
-    fn magnitude_raw_128_no_overflow() {
-        // This was the overflow bug: (128_i16) << 8 = 32768 > i16::MAX
-        // Fixed by casting through u16: ((128_u16) << 8) as i16 = -32768
+    fn magnitude_raw_128_is_single_axis_full_scale() {
+        // raw=128 → CORDIC 16-bit value ≈ 32768 = range_mt → exactly range_mt.
         let m = MilliTesla::from_magnitude_raw(128, 80.0);
         assert!(approx_eq(m.0, 80.0), "expected ~80.0, got {}", m.0);
     }
 
     #[test]
-    fn magnitude_raw_255_no_overflow() {
-        // Maximum raw value: ((255_u16) << 8) as i16 = -256
+    fn magnitude_raw_181_is_two_axis_full_scale() {
+        // raw≈181 → √2·128 → √2·range_mt (both X and Y at full scale).
+        let m = MilliTesla::from_magnitude_raw(181, 80.0);
+        let expected = 80.0_f32 * core::f32::consts::SQRT_2;
+        assert!(
+            (m.0 - expected).abs() < 1.0,
+            "expected ~{expected:.3}, got {}",
+            m.0
+        );
+    }
+
+    #[test]
+    fn magnitude_raw_255_is_finite_and_positive() {
+        // Maximum raw value must produce a finite, positive result.
         let m = MilliTesla::from_magnitude_raw(255, 80.0);
-        assert!(m.0.is_finite(), "expected finite, got {}", m.0);
+        assert!(
+            m.0.is_finite() && m.0 > 0.0,
+            "expected finite >0, got {}",
+            m.0
+        );
+        // Should be roughly 2×range_mt (255/128 ≈ 1.992).
+        assert!(approx_eq(m.0, 159.375), "expected ~159.375, got {}", m.0);
     }
 
     // -- MilliTesla::from_raw boundary values ---------------------------------
