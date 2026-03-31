@@ -205,8 +205,8 @@ impl ConversionAverage {
     /// conversion time doesn't change with the T_CH_EN bit setting."
     /// Temperature only adds a measurement slot when averaging is enabled.
     ///
-    /// This follows the Zephyr RTOS driver's conversion time calculation
-    /// with the CONV_AVG=000b temperature correction from the datasheet.
+    /// Based on datasheet Table 7-5 with the CONV_AVG=000b temperature
+    /// correction from §5.11 note (2).
     pub const fn conversion_time(
         self,
         channels: MagneticChannel,

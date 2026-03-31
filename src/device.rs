@@ -911,9 +911,9 @@ impl<I2C: I2c, D: DelayNs> Tmag5273<I2C, Configured, D> {
     ///
     /// The TI datasheet specifies 50 µs typical wake time, but real hardware
     /// (ESP32-S3 + TMAG5273 B1) needs ~6 ms. Three attempts with 80 µs
-    /// inter-retry delay covers this reliably. Neither the Linux kernel nor
-    /// Zephyr RTOS drivers retry — they rely on implicit settling, which
-    /// can fail on fast I2C controllers.
+    /// inter-retry delay covers this reliably. The Linux kernel driver does
+    /// not retry — it relies on implicit settling, which can fail on fast
+    /// I2C controllers.
     const WAKE_RETRY_MAX: u8 = 3;
     // Compile-time guard: the retry loop assumes at least one iteration
     // so that `last_err` is always `Some` at the `unwrap()` call.
@@ -940,8 +940,8 @@ impl<I2C: I2c, D: DelayNs> Tmag5273<I2C, Configured, D> {
     /// retry attempts, indicating the device is unresponsive.
     pub fn set_mode(&mut self, mode: OperatingMode) -> Result<(), Error<I2C::Error>> {
         // Wake the sensor if it may be sleeping — any I2C activity wakes
-        // the device (TI datasheet §7.5.1). Errors are expected and
-        // tolerated (Zephyr: "operation is known to fail").
+        // the device (TI datasheet §7.5.1). The NACK is expected and
+        // tolerated; the device needs time to exit sleep before responding.
         let _ = self.i2c.write(self.address, &[]);
         self.delay.delay_us(WAKE_DELAY.min.0);
 
@@ -1074,7 +1074,6 @@ impl<I2C: I2c, D: DelayNs> Tmag5273<I2C, Configured, D> {
     /// reads `DEVICE_STATUS` for specific fault information. Returns the
     /// device status (all flags clear if no diagnostic failure).
     ///
-    /// Inspired by the Zephyr RTOS driver's per-sample diagnostic check.
     ///
     /// # Errors
     ///
@@ -3231,7 +3230,7 @@ mod tests {
         sensor.into_inner().done();
     }
 
-    // -- check_diag (Zephyr-inspired) --------------------------------
+    // -- check_diag --------------------------------------------------------
 
     #[test]
     fn check_diag_no_fault() {
