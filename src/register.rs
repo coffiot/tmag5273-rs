@@ -121,6 +121,11 @@ pub(crate) const SLEEPTIME_SHIFT: u8 = 0;
 /// direction, gain channel, angle calculation, and magnetic range.
 pub(crate) const SENSOR_CONFIG_2: u8 = 0x03;
 
+/// Bit mask for the RESERVED bit in `SENSOR_CONFIG_2` (bit 7). Must not be written.
+/// Datasheet §8.1.4.
+#[allow(dead_code)]
+pub(crate) const SENSOR_CONFIG_2_RESERVED_MASK: u8 = 0b1000_0000;
+
 /// Bit mask for `THRX_COUNT` field in `SENSOR_CONFIG_2` — number of consecutive threshold
 /// crossings required to assert INT (1 or 4).
 pub(crate) const THRX_COUNT_MASK: u8 = 0b0100_0000;
@@ -199,6 +204,11 @@ pub(crate) const T_CH_EN_SHIFT: u8 = 0;
 /// trigger sources, pin behavior (latched/pulsed), and INT masking.
 pub(crate) const INT_CONFIG_1: u8 = 0x08;
 
+/// Bit mask for the RESERVED bit in `INT_CONFIG_1` (bit 1). Must not be written.
+/// Datasheet §8.1.9.
+#[allow(dead_code)]
+pub(crate) const INT_CONFIG_1_RESERVED_MASK: u8 = 0b0000_0010;
+
 /// Bit mask for `RSLT_INT` in `INT_CONFIG_1` — asserts INT on conversion complete.
 pub(crate) const RSLT_INT_MASK: u8 = 0b1000_0000;
 /// Bit shift for `RSLT_INT` in `INT_CONFIG_1`.
@@ -233,6 +243,14 @@ pub(crate) const MASK_INTB_SHIFT: u8 = 0;
 /// gain correction coefficient applied to the selected axis pair.
 pub(crate) const MAG_GAIN_CONFIG: u8 = 0x09;
 
+/// Bit mask for `GAIN_VALUE` field in `MAG_GAIN_CONFIG` — full 8-bit gain coefficient.
+/// Datasheet §8.1.10.
+#[allow(dead_code)]
+pub(crate) const GAIN_VALUE_MASK: u8 = 0xFF;
+/// Bit shift for `GAIN_VALUE` field in `MAG_GAIN_CONFIG`.
+#[allow(dead_code)]
+pub(crate) const GAIN_VALUE_SHIFT: u8 = 0;
+
 // ---------------------------------------------------------------------------
 // 0x0A — MAG_OFFSET_CONFIG_1
 // ---------------------------------------------------------------------------
@@ -240,12 +258,28 @@ pub(crate) const MAG_GAIN_CONFIG: u8 = 0x09;
 /// signed offset correction for the first axis in the selected measurement pair.
 pub(crate) const MAG_OFFSET_CONFIG_1: u8 = 0x0A;
 
+/// Bit mask for `OFFSET_VALUE_1ST` field in `MAG_OFFSET_CONFIG_1` — full 8-bit offset.
+/// Datasheet §8.1.11.
+#[allow(dead_code)]
+pub(crate) const OFFSET_VALUE_1ST_MASK: u8 = 0xFF;
+/// Bit shift for `OFFSET_VALUE_1ST` field in `MAG_OFFSET_CONFIG_1`.
+#[allow(dead_code)]
+pub(crate) const OFFSET_VALUE_1ST_SHIFT: u8 = 0;
+
 // ---------------------------------------------------------------------------
 // 0x0B — MAG_OFFSET_CONFIG_2
 // ---------------------------------------------------------------------------
 /// Magnetic offset configuration register 2 address (0x0B). Holds the 8-bit
 /// signed offset correction for the second axis in the selected measurement pair.
 pub(crate) const MAG_OFFSET_CONFIG_2: u8 = 0x0B;
+
+/// Bit mask for `OFFSET_VALUE_2ND` field in `MAG_OFFSET_CONFIG_2` — full 8-bit offset.
+/// Datasheet §8.1.12.
+#[allow(dead_code)]
+pub(crate) const OFFSET_VALUE_2ND_MASK: u8 = 0xFF;
+/// Bit shift for `OFFSET_VALUE_2ND` field in `MAG_OFFSET_CONFIG_2`.
+#[allow(dead_code)]
+pub(crate) const OFFSET_VALUE_2ND_SHIFT: u8 = 0;
 
 // ---------------------------------------------------------------------------
 // 0x0C — I2C_ADDRESS (read-only)
@@ -277,12 +311,21 @@ pub(crate) const VER_MASK: u8 = 0b0000_0011;
 /// Bit shift for the `VER` field in `DEVICE_ID`.
 pub(crate) const VER_SHIFT: u8 = 0;
 
+/// Bit mask for the RESERVED bits in `DEVICE_ID` (bits [7:2]). Must not be written.
+/// Datasheet §8.1.14.
+#[allow(dead_code)]
+pub(crate) const DEVICE_ID_RESERVED_MASK: u8 = 0b1111_1100;
+
 // ---------------------------------------------------------------------------
 // 0x0E — MANUFACTURER_ID_LSB (read-only)
 // ---------------------------------------------------------------------------
 /// Manufacturer ID LSB register address (0x0E). Two-byte burst read from here
 /// returns [LSB=0x49, MSB=0x54], forming the 16-bit ASCII code for "TI" (0x5449).
 pub(crate) const MANUFACTURER_ID_LSB: u8 = 0x0E;
+/// Manufacturer ID MSB register address (0x0F). Always read as the second byte of a
+/// 2-byte burst starting at [`MANUFACTURER_ID_LSB`] — never addressed directly.
+#[allow(dead_code)]
+pub(crate) const MANUFACTURER_ID_MSB: u8 = 0x0F;
 
 /// Expected 16-bit manufacturer ID: ASCII "TI" = 0x5449.
 pub(crate) const MANUFACTURER_ID_EXPECTED: u16 = 0x5449;
@@ -293,7 +336,10 @@ pub(crate) const MANUFACTURER_ID_EXPECTED: u16 = 0x5449;
 /// Temperature result MSB register address (0x10). A 2-byte burst read from here
 /// returns [T_MSB, T_LSB] (0x10–0x11); the 16-bit raw value maps to °C.
 pub(crate) const T_MSB_RESULT: u8 = 0x10;
-// 0x11 T_LSB_RESULT — implicit via burst read (MSB + 1)
+/// Temperature result LSB register address (0x11). Always read as the second byte of a
+/// 2-byte burst starting at [`T_MSB_RESULT`] — never addressed directly.
+#[allow(dead_code)]
+pub(crate) const T_LSB_RESULT: u8 = 0x11;
 
 // ---------------------------------------------------------------------------
 // 0x12 — X_MSB_RESULT (read-only, burst reads X/Y/Z from here)
@@ -302,7 +348,26 @@ pub(crate) const T_MSB_RESULT: u8 = 0x10;
 /// returns [X_MSB, X_LSB, Y_MSB, Y_LSB, Z_MSB, Z_LSB] (0x12–0x17).
 #[cfg_attr(feature = "crc", allow(dead_code))]
 pub(crate) const X_MSB_RESULT: u8 = 0x12;
-// 0x13–0x17 X_LSB, Y_MSB/LSB, Z_MSB/LSB — implicit via 6-byte burst from X_MSB
+/// X-axis result LSB register address (0x13). Always read as part of the 6-byte
+/// burst starting at [`X_MSB_RESULT`] — never addressed directly.
+#[allow(dead_code)]
+pub(crate) const X_LSB_RESULT: u8 = 0x13;
+/// Y-axis result MSB register address (0x14). Always read as part of the 6-byte
+/// burst starting at [`X_MSB_RESULT`] — never addressed directly.
+#[allow(dead_code)]
+pub(crate) const Y_MSB_RESULT: u8 = 0x14;
+/// Y-axis result LSB register address (0x15). Always read as part of the 6-byte
+/// burst starting at [`X_MSB_RESULT`] — never addressed directly.
+#[allow(dead_code)]
+pub(crate) const Y_LSB_RESULT: u8 = 0x15;
+/// Z-axis result MSB register address (0x16). Always read as part of the 6-byte
+/// burst starting at [`X_MSB_RESULT`] — never addressed directly.
+#[allow(dead_code)]
+pub(crate) const Z_MSB_RESULT: u8 = 0x16;
+/// Z-axis result LSB register address (0x17). Always read as part of the 6-byte
+/// burst starting at [`X_MSB_RESULT`] — never addressed directly.
+#[allow(dead_code)]
+pub(crate) const Z_LSB_RESULT: u8 = 0x17;
 
 // ---------------------------------------------------------------------------
 // 0x18 — CONV_STATUS (read-only)
@@ -335,13 +400,21 @@ pub(crate) const RESULT_STATUS_MASK: u8 = 0b0000_0001;
 /// Bit shift for `RESULT_STATUS` in `CONV_STATUS`.
 pub(crate) const RESULT_STATUS_SHIFT: u8 = 0;
 
+/// Bit mask for the RESERVED bits in `CONV_STATUS` (bits [3:2]). Read-only, always 0.
+/// Datasheet §8.1.25.
+#[allow(dead_code)]
+pub(crate) const CONV_STATUS_RESERVED_MASK: u8 = 0b0000_1100;
+
 // ---------------------------------------------------------------------------
 // 0x19 — ANGLE_RESULT_MSB (read-only)
 // ---------------------------------------------------------------------------
 /// Angle result MSB register address (0x19). A 2-byte burst read from here
 /// returns [ANGLE_MSB, ANGLE_LSB] (0x19–0x1A); the 12.4 fixed-point value is in degrees.
 pub(crate) const ANGLE_RESULT_MSB: u8 = 0x19;
-// 0x1A ANGLE_RESULT_LSB — implicit via burst read (MSB + 1)
+/// Angle result LSB register address (0x1A). Always read as the second byte of a
+/// 2-byte (or 3-byte CRC) burst starting at [`ANGLE_RESULT_MSB`] — never addressed directly.
+#[allow(dead_code)]
+pub(crate) const ANGLE_RESULT_LSB: u8 = 0x1A;
 
 // ---------------------------------------------------------------------------
 // 0x1B — MAGNITUDE_RESULT (read-only, used in CRC path of read_angle)
@@ -382,6 +455,11 @@ pub(crate) const OTP_CRC_ER_SHIFT: u8 = 1;
 pub(crate) const VCC_UV_ER_MASK: u8 = 0b0000_0001;
 /// Bit shift for `VCC_UV_ER` field in `DEVICE_STATUS`.
 pub(crate) const VCC_UV_ER_SHIFT: u8 = 0;
+
+/// Bit mask for the RESERVED bits in `DEVICE_STATUS` (bits [7:5]). Read-only, always 0.
+/// Datasheet §8.1.29.
+#[allow(dead_code)]
+pub(crate) const DEVICE_STATUS_RESERVED_MASK: u8 = 0b1110_0000;
 
 // ===========================================================================
 // Tests
@@ -434,6 +512,20 @@ mod tests {
             (INT_STATE_MASK, INT_STATE_SHIFT, "INT_STATE"),
             (INT_MODE_MASK, INT_MODE_SHIFT, "INT_MODE"),
             (MASK_INTB_MASK, MASK_INTB_SHIFT, "MASK_INTB"),
+            // MAG_GAIN_CONFIG (0x09)
+            (GAIN_VALUE_MASK, GAIN_VALUE_SHIFT, "GAIN_VALUE"),
+            // MAG_OFFSET_CONFIG_1 (0x0A)
+            (
+                OFFSET_VALUE_1ST_MASK,
+                OFFSET_VALUE_1ST_SHIFT,
+                "OFFSET_VALUE_1ST",
+            ),
+            // MAG_OFFSET_CONFIG_2 (0x0B)
+            (
+                OFFSET_VALUE_2ND_MASK,
+                OFFSET_VALUE_2ND_SHIFT,
+                "OFFSET_VALUE_2ND",
+            ),
             // I2C_ADDRESS (0x0C)
             (
                 I2C_ADDRESS_BITS_MASK,
@@ -645,9 +737,10 @@ mod tests {
                 | MAG_GAIN_CH_MASK
                 | ANGLE_EN_MASK
                 | X_Y_RANGE_MASK
-                | Z_RANGE_MASK,
-            0x7F,
-            "SENSOR_CONFIG_2 used bits must be 0x7F (bit 7 reserved)"
+                | Z_RANGE_MASK
+                | SENSOR_CONFIG_2_RESERVED_MASK,
+            0xFF,
+            "SENSOR_CONFIG_2 masks must cover all 8 bits"
         );
     }
 
@@ -719,6 +812,20 @@ mod tests {
             0xFF,
             "DEVICE_ID masks must cover all 8 bits"
         );
+    }
+
+    // TI datasheet SBASAI4 Rev C, Tables 7-15 through 7-17
+    #[test]
+    fn datasheet_xref_mag_gain_offset_fields() {
+        assert_eq!(MAG_GAIN_CONFIG, 0x09);
+        assert_eq!(GAIN_VALUE_MASK, 0xFF);
+        assert_eq!(GAIN_VALUE_SHIFT, 0);
+        assert_eq!(MAG_OFFSET_CONFIG_1, 0x0A);
+        assert_eq!(OFFSET_VALUE_1ST_MASK, 0xFF);
+        assert_eq!(OFFSET_VALUE_1ST_SHIFT, 0);
+        assert_eq!(MAG_OFFSET_CONFIG_2, 0x0B);
+        assert_eq!(OFFSET_VALUE_2ND_MASK, 0xFF);
+        assert_eq!(OFFSET_VALUE_2ND_SHIFT, 0);
     }
 
     // TI datasheet SBASAI4 Rev C, Table 7-24
@@ -861,6 +968,7 @@ mod tests {
                 ANGLE_EN_MASK,
                 X_Y_RANGE_MASK,
                 Z_RANGE_MASK,
+                SENSOR_CONFIG_2_RESERVED_MASK,
             ],
         );
         assert_pairwise_disjoint("T_CONFIG", &[T_THR_CONFIG_MASK, T_CH_EN_MASK]);
@@ -872,8 +980,12 @@ mod tests {
                 INT_STATE_MASK,
                 INT_MODE_MASK,
                 MASK_INTB_MASK,
+                INT_CONFIG_1_RESERVED_MASK,
             ],
         );
+        assert_pairwise_disjoint("MAG_GAIN_CONFIG", &[GAIN_VALUE_MASK]);
+        assert_pairwise_disjoint("MAG_OFFSET_CONFIG_1", &[OFFSET_VALUE_1ST_MASK]);
+        assert_pairwise_disjoint("MAG_OFFSET_CONFIG_2", &[OFFSET_VALUE_2ND_MASK]);
         assert_pairwise_disjoint(
             "I2C_ADDRESS",
             &[I2C_ADDRESS_BITS_MASK, I2C_ADDRESS_UPDATE_EN_MASK],

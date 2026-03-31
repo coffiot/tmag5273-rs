@@ -763,7 +763,7 @@ impl Celsius {
     /// Construct from a raw 16-bit 2's complement ADC code (datasheet eq. 12).
     #[inline]
     pub(crate) fn from_raw(raw: i16) -> Self {
-        Self(TSENSE_T0 + ((raw as f32) - TADC_T0) * TADC_RES_INV)
+        Self(T_SENS_T0 + ((raw as f32) - T_ADC_T0) * T_ADC_RES_INV)
     }
 }
 
@@ -1013,16 +1013,16 @@ impl ConversionStatus {
 const INV_32768: f32 = 1.0 / 32768.0;
 
 /// Temperature sensor reference temperature (degrees Celsius).
-const TSENSE_T0: f32 = 25.0;
+const T_SENS_T0: f32 = 25.0;
 
 /// Temperature ADC code at the reference temperature.
-const TADC_T0: f32 = 17508.0;
+const T_ADC_T0: f32 = 17508.0;
 
 /// Reciprocal of the temperature ADC resolution (60.1 codes per degree C).
-const TADC_RES_INV: f32 = 1.0 / 60.1;
+const T_ADC_RES_INV: f32 = 1.0 / 60.1;
 
 // ---------------------------------------------------------------------------
-// The constants above (INV_32768, TSENSE_T0, TADC_T0, TADC_RES_INV) are
+// The constants above (INV_32768, T_SENS_T0, T_ADC_T0, T_ADC_RES_INV) are
 // directly named and specified in the datasheet (electrical characteristics
 // table and Equations 10–13) and belong in register.rs if they were register
 // fields — but they are conversion formula parameters, so they live here.

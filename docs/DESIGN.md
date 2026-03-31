@@ -62,7 +62,7 @@ This document explains where our Rust TMAG5273 driver differs from the [SparkFun
 
 **SparkFun:** `calculateMagneticField()` divides by 32768.0 on every conversion call.
 
-**Rust:** `INV_32768`, `TADC_RES_INV`, `ANGLE_FRAC_SCALE` are compile-time `const f32` reciprocals. Conversions use multiplication only — no runtime division.
+**Rust:** `INV_32768`, `T_ADC_RES_INV`, `ANGLE_FRAC_SCALE` are compile-time `const f32` reciprocals. Conversions use multiplication only — no runtime division.
 
 **Impact:** Faster on FPU-less targets. Same speed on FPU targets (compiler often optimizes this anyway, but we don't rely on it).
 

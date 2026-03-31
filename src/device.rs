@@ -2383,7 +2383,7 @@ mod tests {
         let mut sensor = sensor.init(&config).unwrap();
 
         let temp = sensor.read_temperature().unwrap();
-        // Exact: raw=17508 is the TADC_T0 reference point → (17508-17508)*k = 0
+        // Exact: raw=17508 is the T_ADC_T0 reference point → (17508-17508)*k = 0
         assert_eq!(temp, Celsius(25.0));
 
         sensor.into_inner().done();
@@ -3598,7 +3598,7 @@ mod tests {
 
         let reading = sensor.read_all().unwrap();
 
-        // Exact: raw=17508 is the TADC_T0 reference point
+        // Exact: raw=17508 is the T_ADC_T0 reference point
         assert_eq!(reading.temperature.unwrap(), Celsius(25.0));
         // Exact: power-of-two raw × power-of-two reciprocal → exact f32
         assert_eq!(reading.magnetic.x.unwrap(), MilliTesla(-40.0));
@@ -4177,7 +4177,7 @@ mod tests {
         assert!(status.result_ready);
 
         let reading = sensor.read_all().unwrap();
-        // Exact: raw=17508 is the TADC_T0 reference point
+        // Exact: raw=17508 is the T_ADC_T0 reference point
         assert_eq!(reading.temperature.unwrap(), Celsius(25.0));
         // Exact: power-of-two raw × power-of-two reciprocal → exact f32
         assert_eq!(reading.magnetic.x.unwrap(), MilliTesla(-40.0));
