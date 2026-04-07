@@ -13,28 +13,21 @@ use crate::config::Config;
 use crate::error::{Error, InitError};
 use crate::register;
 use crate::types::{
-    AngleEnable, AngleReading, Celsius, ConversionAverage, ConversionStatus, Degrees, DeviceStatus,
-    DeviceVariant, Diagnostics, I2cReadMode, InterruptMode, InterruptState, MagneticChannel,
-    MagneticGainChannel, MagneticReading, MagneticTempCoefficient, MagneticThresholdDirection,
-    Micros, MilliTesla, NoDelay, OperatingMode, PowerNoiseMode, Range, SensorReading, SleepTime,
-    TempThresholdConfig, ThresholdCrossingCount, TriggerMode, WAKE_DELAY,
+    AngleEnable, AngleReading, Celsius, ConversionAverage, ConversionStatus, CordicMagnitude,
+    Degrees, DeviceStatus, DeviceVariant, Diagnostics, I2cReadMode, InterruptMode, InterruptState,
+    MagneticChannel, MagneticGainChannel, MagneticReading, MagneticTempCoefficient,
+    MagneticThresholdDirection, MicrosIsr, MilliTesla, NoDelay, OperatingMode, PowerNoiseMode,
+    Range, SensorReading, SleepTime, TempThresholdConfig, ThresholdCrossingCount, TriggerMode,
+    WAKE_DELAY, WAKE_RETRY_DELAY,
 };
 
-// ---------------------------------------------------------------------------
-// Typestate markers
-// ---------------------------------------------------------------------------
-
-/// Marker type: sensor has not been initialized.
+/// Typestate marker type: sensor has not been initialized.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Unconfigured;
 
-/// Marker type: sensor has been initialized and is ready for measurement.
+/// Typestate marker type: sensor has been initialized and is ready for measurement.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Configured;
-
-// ---------------------------------------------------------------------------
-// Tmag5273
-// ---------------------------------------------------------------------------
 
 /// Driver for the TI TMAG5273 3-axis Hall-effect sensor.
 ///
@@ -79,8 +72,8 @@ pub struct Tmag5273<I2C, State = Unconfigured, D = NoDelay> {
     xy_range: Range,
     z_range: Range,
     channels: MagneticChannel,
-    angle_enabled: bool,
-    temperature_enabled: bool,
+    angle_enable: AngleEnable,
+    temp_channel_enabled: bool,
     conversion_average: ConversionAverage,
     /// Current I2C read mode — high-level reads guard against non-Standard
     /// mode to prevent silent data corruption.
@@ -296,8 +289,8 @@ impl<I2C: I2c, D: DelayNs> Tmag5273<I2C, Unconfigured, D> {
             xy_range: Range::Low,
             z_range: Range::Low,
             channels: MagneticChannel::Off,
-            angle_enabled: false,
-            temperature_enabled: false,
+            angle_enable: AngleEnable::None,
+            temp_channel_enabled: false,
             conversion_average: ConversionAverage::X1,
             read_mode: I2cReadMode::Standard,
             diagnostics: Diagnostics::Off,
@@ -341,12 +334,12 @@ impl<I2C: I2c, D: DelayNs> Tmag5273<I2C, Unconfigured, D> {
             address: self.address,
             xy_range: config.xy_range,
             z_range: config.z_range,
-            channels: config.magnetic_channels,
-            angle_enabled: !matches!(config.angle_calculation, AngleEnable::None),
-            temperature_enabled: config.temperature_enabled,
+            angle_enable: config.angle_enabled,
+            channels: config.magnetic_channels_enabled,
+            temp_channel_enabled: config.temp_channel_enabled,
             conversion_average: config.conversion_average,
             read_mode: I2cReadMode::Standard,
-            diagnostics: config.diagnostics,
+            diagnostics: Diagnostics::Off,
             delay: self.delay,
             _state: PhantomData,
         })
@@ -446,15 +439,52 @@ impl<I2C: I2c, D: DelayNs> Tmag5273<I2C, Unconfigured, D> {
 // ---------------------------------------------------------------------------
 
 impl<I2C: I2c, D: DelayNs> Tmag5273<I2C, Configured, D> {
+    /// Maximum retry attempts for register access after wake-up from sleep.
+    ///
+    /// The TI datasheet specifies 50 µs typical wake time, but real hardware
+    /// (ESP32-S3 + TMAG5273 B1) needs up to ~6 ms depending on field
+    /// conditions. Three attempts with [`WAKE_RETRY_DELAY`] (5 ms each)
+    /// covers this — total budget ~15 ms. Under active magnetic field the
+    /// ADC settling extends wake time beyond the ambient case. The Linux
+    /// kernel driver does not retry — it relies on implicit settling, which
+    /// fails under field load.
+    /// `NonZeroU8` guarantees the retry loop always executes at least once,
+    /// so `last_err` is always `Some` at the final `.unwrap()`.
+    const WAKE_RETRY_MAX: core::num::NonZeroU8 = match core::num::NonZeroU8::new(3) {
+        Some(val) => val,
+        None => unreachable!(),
+    };
+
+    /// Returns the current per-sample diagnostic checking policy.
+    #[inline]
+    #[must_use]
+    pub fn diagnostics(&self) -> Diagnostics {
+        self.diagnostics
+    }
+
+    /// Set the per-sample diagnostic checking policy.
+    ///
+    /// Controls whether each `read_magnetic`, `read_temperature`, `read_all`,
+    /// and `read_angle` call checks `CONV_STATUS.DIAG_STATUS`, and what
+    /// happens when a fault is detected. See [`Diagnostics`] for details.
+    ///
+    /// This is a **driver-level policy** — it does not write any sensor
+    /// register. It can be changed at any time without re-initializing.
+    ///
+    /// Default: [`Diagnostics::Off`] (no overhead).
+    #[inline]
+    pub fn set_diagnostics(&mut self, policy: Diagnostics) {
+        self.diagnostics = policy;
+    }
+
     /// Returns the expected conversion time for the current configuration.
     ///
     /// Computed from the stored [`ConversionAverage`], active magnetic channels,
     /// and temperature measurement state. Use this to calculate duty cycles or
     /// to manually sleep before reading in standby mode.
-    #[must_use]
-    pub fn conversion_time(&self) -> Micros {
+    pub fn conversion_time(&self) -> MicrosIsr {
         self.conversion_average
-            .conversion_time(self.channels, self.temperature_enabled)
+            .conversion_time(self.channels, self.temp_channel_enabled)
     }
 
     /// Decode raw X/Y/Z register values into a [`MagneticReading`].
@@ -463,8 +493,8 @@ impl<I2C: I2c, D: DelayNs> Tmag5273<I2C, Configured, D> {
     /// channels as `None`.
     #[inline]
     fn decode_magnetic(&self, raw_x: i16, raw_y: i16, raw_z: i16) -> MagneticReading {
-        let xy_range = self.variant.range_mt_xy(self.xy_range);
-        let z_range = self.variant.range_mt_z(self.z_range);
+        let xy_range = self.variant.range_xy(self.xy_range);
+        let z_range = self.variant.range_z(self.z_range);
         MagneticReading {
             x: if self.channels.has_x() {
                 Some(MilliTesla::from_raw(raw_x, xy_range))
@@ -512,7 +542,7 @@ impl<I2C: I2c, D: DelayNs> Tmag5273<I2C, Configured, D> {
             return Ok(());
         }
         let conv = ConversionStatus::from_register(conv_raw);
-        if !conv.diag_fail {
+        if !conv.diag_status_fail {
             return Ok(());
         }
         match self.diagnostics {
@@ -543,7 +573,7 @@ impl<I2C: I2c, D: DelayNs> Tmag5273<I2C, Configured, D> {
     /// Used by `read_temperature` and `read_angle` where CONV_STATUS is
     /// not included in the burst read.
     #[inline]
-    fn read_and_check_diag(&mut self) -> Result<(), Error<I2C::Error>> {
+    fn read_and_check_diagnostics(&mut self) -> Result<(), Error<I2C::Error>> {
         // Fast path: skip the CONV_STATUS register read when diagnostics are off.
         if matches!(self.diagnostics, Diagnostics::Off) {
             return Ok(());
@@ -592,7 +622,7 @@ impl<I2C: I2c, D: DelayNs> Tmag5273<I2C, Configured, D> {
             let block2 = self.read_block_with_crc(0x14)?;
             // block1: [T_MSB, T_LSB, X_MSB, X_LSB] — discard T
             // block2: [Y_MSB, Y_LSB, Z_MSB, Z_LSB]
-            self.read_and_check_diag()?;
+            self.read_and_check_diagnostics()?;
             (
                 i16::from_be_bytes([block1[2], block1[3]]),
                 i16::from_be_bytes([block2[0], block2[1]]),
@@ -641,7 +671,7 @@ impl<I2C: I2c, D: DelayNs> Tmag5273<I2C, Configured, D> {
     ///
     /// Returns [`Error::I2c`] on bus communication failure.
     pub fn read_temperature(&mut self) -> Result<Celsius, Error<I2C::Error>> {
-        if !self.temperature_enabled {
+        if !self.temp_channel_enabled {
             defmt_error!("read_temperature called but temperature channel is disabled");
             return Err(Error::TempDisabled);
         }
@@ -650,7 +680,7 @@ impl<I2C: I2c, D: DelayNs> Tmag5273<I2C, Configured, D> {
 
         let buf = self.read_register_pair(register::T_MSB_RESULT)?;
         let raw = i16::from_be_bytes(buf);
-        self.read_and_check_diag()?;
+        self.read_and_check_diagnostics()?;
         Ok(Celsius::from_raw(raw))
     }
 
@@ -667,9 +697,11 @@ impl<I2C: I2c, D: DelayNs> Tmag5273<I2C, Configured, D> {
     pub fn read_angle(&mut self) -> Result<AngleReading, Error<I2C::Error>> {
         self.require_standard_mode()?;
 
-        if !self.angle_enabled {
+        if matches!(self.angle_enable, AngleEnable::None) {
             return Err(Error::AngleNotEnabled);
         }
+
+        let range = self.angle_range();
 
         // Without CRC, read all 3 registers (ANGLE_MSB, ANGLE_LSB,
         // MAGNITUDE) in a single burst — they are consecutive.
@@ -679,7 +711,7 @@ impl<I2C: I2c, D: DelayNs> Tmag5273<I2C, Configured, D> {
             self.i2c
                 .write_read(self.address, &[register::ANGLE_RESULT_MSB], &mut buf)?;
             let raw_angle = u16::from_be_bytes([buf[0], buf[1]]);
-            let magnitude = buf[2];
+            let magnitude = CordicMagnitude::from_raw(buf[2], range);
             AngleReading {
                 angle: Degrees::from_raw(raw_angle).ok_or(Error::InvalidRegisterValue {
                     register: register::ANGLE_RESULT_MSB,
@@ -696,7 +728,8 @@ impl<I2C: I2c, D: DelayNs> Tmag5273<I2C, Configured, D> {
         let reading = {
             let angle_buf = self.read_register_pair(register::ANGLE_RESULT_MSB)?;
             let raw_angle = u16::from_be_bytes(angle_buf);
-            let magnitude = self.read_register(register::MAGNITUDE_RESULT)?;
+            let magnitude =
+                CordicMagnitude::from_raw(self.read_register(register::MAGNITUDE_RESULT)?, range);
             AngleReading {
                 angle: Degrees::from_raw(raw_angle).ok_or(Error::InvalidRegisterValue {
                     register: register::ANGLE_RESULT_MSB,
@@ -706,8 +739,51 @@ impl<I2C: I2c, D: DelayNs> Tmag5273<I2C, Configured, D> {
             }
         };
 
-        self.read_and_check_diag()?;
+        self.read_and_check_diagnostics()?;
         Ok(reading)
+    }
+
+    /// Returns the full-scale range (mT) for the axis pair used by the
+    /// CORDIC engine.
+    ///
+    /// The CORDIC computes `sqrt(Ch1² + Ch2²)` from raw ADC codes.
+    /// Converting the 8-bit magnitude register to mT requires a single
+    /// scale factor, which is only valid when both input axes share the
+    /// same full-scale range. `ConfigBuilder::build()` enforces this via
+    /// [`ConfigError::AngleMixedRanges`](crate::ConfigError::AngleMixedRanges).
+    ///
+    /// # Panics
+    ///
+    /// Debug-panics if the XY/Z ranges are not equal (should never happen
+    /// after a validated `Config`).
+    /// Panics unconditionally if called with `AngleEnable::None` — callers
+    /// must guard this (see `read_angle()`).
+    #[inline]
+    fn angle_range(&self) -> MilliTesla {
+        match self.angle_enable {
+            // XY: both axes use xy_range — straightforward.
+            AngleEnable::XY => self.variant.range_xy(self.xy_range),
+            // YZ: Y uses xy_range, Z uses z_range.
+            // XZ: X uses xy_range, Z uses z_range.
+            // ConfigBuilder::build() rejects xy_range != z_range for these
+            // modes, so both accessors return the same value.
+            AngleEnable::YZ | AngleEnable::XZ => {
+                let xy_range = self.variant.range_xy(self.xy_range);
+                let z_range = self.variant.range_z(self.z_range);
+                debug_assert_eq!(
+                    xy_range.0.to_bits(),
+                    z_range.0.to_bits(),
+                    "BUG: YZ/XZ angle with mismatched ranges \
+                     (xy={} mT, z={} mT) — ConfigBuilder should reject this",
+                    xy_range.0,
+                    z_range.0
+                );
+                z_range
+            }
+            AngleEnable::None => {
+                unreachable!("angle_range called with AngleEnable::None")
+            }
+        }
     }
 
     /// Read temperature and magnetic field in a single coherent burst.
@@ -741,7 +817,7 @@ impl<I2C: I2c, D: DelayNs> Tmag5273<I2C, Configured, D> {
         let (raw_t, raw_x, raw_y, raw_z) = {
             let block1 = self.read_block_with_crc(register::T_MSB_RESULT)?;
             let block2 = self.read_block_with_crc(0x14)?;
-            self.read_and_check_diag()?;
+            self.read_and_check_diagnostics()?;
             (
                 i16::from_be_bytes([block1[0], block1[1]]),
                 i16::from_be_bytes([block1[2], block1[3]]),
@@ -775,7 +851,7 @@ impl<I2C: I2c, D: DelayNs> Tmag5273<I2C, Configured, D> {
             )
         };
 
-        let temperature = if self.temperature_enabled {
+        let temperature = if self.temp_channel_enabled {
             Some(Celsius::from_raw(raw_t))
         } else {
             None
@@ -898,27 +974,19 @@ impl<I2C: I2c, D: DelayNs> Tmag5273<I2C, Configured, D> {
 
     /// Read the current state of the INT pin from the `DEVICE_STATUS` register.
     ///
-    /// Returns `true` when the interrupt pin is asserted (active).
+    /// Returns `true` when the interrupt pin is asserted (driven low by the
+    /// sensor). The underlying register field `INTB_RB` reads `1` when the
+    /// pin is high (inactive) and `0` when asserted — this method inverts
+    /// that so callers get intuitive active-high semantics.
     ///
     /// # Errors
     ///
     /// Returns [`Error::I2c`] on bus communication failure.
     pub fn is_interrupt_active(&mut self) -> Result<bool, Error<I2C::Error>> {
-        Ok(self.read_status()?.int_pin_active)
+        // INTB_RB: 1 = pin HIGH (inactive), 0 = pin LOW (asserted).
+        // Invert so true = active.
+        Ok(!self.read_status()?.int_bar_readback_high)
     }
-
-    /// Maximum retry attempts for register access after wake-up from sleep.
-    ///
-    /// The TI datasheet specifies 50 µs typical wake time, but real hardware
-    /// (ESP32-S3 + TMAG5273 B1) needs ~6 ms. Three attempts with 80 µs
-    /// inter-retry delay covers this reliably. The Linux kernel driver does
-    /// not retry — it relies on implicit settling, which can fail on fast
-    /// I2C controllers.
-    const WAKE_RETRY_MAX: u8 = 3;
-    // Compile-time guard: the retry loop assumes at least one iteration
-    // so that `last_err` is always `Some` at the `unwrap()` call.
-    #[allow(dead_code)]
-    const WAKE_RETRY_ASSERT: () = assert!(Self::WAKE_RETRY_MAX > 0);
 
     /// Switch the operating mode at runtime.
     ///
@@ -951,7 +1019,7 @@ impl<I2C: I2c, D: DelayNs> Tmag5273<I2C, Configured, D> {
         // arbitration loss, and other hard errors propagate immediately.
         // Non-sleep transitions succeed on the first attempt (no overhead).
         let mut last_err = None;
-        for _ in 0..Self::WAKE_RETRY_MAX {
+        for _ in 0..Self::WAKE_RETRY_MAX.get() {
             match self.read_register(register::DEVICE_CONFIG_2) {
                 Ok(current) => {
                     let updated = register::insert(
@@ -973,7 +1041,7 @@ impl<I2C: I2c, D: DelayNs> Tmag5273<I2C, Configured, D> {
                     if matches!(e.kind(), ErrorKind::NoAcknowledge(_)) {
                         defmt_debug!("set_mode: NACK, retrying wake");
                         last_err = Some(e);
-                        self.delay.delay_us(WAKE_DELAY.min.0);
+                        self.delay.delay_us(WAKE_RETRY_DELAY.0);
                     } else {
                         // Hard bus fault — propagate immediately, no retry.
                         return Err(Error::I2c(e));
@@ -984,8 +1052,10 @@ impl<I2C: I2c, D: DelayNs> Tmag5273<I2C, Configured, D> {
 
         defmt_error!(
             "set_mode: wake failed after {} retries",
-            Self::WAKE_RETRY_MAX
+            Self::WAKE_RETRY_MAX.get()
         );
+        // SAFETY: the loop executed at least once (NonZeroU8 guarantees this),
+        // so `last_err` is always `Some`.
         Err(Error::I2c(last_err.unwrap()))
     }
 
@@ -1025,14 +1095,14 @@ impl<I2C: I2c, D: DelayNs> Tmag5273<I2C, Configured, D> {
         // NoDelay: no-op (compiles to nothing). Real delay: precise sleep.
         let ct = self
             .conversion_average
-            .conversion_time(self.channels, self.temperature_enabled);
+            .conversion_time(self.channels, self.temp_channel_enabled);
         self.delay.delay_us(ct.0);
 
         // Bounded poll — primary loop for NoDelay, safety net for real delays.
         for _ in 0..self.conversion_average.max_polls() {
             let raw = self.read_register(register::CONV_STATUS)?;
             let status = ConversionStatus::from_register(raw);
-            if status.result_ready {
+            if status.result_status_ready {
                 return Ok(status);
             }
         }
@@ -1081,7 +1151,7 @@ impl<I2C: I2c, D: DelayNs> Tmag5273<I2C, Configured, D> {
     pub fn check_diag(&mut self) -> Result<DeviceStatus, Error<I2C::Error>> {
         let conv_raw = self.read_register(register::CONV_STATUS)?;
         let conv = ConversionStatus::from_register(conv_raw);
-        if conv.diag_fail {
+        if conv.diag_status_fail {
             self.read_status()
         } else {
             Ok(DeviceStatus::default())
@@ -1121,7 +1191,7 @@ impl<I2C: I2c, D: DelayNs> Tmag5273<I2C, Configured, D> {
         self.write_register(register::T_CONFIG, t_new)?;
 
         // Threshold hysteresis: DEVICE_CONFIG_2[7:5] — read-modify-write.
-        // THR_HYST is a mode selector (0=Signed, 1=SymmetricBand), NOT a
+        // THR_HYST is a mode selector (0=LimitCross, 1=SymmetricBand), NOT a
         // hysteresis magnitude.  Values 2–7 are reserved per SBASAI4 Table 8-4.
         let dc2 = self.read_register(register::DEVICE_CONFIG_2)?;
         let dc2 = register::insert(
@@ -1421,7 +1491,9 @@ impl<I2C: I2c, D: DelayNs> Tmag5273<I2C, Configured, D> {
     /// Returns [`Error::InvalidRegisterValue`] if the register contains an
     /// unrecognized value.
     /// Returns [`Error::I2c`] on bus communication failure.
-    pub fn get_temp_coefficient(&mut self) -> Result<MagneticTempCoefficient, Error<I2C::Error>> {
+    pub fn get_magnetic_temp_coefficient(
+        &mut self,
+    ) -> Result<MagneticTempCoefficient, Error<I2C::Error>> {
         self.read_field(
             register::DEVICE_CONFIG_1,
             register::MAG_TEMPCO_MASK,
@@ -1466,7 +1538,7 @@ impl<I2C: I2c, D: DelayNs> Tmag5273<I2C, Configured, D> {
     /// Returns [`Error::InvalidRegisterValue`] if the register contains an
     /// unrecognized value.
     /// Returns [`Error::I2c`] on bus communication failure.
-    pub fn get_power_mode(&mut self) -> Result<PowerNoiseMode, Error<I2C::Error>> {
+    pub fn get_power_noise_mode(&mut self) -> Result<PowerNoiseMode, Error<I2C::Error>> {
         self.read_field(
             register::DEVICE_CONFIG_2,
             register::LP_LN_MASK,
@@ -1498,7 +1570,7 @@ impl<I2C: I2c, D: DelayNs> Tmag5273<I2C, Configured, D> {
     /// # Errors
     ///
     /// Returns [`Error::I2c`] on bus communication failure.
-    pub fn get_glitch_filter(&mut self) -> Result<bool, Error<I2C::Error>> {
+    pub fn get_i2c_glitch_filter(&mut self) -> Result<bool, Error<I2C::Error>> {
         let raw = self.read_register(register::DEVICE_CONFIG_2)?;
         Ok(register::extract(
             raw,
@@ -1547,7 +1619,7 @@ impl<I2C: I2c, D: DelayNs> Tmag5273<I2C, Configured, D> {
     /// Returns [`Error::InvalidRegisterValue`] if the register contains an
     /// unrecognized value.
     /// Returns [`Error::I2c`] on bus communication failure.
-    pub fn get_magnetic_channels(&mut self) -> Result<MagneticChannel, Error<I2C::Error>> {
+    pub fn get_magnetic_channels_enabled(&mut self) -> Result<MagneticChannel, Error<I2C::Error>> {
         self.read_field(
             register::SENSOR_CONFIG_1,
             register::MAG_CH_EN_MASK,
@@ -1562,7 +1634,7 @@ impl<I2C: I2c, D: DelayNs> Tmag5273<I2C, Configured, D> {
     /// Returns [`Error::InvalidRegisterValue`] if the register contains an
     /// unrecognized value.
     /// Returns [`Error::I2c`] on bus communication failure.
-    pub fn get_sleep_duration(&mut self) -> Result<SleepTime, Error<I2C::Error>> {
+    pub fn get_sleep_time(&mut self) -> Result<SleepTime, Error<I2C::Error>> {
         self.read_field(
             register::SENSOR_CONFIG_1,
             register::SLEEPTIME_MASK,
@@ -1577,7 +1649,7 @@ impl<I2C: I2c, D: DelayNs> Tmag5273<I2C, Configured, D> {
     /// Returns [`Error::InvalidRegisterValue`] if the register contains an
     /// unrecognized value.
     /// Returns [`Error::I2c`] on bus communication failure.
-    pub fn get_angle_calculation(&mut self) -> Result<AngleEnable, Error<I2C::Error>> {
+    pub fn get_angle_enabled(&mut self) -> Result<AngleEnable, Error<I2C::Error>> {
         self.read_field(
             register::SENSOR_CONFIG_2,
             register::ANGLE_EN_MASK,
@@ -1653,7 +1725,7 @@ impl<I2C: I2c, D: DelayNs> Tmag5273<I2C, Configured, D> {
     /// # Errors
     ///
     /// Returns [`Error::I2c`] on bus communication failure.
-    pub fn get_temperature_enabled(&mut self) -> Result<bool, Error<I2C::Error>> {
+    pub fn get_temp_channel_enabled(&mut self) -> Result<bool, Error<I2C::Error>> {
         let raw = self.read_register(register::T_CONFIG)?;
         Ok(register::extract(raw, register::T_CH_EN_MASK, register::T_CH_EN_SHIFT) != 0)
     }
@@ -1669,7 +1741,7 @@ impl<I2C: I2c, D: DelayNs> Tmag5273<I2C, Configured, D> {
     /// Returns [`Error::I2c`] on bus communication failure, or
     /// [`Error::InvalidRegisterValue`] if the register contains a code
     /// outside the valid range (should not occur on correct hardware).
-    pub fn get_temperature_threshold(&mut self) -> Result<TempThresholdConfig, Error<I2C::Error>> {
+    pub fn get_temp_threshold(&mut self) -> Result<TempThresholdConfig, Error<I2C::Error>> {
         let raw = self.read_register(register::T_CONFIG)?;
         let val = register::extract(
             raw,
@@ -2044,9 +2116,9 @@ mod tests {
     use crate::config::{CalibrationConfig, ConfigBuilder, InterruptConfig, ThresholdConfig};
     use crate::register;
     use crate::types::{
-        AngleEnable, ConversionAverage, Degrees, InterruptMode, InterruptState, MagneticChannel,
-        MagneticGainChannel, MagneticTempCoefficient, MagneticThresholdDirection, OperatingMode,
-        PowerNoiseMode, Range, SleepTime, ThresholdCrossingCount, TriggerMode,
+        AngleEnable, ConversionAverage, CordicMagnitude, Degrees, InterruptMode, InterruptState,
+        MagneticChannel, MagneticGainChannel, MagneticTempCoefficient, MagneticThresholdDirection,
+        OperatingMode, PowerNoiseMode, Range, SleepTime, ThresholdCrossingCount, TriggerMode,
     };
     use embedded_hal_mock::eh1::delay::{CheckedDelay, Transaction as DelayTransaction};
     use embedded_hal_mock::eh1::i2c::{Mock as I2cMock, Transaction as I2cTransaction};
@@ -2345,9 +2417,9 @@ mod tests {
 
         let reading = sensor.read_magnetic().unwrap();
         // Exact: power-of-two raw × power-of-two reciprocal → exact f32
-        assert_eq!(reading.x.unwrap(), MilliTesla(-40.0)); // 16384 × 80/32768
-        assert_eq!(reading.y.unwrap(), MilliTesla(-20.0)); // 8192 × 80/32768
-        assert_eq!(reading.z.unwrap(), MilliTesla(-10.0)); // 4096 × 80/32768
+        assert_eq!(reading.x.unwrap(), MilliTesla(40.0)); // 16384 × 80/32768
+        assert_eq!(reading.y.unwrap(), MilliTesla(20.0)); // 8192 × 80/32768
+        assert_eq!(reading.z.unwrap(), MilliTesla(10.0)); // 4096 × 80/32768
 
         sensor.into_inner().done();
     }
@@ -3045,7 +3117,7 @@ mod tests {
     }
 
     #[test]
-    fn read_temperature_returns_error_when_non_standard_mode() {
+    fn read_temp_returns_error_when_non_standard_mode() {
         let address = 0x22u8;
         let mut expectations = init_expectations(address, &default_config());
 
@@ -3075,11 +3147,11 @@ mod tests {
     // -- INT Pin Readback ----------------------------------------------------
 
     #[test]
-    fn is_interrupt_active_reads_intb_rb_bit() {
+    fn is_interrupt_not_active_when_intb_rb_high() {
         let address = 0x22u8;
         let mut expectations = init_expectations(address, &default_config());
 
-        // Return DEVICE_STATUS with INTB_RB=1 (bit 4 set) and no faults.
+        // INTB_RB=1 (bit 4 set) → pin HIGH → interrupt NOT active.
         expectations.push(I2cTransaction::write_read(
             address,
             vec![register::DEVICE_STATUS],
@@ -3091,17 +3163,17 @@ mod tests {
         let config = ConfigBuilder::new().build().unwrap();
         let mut sensor = sensor.init(&config).unwrap();
 
-        assert!(sensor.is_interrupt_active().unwrap());
+        assert!(!sensor.is_interrupt_active().unwrap());
 
         sensor.into_inner().done();
     }
 
     #[test]
-    fn is_interrupt_not_active_when_bit_clear() {
+    fn is_interrupt_active_when_intb_rb_low() {
         let address = 0x22u8;
         let mut expectations = init_expectations(address, &default_config());
 
-        // Return DEVICE_STATUS with INTB_RB=0, no faults.
+        // INTB_RB=0 → pin LOW → interrupt IS active (driven by sensor).
         expectations.push(I2cTransaction::write_read(
             address,
             vec![register::DEVICE_STATUS],
@@ -3113,7 +3185,7 @@ mod tests {
         let config = ConfigBuilder::new().build().unwrap();
         let mut sensor = sensor.init(&config).unwrap();
 
-        assert!(!sensor.is_interrupt_active().unwrap());
+        assert!(sensor.is_interrupt_active().unwrap());
 
         sensor.into_inner().done();
     }
@@ -3177,7 +3249,7 @@ mod tests {
     }
 
     #[test]
-    fn get_magnetic_channels_reads_correct_value() {
+    fn get_magnetic_channels_enabled_reads_correct_value() {
         let address = 0x22u8;
         let mut expectations = init_expectations(address, &default_config());
 
@@ -3195,7 +3267,7 @@ mod tests {
         let config = ConfigBuilder::new().build().unwrap();
         let mut sensor = sensor.init(&config).unwrap();
 
-        let channels = sensor.get_magnetic_channels().unwrap();
+        let channels = sensor.get_magnetic_channels_enabled().unwrap();
         assert_eq!(channels, MagneticChannel::XYZ);
 
         sensor.into_inner().done();
@@ -3223,8 +3295,8 @@ mod tests {
         let status = sensor.read_conversion_status().unwrap();
         assert_eq!(status.set_count, 5);
         assert!(status.power_on_reset);
-        assert!(status.diag_fail);
-        assert!(status.result_ready);
+        assert!(status.diag_status_fail);
+        assert!(status.result_status_ready);
 
         sensor.into_inner().done();
     }
@@ -3282,7 +3354,7 @@ mod tests {
 
         let status = sensor.check_diag().unwrap();
         assert!(!status.is_ok());
-        assert!(status.vcc_undervoltage);
+        assert!(status.vcc_undervoltage_error);
         assert!(status.oscillator_error);
         assert!(!status.otp_crc_error);
         assert!(!status.int_error);
@@ -3307,10 +3379,7 @@ mod tests {
     #[cfg(not(feature = "crc"))]
     fn read_magnetic_diagnostics_halt_returns_error_on_fault() {
         let address = 0x22u8;
-        let config = ConfigBuilder::new()
-            .diagnostics(Diagnostics::Halt)
-            .build()
-            .unwrap();
+        let config = ConfigBuilder::new().build().unwrap();
         let mut expectations = init_expectations(address, &config);
         // 7-byte burst with DIAG_FAIL=1 (bit 1 set → 0x02)
         expectations.extend(diag_read_magnetic_expectations(address, 0x02));
@@ -3324,11 +3393,12 @@ mod tests {
         let i2c = I2cMock::new(&expectations);
         let sensor = Tmag5273::new(i2c, DeviceVariant::B1);
         let mut sensor = sensor.init(&config).unwrap();
+        sensor.set_diagnostics(Diagnostics::Halt);
 
         let err = sensor.read_magnetic().unwrap_err();
         match err {
             Error::DiagnosticFailure(status) => {
-                assert!(status.vcc_undervoltage);
+                assert!(status.vcc_undervoltage_error);
             }
             other => panic!("expected DiagnosticFailure, got {other:?}"),
         }
@@ -3339,10 +3409,7 @@ mod tests {
     #[cfg(not(feature = "crc"))]
     fn read_magnetic_diagnostics_halt_succeeds_without_fault() {
         let address = 0x22u8;
-        let config = ConfigBuilder::new()
-            .diagnostics(Diagnostics::Halt)
-            .build()
-            .unwrap();
+        let config = ConfigBuilder::new().build().unwrap();
         let mut expectations = init_expectations(address, &config);
         // 7-byte burst with DIAG_FAIL=0
         expectations.extend(diag_read_magnetic_expectations(address, 0x00));
@@ -3350,6 +3417,7 @@ mod tests {
         let i2c = I2cMock::new(&expectations);
         let sensor = Tmag5273::new(i2c, DeviceVariant::B1);
         let mut sensor = sensor.init(&config).unwrap();
+        sensor.set_diagnostics(Diagnostics::Halt);
 
         let mag = sensor.read_magnetic().unwrap();
         assert!(mag.x.is_some());
@@ -3360,10 +3428,7 @@ mod tests {
     #[cfg(not(feature = "crc"))]
     fn read_magnetic_diagnostics_warn_succeeds_on_fault() {
         let address = 0x22u8;
-        let config = ConfigBuilder::new()
-            .diagnostics(Diagnostics::Warn)
-            .build()
-            .unwrap();
+        let config = ConfigBuilder::new().build().unwrap();
         let mut expectations = init_expectations(address, &config);
         // 7-byte burst with DIAG_FAIL=1 (bit 1 → 0x02)
         expectations.extend(diag_read_magnetic_expectations(address, 0x02));
@@ -3372,6 +3437,7 @@ mod tests {
         let i2c = I2cMock::new(&expectations);
         let sensor = Tmag5273::new(i2c, DeviceVariant::B1);
         let mut sensor = sensor.init(&config).unwrap();
+        sensor.set_diagnostics(Diagnostics::Warn);
 
         // Warn: read succeeds even with fault
         let mag = sensor.read_magnetic().unwrap();
@@ -3383,10 +3449,7 @@ mod tests {
     #[cfg(not(feature = "crc"))]
     fn read_magnetic_diagnostics_ignore_succeeds_on_fault() {
         let address = 0x22u8;
-        let config = ConfigBuilder::new()
-            .diagnostics(Diagnostics::Ignore)
-            .build()
-            .unwrap();
+        let config = ConfigBuilder::new().build().unwrap();
         let mut expectations = init_expectations(address, &config);
         // 7-byte burst with DIAG_FAIL=1 — Ignore discards, no DEVICE_STATUS read
         expectations.extend(diag_read_magnetic_expectations(address, 0x02));
@@ -3394,6 +3457,7 @@ mod tests {
         let i2c = I2cMock::new(&expectations);
         let sensor = Tmag5273::new(i2c, DeviceVariant::B1);
         let mut sensor = sensor.init(&config).unwrap();
+        sensor.set_diagnostics(Diagnostics::Ignore);
 
         // Ignore: read succeeds silently
         let mag = sensor.read_magnetic().unwrap();
@@ -3405,10 +3469,7 @@ mod tests {
     #[cfg(not(feature = "crc"))]
     fn read_magnetic_diagnostics_off_skips_conv_status_byte() {
         let address = 0x22u8;
-        let config = ConfigBuilder::new()
-            .diagnostics(Diagnostics::Off)
-            .build()
-            .unwrap();
+        let config = ConfigBuilder::new().build().unwrap();
         let mut expectations = init_expectations(address, &config);
         // Off: standard 6-byte burst, no CONV_STATUS byte
         expectations.push(I2cTransaction::write_read(
@@ -3420,6 +3481,7 @@ mod tests {
         let i2c = I2cMock::new(&expectations);
         let sensor = Tmag5273::new(i2c, DeviceVariant::B1);
         let mut sensor = sensor.init(&config).unwrap();
+        sensor.set_diagnostics(Diagnostics::Off);
 
         let mag = sensor.read_magnetic().unwrap();
         assert!(mag.x.is_some());
@@ -3432,10 +3494,7 @@ mod tests {
     #[cfg(not(feature = "crc"))]
     fn diagnostics_halt_read_all_fault_returns_error() {
         let address = 0x22u8;
-        let config = ConfigBuilder::new()
-            .diagnostics(Diagnostics::Halt)
-            .build()
-            .unwrap();
+        let config = ConfigBuilder::new().build().unwrap();
         let mut expectations = init_expectations(address, &config);
         // 9-byte burst from T_MSB_RESULT (0x10): T + X + Y + Z + CONV_STATUS
         // CONV_STATUS with DIAG_FAIL=1 (bit 1 → 0x02) at buf[8]
@@ -3454,25 +3513,23 @@ mod tests {
         let i2c = I2cMock::new(&expectations);
         let sensor = Tmag5273::new(i2c, DeviceVariant::B1);
         let mut sensor = sensor.init(&config).unwrap();
+        sensor.set_diagnostics(Diagnostics::Halt);
 
         let err = sensor.read_all().unwrap_err();
         match err {
-            Error::DiagnosticFailure(status) => assert!(status.vcc_undervoltage),
+            Error::DiagnosticFailure(status) => assert!(status.vcc_undervoltage_error),
             other => panic!("expected DiagnosticFailure, got {other:?}"),
         }
         sensor.into_inner().done();
     }
 
-    // -- Diagnostics: read_temperature fault path via read_and_check_diag (P2 #3) --
+    // -- Diagnostics: read_temperature fault path via read_and_check_diagnostics (P2 #3) --
 
     #[test]
     #[cfg(not(feature = "crc"))]
-    fn diagnostics_halt_read_temperature_fault() {
+    fn diagnostics_halt_read_temp_fault() {
         let address = 0x22u8;
-        let config = ConfigBuilder::new()
-            .diagnostics(Diagnostics::Halt)
-            .build()
-            .unwrap();
+        let config = ConfigBuilder::new().build().unwrap();
         let mut expectations = init_expectations(address, &config);
         // read_register_pair(T_MSB_RESULT) → 2 bytes
         expectations.push(I2cTransaction::write_read(
@@ -3480,7 +3537,7 @@ mod tests {
             vec![register::T_MSB_RESULT],
             vec![0x44, 0x64],
         ));
-        // read_and_check_diag → read CONV_STATUS (0x18) with DIAG_FAIL=1
+        // read_and_check_diagnostics → read CONV_STATUS (0x18) with DIAG_FAIL=1
         expectations.push(I2cTransaction::write_read(
             address,
             vec![register::CONV_STATUS],
@@ -3496,6 +3553,7 @@ mod tests {
         let i2c = I2cMock::new(&expectations);
         let sensor = Tmag5273::new(i2c, DeviceVariant::B1);
         let mut sensor = sensor.init(&config).unwrap();
+        sensor.set_diagnostics(Diagnostics::Halt);
 
         let err = sensor.read_temperature().unwrap_err();
         match err {
@@ -3507,12 +3565,9 @@ mod tests {
 
     #[test]
     #[cfg(not(feature = "crc"))]
-    fn diagnostics_warn_read_temperature_fault_succeeds() {
+    fn diagnostics_warn_read_temp_fault_succeeds() {
         let address = 0x22u8;
-        let config = ConfigBuilder::new()
-            .diagnostics(Diagnostics::Warn)
-            .build()
-            .unwrap();
+        let config = ConfigBuilder::new().build().unwrap();
         let mut expectations = init_expectations(address, &config);
         // read_register_pair(T_MSB_RESULT)
         expectations.push(I2cTransaction::write_read(
@@ -3520,7 +3575,7 @@ mod tests {
             vec![register::T_MSB_RESULT],
             vec![0x44, 0x64],
         ));
-        // read_and_check_diag → read CONV_STATUS with DIAG_FAIL=1
+        // read_and_check_diagnostics → read CONV_STATUS with DIAG_FAIL=1
         expectations.push(I2cTransaction::write_read(
             address,
             vec![register::CONV_STATUS],
@@ -3531,6 +3586,7 @@ mod tests {
         let i2c = I2cMock::new(&expectations);
         let sensor = Tmag5273::new(i2c, DeviceVariant::B1);
         let mut sensor = sensor.init(&config).unwrap();
+        sensor.set_diagnostics(Diagnostics::Warn);
 
         // Warn: temperature read succeeds despite fault
         let temp = sensor.read_temperature().unwrap();
@@ -3540,12 +3596,9 @@ mod tests {
 
     #[test]
     #[cfg(not(feature = "crc"))]
-    fn diagnostics_ignore_read_temperature_fault_succeeds() {
+    fn diagnostics_ignore_read_temp_fault_succeeds() {
         let address = 0x22u8;
-        let config = ConfigBuilder::new()
-            .diagnostics(Diagnostics::Ignore)
-            .build()
-            .unwrap();
+        let config = ConfigBuilder::new().build().unwrap();
         let mut expectations = init_expectations(address, &config);
         // read_register_pair(T_MSB_RESULT)
         expectations.push(I2cTransaction::write_read(
@@ -3553,7 +3606,7 @@ mod tests {
             vec![register::T_MSB_RESULT],
             vec![0x44, 0x64],
         ));
-        // read_and_check_diag → read CONV_STATUS with DIAG_FAIL=1
+        // read_and_check_diagnostics → read CONV_STATUS with DIAG_FAIL=1
         expectations.push(I2cTransaction::write_read(
             address,
             vec![register::CONV_STATUS],
@@ -3564,6 +3617,7 @@ mod tests {
         let i2c = I2cMock::new(&expectations);
         let sensor = Tmag5273::new(i2c, DeviceVariant::B1);
         let mut sensor = sensor.init(&config).unwrap();
+        sensor.set_diagnostics(Diagnostics::Ignore);
 
         // Ignore: read succeeds silently
         let temp = sensor.read_temperature().unwrap();
@@ -3605,9 +3659,9 @@ mod tests {
         // Exact: raw=17508 is the T_ADC_T0 reference point
         assert_eq!(reading.temperature.unwrap(), Celsius(25.0));
         // Exact: power-of-two raw × power-of-two reciprocal → exact f32
-        assert_eq!(reading.magnetic.x.unwrap(), MilliTesla(-40.0));
-        assert_eq!(reading.magnetic.y.unwrap(), MilliTesla(-20.0));
-        assert_eq!(reading.magnetic.z.unwrap(), MilliTesla(-10.0));
+        assert_eq!(reading.magnetic.x.unwrap(), MilliTesla(40.0));
+        assert_eq!(reading.magnetic.y.unwrap(), MilliTesla(20.0));
+        assert_eq!(reading.magnetic.z.unwrap(), MilliTesla(10.0));
 
         sensor.into_inner().done();
     }
@@ -3644,10 +3698,10 @@ mod tests {
 
     #[test]
     #[cfg(not(feature = "crc"))]
-    fn read_all_returns_none_temperature_when_disabled() {
+    fn read_all_returns_none_temp_when_disabled() {
         let address = 0x22u8;
         let config = ConfigBuilder::new()
-            .temperature_enabled(false)
+            .temp_channel_enabled(false)
             .build()
             .unwrap();
 
@@ -3716,7 +3770,7 @@ mod tests {
     // -- Temperature threshold sign extension --------------------------------
 
     #[test]
-    fn temperature_threshold_min_code_round_trip() {
+    fn temp_threshold_min_code_round_trip() {
         let address = 0x22u8;
         let mut expectations = init_expectations(address, &default_config());
 
@@ -3734,7 +3788,7 @@ mod tests {
         let config = ConfigBuilder::new().build().unwrap();
         let mut sensor = sensor.init(&config).unwrap();
 
-        let threshold = sensor.get_temperature_threshold().unwrap();
+        let threshold = sensor.get_temp_threshold().unwrap();
         assert_eq!(threshold.code(), 0x1A);
         assert!(threshold.is_enabled());
 
@@ -3742,7 +3796,7 @@ mod tests {
     }
 
     #[test]
-    fn temperature_threshold_max_code_round_trip() {
+    fn temp_threshold_max_code_round_trip() {
         let address = 0x22u8;
         let mut expectations = init_expectations(address, &default_config());
 
@@ -3760,7 +3814,7 @@ mod tests {
         let config = ConfigBuilder::new().build().unwrap();
         let mut sensor = sensor.init(&config).unwrap();
 
-        let threshold = sensor.get_temperature_threshold().unwrap();
+        let threshold = sensor.get_temp_threshold().unwrap();
         assert_eq!(threshold.code(), 0x34);
         assert!(threshold.is_enabled());
 
@@ -3768,7 +3822,7 @@ mod tests {
     }
 
     #[test]
-    fn temperature_threshold_disabled_round_trip() {
+    fn temp_threshold_disabled_round_trip() {
         let address = 0x22u8;
         let mut expectations = init_expectations(address, &default_config());
 
@@ -3785,7 +3839,7 @@ mod tests {
         let config = ConfigBuilder::new().build().unwrap();
         let mut sensor = sensor.init(&config).unwrap();
 
-        let threshold = sensor.get_temperature_threshold().unwrap();
+        let threshold = sensor.get_temp_threshold().unwrap();
         assert_eq!(threshold, TempThresholdConfig::DISABLED);
         assert!(!threshold.is_enabled());
 
@@ -3793,7 +3847,7 @@ mod tests {
     }
 
     #[test]
-    fn temperature_threshold_invalid_code_returns_error() {
+    fn temp_threshold_invalid_code_returns_error() {
         let address = 0x22u8;
         let mut expectations = init_expectations(address, &default_config());
 
@@ -3811,7 +3865,7 @@ mod tests {
         let config = ConfigBuilder::new().build().unwrap();
         let mut sensor = sensor.init(&config).unwrap();
 
-        let result = sensor.get_temperature_threshold();
+        let result = sensor.get_temp_threshold();
         assert!(result.is_err());
         assert_eq!(
             result.unwrap_err(),
@@ -3827,10 +3881,10 @@ mod tests {
     // -- read_temperature() error path --------------------------------------
 
     #[test]
-    fn read_temperature_returns_error_when_disabled() {
+    fn read_temp_returns_error_when_disabled() {
         let address = 0x22u8;
         let config = ConfigBuilder::new()
-            .temperature_enabled(false)
+            .temp_channel_enabled(false)
             .build()
             .unwrap();
 
@@ -3852,7 +3906,7 @@ mod tests {
     fn read_magnetic_partial_channel_xy() {
         let address = 0x22u8;
         let config = ConfigBuilder::new()
-            .magnetic_channels(MagneticChannel::XY)
+            .magnetic_channels_enabled(MagneticChannel::XY)
             .build()
             .unwrap();
 
@@ -3870,8 +3924,8 @@ mod tests {
 
         let reading = sensor.read_magnetic().unwrap();
         // Exact: power-of-two raw × power-of-two reciprocal → exact f32
-        assert_eq!(reading.x.unwrap(), MilliTesla(-40.0));
-        assert_eq!(reading.y.unwrap(), MilliTesla(-20.0));
+        assert_eq!(reading.x.unwrap(), MilliTesla(40.0));
+        assert_eq!(reading.y.unwrap(), MilliTesla(20.0));
         assert!(reading.z.is_none(), "Z should be None for XY-only config");
 
         sensor.into_inner().done();
@@ -3882,7 +3936,7 @@ mod tests {
     fn read_magnetic_off_returns_all_none() {
         let address = 0x22u8;
         let config = ConfigBuilder::new()
-            .magnetic_channels(MagneticChannel::Off)
+            .magnetic_channels_enabled(MagneticChannel::Off)
             .build()
             .unwrap();
 
@@ -3912,8 +3966,8 @@ mod tests {
     fn read_angle_xy_happy_path() {
         let address = 0x22u8;
         let config = ConfigBuilder::new()
-            .angle_calculation(AngleEnable::XY)
-            .magnetic_channels(MagneticChannel::XY)
+            .angle_enabled(AngleEnable::XY)
+            .magnetic_channels_enabled(MagneticChannel::XY)
             .build()
             .unwrap();
 
@@ -3947,7 +4001,7 @@ mod tests {
         let reading = sensor.read_angle().unwrap();
         // Exact: Degrees::from_raw(0x0B40) = 180.0
         assert_eq!(reading.angle, Degrees(180.0));
-        assert_eq!(reading.magnitude, 42);
+        assert_eq!(reading.magnitude, CordicMagnitude(26.25));
 
         sensor.into_inner().done();
     }
@@ -4176,7 +4230,7 @@ mod tests {
             vec![register::CONV_STATUS | register::CONVERSION_START_BIT],
             vec![0x00],
         ));
-        // First poll of CONV_STATUS returns result_ready (bit 0 set)
+        // First poll of CONV_STATUS returns result_status_ready (bit 0 set)
         expectations.push(I2cTransaction::write_read(
             address,
             vec![register::CONV_STATUS],
@@ -4189,7 +4243,7 @@ mod tests {
 
         sensor.trigger_conversion().unwrap();
         let status = sensor.wait_for_conversion().unwrap();
-        assert!(status.result_ready);
+        assert!(status.result_status_ready);
 
         sensor.into_inner().done();
     }
@@ -4200,8 +4254,8 @@ mod tests {
         let address = 0x22u8;
         let config = ConfigBuilder::new()
             .operating_mode(OperatingMode::Standby)
-            .magnetic_channels(MagneticChannel::XYZ)
-            .temperature_enabled(true)
+            .magnetic_channels_enabled(MagneticChannel::XYZ)
+            .temp_channel_enabled(true)
             .build()
             .unwrap();
 
@@ -4231,15 +4285,15 @@ mod tests {
 
         sensor.trigger_conversion().unwrap();
         let status = sensor.wait_for_conversion().unwrap();
-        assert!(status.result_ready);
+        assert!(status.result_status_ready);
 
         let reading = sensor.read_all().unwrap();
         // Exact: raw=17508 is the T_ADC_T0 reference point
         assert_eq!(reading.temperature.unwrap(), Celsius(25.0));
         // Exact: power-of-two raw × power-of-two reciprocal → exact f32
-        assert_eq!(reading.magnetic.x.unwrap(), MilliTesla(-40.0));
-        assert_eq!(reading.magnetic.y.unwrap(), MilliTesla(-20.0));
-        assert_eq!(reading.magnetic.z.unwrap(), MilliTesla(-10.0));
+        assert_eq!(reading.magnetic.x.unwrap(), MilliTesla(40.0));
+        assert_eq!(reading.magnetic.y.unwrap(), MilliTesla(20.0));
+        assert_eq!(reading.magnetic.z.unwrap(), MilliTesla(10.0));
 
         sensor.into_inner().done();
     }
@@ -4251,8 +4305,8 @@ mod tests {
     fn crc_read_angle_validates_checksum() {
         let address = 0x22u8;
         let config = ConfigBuilder::new()
-            .angle_calculation(AngleEnable::XY)
-            .magnetic_channels(MagneticChannel::XY)
+            .angle_enabled(AngleEnable::XY)
+            .magnetic_channels_enabled(MagneticChannel::XY)
             .build()
             .unwrap();
 
@@ -4278,7 +4332,7 @@ mod tests {
         let reading = sensor.read_angle().unwrap();
         // Exact: 0x0B40 → Degrees(180.0)
         assert_eq!(reading.angle, Degrees(180.0));
-        assert_eq!(reading.magnitude, 42);
+        assert_eq!(reading.magnitude, CordicMagnitude(26.25));
 
         sensor.into_inner().done();
     }
@@ -4577,7 +4631,7 @@ mod tests {
 
         sensor.trigger_conversion().unwrap();
         let status = sensor.wait_for_conversion().unwrap();
-        assert!(status.result_ready);
+        assert!(status.result_status_ready);
 
         let (mut i2c, mut delay) = sensor.into_parts();
         i2c.done();
@@ -4606,8 +4660,8 @@ mod tests {
 
     // DEVICE_CONFIG_1 (0x00) getters
     getter_test!(
-        get_temp_coefficient_reads_ndbfe,
-        get_temp_coefficient,
+        get_magnetic_temp_coefficient_reads_ndbfe,
+        get_magnetic_temp_coefficient,
         register::DEVICE_CONFIG_1,
         0b0010_0000, // MAG_TEMPCO = 1 (NdBFe)
         MagneticTempCoefficient::NdBFe
@@ -4623,8 +4677,8 @@ mod tests {
 
     // DEVICE_CONFIG_2 (0x01) getters
     getter_test!(
-        get_power_mode_reads_low_noise,
-        get_power_mode,
+        get_power_noise_mode_reads_low_noise,
+        get_power_noise_mode,
         0x01,
         0b0001_0000, // LP_LN = 1
         PowerNoiseMode::LowNoise
@@ -4639,7 +4693,7 @@ mod tests {
     );
 
     #[test]
-    fn get_glitch_filter_enabled_when_bit_clear() {
+    fn get_i2c_glitch_filter_enabled_when_bit_clear() {
         let address = 0x22u8;
         let mut expectations = init_expectations(address, &default_config());
         // I2C_GLITCH_FILTER bit 3 = 0 means filter ENABLED
@@ -4651,12 +4705,12 @@ mod tests {
         let i2c = I2cMock::new(&expectations);
         let sensor = Tmag5273::new(i2c, DeviceVariant::B1);
         let mut sensor = sensor.init(&default_config()).unwrap();
-        assert!(sensor.get_glitch_filter().unwrap());
+        assert!(sensor.get_i2c_glitch_filter().unwrap());
         sensor.into_inner().done();
     }
 
     #[test]
-    fn get_glitch_filter_disabled_when_bit_set() {
+    fn get_i2c_glitch_filter_disabled_when_bit_set() {
         let address = 0x22u8;
         let mut expectations = init_expectations(address, &default_config());
         // I2C_GLITCH_FILTER bit 3 = 1 means filter DISABLED
@@ -4668,7 +4722,7 @@ mod tests {
         let i2c = I2cMock::new(&expectations);
         let sensor = Tmag5273::new(i2c, DeviceVariant::B1);
         let mut sensor = sensor.init(&default_config()).unwrap();
-        assert!(!sensor.get_glitch_filter().unwrap());
+        assert!(!sensor.get_i2c_glitch_filter().unwrap());
         sensor.into_inner().done();
     }
 
@@ -4676,7 +4730,7 @@ mod tests {
     fn get_threshold_hysteresis_signed() {
         let address = 0x22u8;
         let mut expectations = init_expectations(address, &default_config());
-        // THR_HYST = 0b000 (Signed) in bits [7:5]
+        // THR_HYST = 0b000 (LimitCross) in bits [7:5]
         expectations.push(I2cTransaction::write_read(
             address,
             vec![register::DEVICE_CONFIG_2],
@@ -4687,7 +4741,7 @@ mod tests {
         let mut sensor = sensor.init(&default_config()).unwrap();
         assert_eq!(
             sensor.get_threshold_hysteresis().unwrap(),
-            crate::config::ThresholdHysteresis::Signed,
+            crate::config::ThresholdHysteresis::LimitCross,
         );
         sensor.into_inner().done();
     }
@@ -4737,8 +4791,8 @@ mod tests {
 
     // SENSOR_CONFIG_1 (0x02) getters
     getter_test!(
-        get_sleep_duration_reads_ms10,
-        get_sleep_duration,
+        get_sleep_time_reads_ms10,
+        get_sleep_time,
         0x02,
         0b0000_0010, // SLEEPTIME = 0x2 (Ms10)
         SleepTime::Ms10
@@ -4746,8 +4800,8 @@ mod tests {
 
     // SENSOR_CONFIG_2 (0x03) getters
     getter_test!(
-        get_angle_calculation_reads_xy,
-        get_angle_calculation,
+        get_angle_enabled_reads_xy,
+        get_angle_enabled,
         0x03,
         0b0000_0100, // ANGLE_EN = 1 (XY)
         AngleEnable::XY
@@ -4787,7 +4841,7 @@ mod tests {
 
     // T_CONFIG (0x07) getters
     #[test]
-    fn get_temperature_enabled_true() {
+    fn get_temp_channel_enabled_true() {
         let address = 0x22u8;
         let mut expectations = init_expectations(address, &default_config());
         expectations.push(I2cTransaction::write_read(
@@ -4798,12 +4852,12 @@ mod tests {
         let i2c = I2cMock::new(&expectations);
         let sensor = Tmag5273::new(i2c, DeviceVariant::B1);
         let mut sensor = sensor.init(&default_config()).unwrap();
-        assert!(sensor.get_temperature_enabled().unwrap());
+        assert!(sensor.get_temp_channel_enabled().unwrap());
         sensor.into_inner().done();
     }
 
     #[test]
-    fn get_temperature_enabled_false() {
+    fn get_temp_channel_enabled_false() {
         let address = 0x22u8;
         let mut expectations = init_expectations(address, &default_config());
         expectations.push(I2cTransaction::write_read(
@@ -4814,7 +4868,7 @@ mod tests {
         let i2c = I2cMock::new(&expectations);
         let sensor = Tmag5273::new(i2c, DeviceVariant::B1);
         let mut sensor = sensor.init(&default_config()).unwrap();
-        assert!(!sensor.get_temperature_enabled().unwrap());
+        assert!(!sensor.get_temp_channel_enabled().unwrap());
         sensor.into_inner().done();
     }
 
@@ -4975,7 +5029,7 @@ mod tests {
 
     // conversion_time
     #[test]
-    fn conversion_time_returns_expected_micros() {
+    fn conversion_time_returns_expected_micros_isr() {
         let address = 0x22u8;
         let expectations = init_expectations(address, &default_config());
         let i2c = I2cMock::new(&expectations);
@@ -5094,9 +5148,8 @@ mod tests {
     fn read_angle_diagnostics_halt_on_failure() {
         let address = 0x22u8;
         let config = ConfigBuilder::new()
-            .angle_calculation(AngleEnable::XY)
-            .magnetic_channels(MagneticChannel::XY)
-            .diagnostics(Diagnostics::Halt)
+            .angle_enabled(AngleEnable::XY)
+            .magnetic_channels_enabled(MagneticChannel::XY)
             .build()
             .unwrap();
 
@@ -5107,7 +5160,7 @@ mod tests {
             vec![register::ANGLE_RESULT_MSB],
             vec![0x0B, 0x40, 0x2A], // raw_angle=0x0B40, magnitude=42
         ));
-        // read_and_check_diag: read CONV_STATUS (0x18) with DIAG_STATUS bit 1 set
+        // read_and_check_diagnostics: read CONV_STATUS (0x18) with DIAG_STATUS bit 1 set
         expectations.push(I2cTransaction::write_read(
             address,
             vec![register::CONV_STATUS],
@@ -5123,11 +5176,12 @@ mod tests {
         let i2c = I2cMock::new(&expectations);
         let sensor = Tmag5273::new(i2c, DeviceVariant::B1);
         let mut sensor = sensor.init(&config).unwrap();
+        sensor.set_diagnostics(Diagnostics::Halt);
 
         let err = sensor.read_angle().unwrap_err();
         match err {
             Error::DiagnosticFailure(status) => {
-                assert!(status.vcc_undervoltage);
+                assert!(status.vcc_undervoltage_error);
             }
             other => panic!("expected DiagnosticFailure, got {other:?}"),
         }
@@ -5198,7 +5252,7 @@ mod tests {
             address,
             vec![register::T_CONFIG, 0x51],
         ));
-        // DEVICE_CONFIG_2 read-modify-write: hysteresis=Signed(0) in bits [7:5]
+        // DEVICE_CONFIG_2 read-modify-write: hysteresis=LimitCross(0) in bits [7:5]
         expectations.push(I2cTransaction::write_read(
             address,
             vec![register::DEVICE_CONFIG_2],
@@ -5238,14 +5292,14 @@ mod tests {
             vec![register::Z_THR_CONFIG],
             vec![100],
         ));
-        // get_temperature_threshold: read T_CONFIG (0x07) → temp=0x28 encoded
+        // get_temp_threshold: read T_CONFIG (0x07) → temp=0x28 encoded
         // 0x28 << 1 | T_CH_EN=1 = 0x51
         expectations.push(I2cTransaction::write_read(
             address,
             vec![register::T_CONFIG],
             vec![0x51],
         ));
-        // get_threshold_hysteresis: read DEVICE_CONFIG_2 (0x01) → Signed (0b000 in bits [7:5])
+        // get_threshold_hysteresis: read DEVICE_CONFIG_2 (0x01) → LimitCross (0b000 in bits [7:5])
         expectations.push(I2cTransaction::write_read(
             address,
             vec![register::DEVICE_CONFIG_2],
@@ -5275,7 +5329,7 @@ mod tests {
                 y: -10,
                 z: 100,
                 temperature: TempThresholdConfig::from_code(0x28).unwrap(),
-                hysteresis: crate::config::ThresholdHysteresis::Signed,
+                hysteresis: crate::config::ThresholdHysteresis::LimitCross,
                 crossing_count: ThresholdCrossingCount::Four,
                 direction: MagneticThresholdDirection::Below,
             })
@@ -5284,10 +5338,10 @@ mod tests {
         assert_eq!(sensor.get_x_threshold().unwrap(), 42);
         assert_eq!(sensor.get_y_threshold().unwrap(), -10);
         assert_eq!(sensor.get_z_threshold().unwrap(), 100);
-        assert_eq!(sensor.get_temperature_threshold().unwrap().code(), 0x28);
+        assert_eq!(sensor.get_temp_threshold().unwrap().code(), 0x28);
         assert_eq!(
             sensor.get_threshold_hysteresis().unwrap(),
-            crate::config::ThresholdHysteresis::Signed,
+            crate::config::ThresholdHysteresis::LimitCross,
         );
         assert_eq!(
             sensor.get_threshold_crossing_count().unwrap(),
@@ -5319,11 +5373,10 @@ mod tests {
             .operating_mode(OperatingMode::Standby)
             .xy_range(Range::Low)
             .z_range(Range::Low)
-            .power_mode(PowerNoiseMode::LowNoise)
+            .power_noise_mode(PowerNoiseMode::LowNoise)
             .trigger_mode(TriggerMode::IntPin)
-            .glitch_filter(false)
-            .temp_coefficient(MagneticTempCoefficient::Ceramic)
-            .diagnostics(crate::Diagnostics::Warn)
+            .i2c_glitch_filter(false)
+            .magnetic_temp_coefficient(MagneticTempCoefficient::Ceramic)
             .build()
             .unwrap();
         // Just verify it builds without error — the register values are

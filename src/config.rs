@@ -6,10 +6,10 @@
 use crate::error::ConfigError;
 use crate::register;
 use crate::types::{
-    AngleEnable, ConversionAverage, Diagnostics, I2cReadMode, InterruptMode, InterruptState,
-    MagneticChannel, MagneticGainChannel, MagneticTempCoefficient, MagneticThresholdDirection,
-    Micros, OperatingMode, PowerNoiseMode, Range, SleepTime, TempThresholdConfig,
-    ThresholdCrossingCount, TriggerMode,
+    AngleEnable, ConversionAverage, I2cReadMode, InterruptMode, InterruptState, MagneticChannel,
+    MagneticGainChannel, MagneticTempCoefficient, MagneticThresholdDirection, MicrosIsr,
+    OperatingMode, PowerNoiseMode, Range, SleepTime, TempThresholdConfig, ThresholdCrossingCount,
+    TriggerMode,
 };
 
 /// Validated device configuration for the TMAG5273.
@@ -24,11 +24,11 @@ pub struct Config {
     /// Operating mode.
     pub operating_mode: OperatingMode,
     /// Magnetic channel selection.
-    pub magnetic_channels: MagneticChannel,
+    pub magnetic_channels_enabled: MagneticChannel,
     /// Whether the temperature channel is enabled.
-    pub temperature_enabled: bool,
+    pub temp_channel_enabled: bool,
     /// Angle calculation axis pair.
-    pub angle_calculation: AngleEnable,
+    pub angle_enabled: AngleEnable,
     /// Conversion averaging.
     pub conversion_average: ConversionAverage,
     /// X/Y axis measurement range.
@@ -36,23 +36,15 @@ pub struct Config {
     /// Z axis measurement range.
     pub z_range: Range,
     /// Power mode.
-    pub power_mode: PowerNoiseMode,
+    pub power_noise_mode: PowerNoiseMode,
     /// Sleep duration (used in wake-up-and-sleep mode).
-    pub sleep_duration: SleepTime,
+    pub sleep_time: SleepTime,
     /// Trigger mode.
     pub trigger_mode: TriggerMode,
     /// Whether the I2C glitch filter is enabled.
-    pub glitch_filter: bool,
+    pub i2c_glitch_filter: bool,
     /// Magnetic temperature compensation coefficient.
-    pub temp_coefficient: MagneticTempCoefficient,
-    /// Per-sample diagnostic checking policy.
-    ///
-    /// Controls whether each `read_magnetic`, `read_temperature`, `read_all`,
-    /// and `read_angle` call checks `CONV_STATUS.DIAG_FAIL`, and what
-    /// happens when a fault is detected.
-    ///
-    /// Default: [`Diagnostics::Off`] (no overhead — existing behavior unchanged).
-    pub diagnostics: Diagnostics,
+    pub magnetic_temp_coefficient: MagneticTempCoefficient,
 }
 
 // ---------------------------------------------------------------------------
@@ -71,23 +63,22 @@ pub struct Config {
 /// use tmag5273::ConfigBuilder;
 ///
 /// let config = ConfigBuilder::new().build().unwrap();
-/// assert_eq!(config.magnetic_channels, tmag5273::MagneticChannel::XYZ);
+/// assert_eq!(config.magnetic_channels_enabled, tmag5273::MagneticChannel::XYZ);
 /// ```
 #[derive(Debug, Clone, Copy)]
 pub struct ConfigBuilder {
     operating_mode: OperatingMode,
-    magnetic_channels: MagneticChannel,
-    temperature_enabled: bool,
-    angle_calculation: AngleEnable,
+    magnetic_channels_enabled: MagneticChannel,
+    temp_channel_enabled: bool,
+    angle_enabled: AngleEnable,
     conversion_average: ConversionAverage,
     xy_range: Range,
     z_range: Range,
-    power_mode: PowerNoiseMode,
-    sleep_duration: SleepTime,
+    power_noise_mode: PowerNoiseMode,
+    sleep_time: SleepTime,
     trigger_mode: TriggerMode,
-    glitch_filter: bool,
-    temp_coefficient: MagneticTempCoefficient,
-    diagnostics: Diagnostics,
+    i2c_glitch_filter: bool,
+    magnetic_temp_coefficient: MagneticTempCoefficient,
 }
 
 impl Default for ConfigBuilder {
@@ -102,18 +93,17 @@ impl ConfigBuilder {
     pub const fn new() -> Self {
         Self {
             operating_mode: OperatingMode::ContinuousMeasure,
-            magnetic_channels: MagneticChannel::XYZ,
-            temperature_enabled: true,
-            angle_calculation: AngleEnable::None,
+            magnetic_channels_enabled: MagneticChannel::XYZ,
+            temp_channel_enabled: true,
+            angle_enabled: AngleEnable::None,
             conversion_average: ConversionAverage::X1,
             xy_range: Range::High,
             z_range: Range::High,
-            power_mode: PowerNoiseMode::LowActiveCurrent,
-            sleep_duration: SleepTime::Ms1,
+            power_noise_mode: PowerNoiseMode::LowActiveCurrent,
+            sleep_time: SleepTime::Ms1,
             trigger_mode: TriggerMode::I2cCommand,
-            glitch_filter: true,
-            temp_coefficient: MagneticTempCoefficient::None,
-            diagnostics: Diagnostics::Off,
+            i2c_glitch_filter: true,
+            magnetic_temp_coefficient: MagneticTempCoefficient::None,
         }
     }
 
@@ -124,26 +114,26 @@ impl ConfigBuilder {
     }
 
     /// Set the magnetic channel selection.
-    pub const fn magnetic_channels(mut self, channels: MagneticChannel) -> Self {
-        self.magnetic_channels = channels;
+    pub const fn magnetic_channels_enabled(mut self, magnetic_channels: MagneticChannel) -> Self {
+        self.magnetic_channels_enabled = magnetic_channels;
         self
     }
 
     /// Enable or disable the temperature channel.
-    pub const fn temperature_enabled(mut self, enabled: bool) -> Self {
-        self.temperature_enabled = enabled;
+    pub const fn temp_channel_enabled(mut self, enabled: bool) -> Self {
+        self.temp_channel_enabled = enabled;
         self
     }
 
     /// Set the angle calculation axis pair.
-    pub const fn angle_calculation(mut self, angle: AngleEnable) -> Self {
-        self.angle_calculation = angle;
+    pub const fn angle_enabled(mut self, enabled: AngleEnable) -> Self {
+        self.angle_enabled = enabled;
         self
     }
 
     /// Set the conversion averaging.
-    pub const fn conversion_average(mut self, avg: ConversionAverage) -> Self {
-        self.conversion_average = avg;
+    pub const fn conversion_average(mut self, conversion_average: ConversionAverage) -> Self {
+        self.conversion_average = conversion_average;
         self
     }
 
@@ -160,14 +150,14 @@ impl ConfigBuilder {
     }
 
     /// Set the power mode.
-    pub const fn power_mode(mut self, mode: PowerNoiseMode) -> Self {
-        self.power_mode = mode;
+    pub const fn power_noise_mode(mut self, mode: PowerNoiseMode) -> Self {
+        self.power_noise_mode = mode;
         self
     }
 
     /// Set the sleep duration (for wake-up-and-sleep mode).
-    pub const fn sleep_duration(mut self, dur: SleepTime) -> Self {
-        self.sleep_duration = dur;
+    pub const fn sleep_time(mut self, sleep_time: SleepTime) -> Self {
+        self.sleep_time = sleep_time;
         self
     }
 
@@ -178,26 +168,14 @@ impl ConfigBuilder {
     }
 
     /// Enable or disable the I2C glitch filter.
-    pub const fn glitch_filter(mut self, enabled: bool) -> Self {
-        self.glitch_filter = enabled;
+    pub const fn i2c_glitch_filter(mut self, enabled: bool) -> Self {
+        self.i2c_glitch_filter = enabled;
         self
     }
 
     /// Set the temperature compensation coefficient.
-    pub const fn temp_coefficient(mut self, coefficient: MagneticTempCoefficient) -> Self {
-        self.temp_coefficient = coefficient;
-        self
-    }
-
-    /// Set the per-sample diagnostic checking policy.
-    ///
-    /// Controls whether each `read_*` method checks `CONV_STATUS.DIAG_FAIL`
-    /// and what happens when a fault is detected. See [`Diagnostics`] for
-    /// details on each variant.
-    ///
-    /// Default: [`Diagnostics::Off`].
-    pub const fn diagnostics(mut self, policy: Diagnostics) -> Self {
-        self.diagnostics = policy;
+    pub const fn magnetic_temp_coefficient(mut self, coefficient: MagneticTempCoefficient) -> Self {
+        self.magnetic_temp_coefficient = coefficient;
         self
     }
 
@@ -215,10 +193,14 @@ impl ConfigBuilder {
     /// Returns [`ConfigError::SleepShorterThanConversion`]
     /// if the sleep duration is shorter than the conversion time for the
     /// configured averaging and channels.
+    ///
+    /// Returns [`ConfigError::AngleMixedRanges`]
+    /// if `AngleEnable::YZ` or `AngleEnable::XZ` is used with different
+    /// XY and Z range settings.
     pub fn build(self) -> Result<Config, ConfigError> {
         // Angle calculation requires at least two axes.
-        if !matches!(self.angle_calculation, AngleEnable::None)
-            && self.magnetic_channels.axis_count() < 2
+        if !matches!(self.angle_enabled, AngleEnable::None)
+            && self.magnetic_channels_enabled.axis_count() < 2
         {
             return Err(ConfigError::AngleRequiresTwoChannels);
         }
@@ -230,12 +212,21 @@ impl ConfigBuilder {
             return Err(ConfigError::IntPinTriggerRequiresStandby);
         }
 
+        // YZ/XZ angle calculation mixes axes with independent range
+        // registers (X_Y_RANGE vs Z_RANGE). The CORDIC magnitude output
+        // cannot be scaled to mT when the two ranges differ — §7.5.1.3.
+        if matches!(self.angle_enabled, AngleEnable::YZ | AngleEnable::XZ)
+            && self.xy_range != self.z_range
+        {
+            return Err(ConfigError::AngleMixedRanges);
+        }
+
         // Sleep must be long enough for at least one full conversion.
         if matches!(self.operating_mode, OperatingMode::WakeUpAndSleep) {
-            let sleep = self.sleep_duration.as_micros();
+            let sleep = self.sleep_time.as_micros_isr();
             let conversion = self
                 .conversion_average
-                .conversion_time(self.magnetic_channels, self.temperature_enabled);
+                .conversion_time(self.magnetic_channels_enabled, self.temp_channel_enabled);
             if sleep.0 < conversion.0 {
                 return Err(ConfigError::SleepShorterThanConversion { sleep, conversion });
             }
@@ -243,18 +234,17 @@ impl ConfigBuilder {
 
         Ok(Config {
             operating_mode: self.operating_mode,
-            magnetic_channels: self.magnetic_channels,
-            temperature_enabled: self.temperature_enabled,
-            angle_calculation: self.angle_calculation,
+            magnetic_channels_enabled: self.magnetic_channels_enabled,
+            temp_channel_enabled: self.temp_channel_enabled,
+            angle_enabled: self.angle_enabled,
             conversion_average: self.conversion_average,
             xy_range: self.xy_range,
             z_range: self.z_range,
-            power_mode: self.power_mode,
-            sleep_duration: self.sleep_duration,
+            power_noise_mode: self.power_noise_mode,
+            sleep_time: self.sleep_time,
             trigger_mode: self.trigger_mode,
-            glitch_filter: self.glitch_filter,
-            temp_coefficient: self.temp_coefficient,
-            diagnostics: self.diagnostics,
+            i2c_glitch_filter: self.i2c_glitch_filter,
+            magnetic_temp_coefficient: self.magnetic_temp_coefficient,
         })
     }
 }
@@ -264,12 +254,11 @@ impl ConfigBuilder {
 // ---------------------------------------------------------------------------
 
 impl Config {
-    /// Returns the expected conversion time in microseconds for this
+    /// Returns the expected conversion time in micros_isreconds for this
     /// configuration.
-    #[must_use]
-    pub const fn conversion_time(&self) -> Micros {
+    pub const fn conversion_time(&self) -> MicrosIsr {
         self.conversion_average
-            .conversion_time(self.magnetic_channels, self.temperature_enabled)
+            .conversion_time(self.magnetic_channels_enabled, self.temp_channel_enabled)
     }
 
     /// Serialize this configuration into register address/value pairs for
@@ -293,7 +282,7 @@ impl Config {
                 0,
                 register::MAG_TEMPCO_MASK,
                 register::MAG_TEMPCO_SHIFT,
-                self.temp_coefficient as u8,
+                self.magnetic_temp_coefficient as u8,
             )
             | register::insert(
                 0,
@@ -313,12 +302,12 @@ impl Config {
             0,
             register::LP_LN_MASK,
             register::LP_LN_SHIFT,
-            self.power_mode as u8,
+            self.power_noise_mode as u8,
         ) | register::insert(
             0,
             register::I2C_GLITCH_FILTER_MASK,
             register::I2C_GLITCH_FILTER_SHIFT,
-            u8::from(!self.glitch_filter), // 0 = enabled, 1 = disabled (inverted)
+            u8::from(!self.i2c_glitch_filter), // 0 = enabled, 1 = disabled (inverted)
         ) | register::insert(
             0,
             register::TRIGGER_MODE_MASK,
@@ -336,12 +325,12 @@ impl Config {
             0,
             register::MAG_CH_EN_MASK,
             register::MAG_CH_EN_SHIFT,
-            self.magnetic_channels as u8,
+            self.magnetic_channels_enabled as u8,
         ) | register::insert(
             0,
             register::SLEEPTIME_MASK,
             register::SLEEPTIME_SHIFT,
-            self.sleep_duration as u8,
+            self.sleep_time as u8,
         );
 
         // SENSOR_CONFIG_2 (0x03)
@@ -349,7 +338,7 @@ impl Config {
             0,
             register::ANGLE_EN_MASK,
             register::ANGLE_EN_SHIFT,
-            self.angle_calculation as u8,
+            self.angle_enabled as u8,
         ) | register::insert(
             0,
             register::X_Y_RANGE_MASK,
@@ -367,7 +356,7 @@ impl Config {
             0,
             register::T_CH_EN_MASK,
             register::T_CH_EN_SHIFT,
-            u8::from(self.temperature_enabled),
+            u8::from(self.temp_channel_enabled),
         );
 
         [
@@ -401,10 +390,11 @@ impl Config {
 pub enum ThresholdHysteresis {
     /// `THR_HYST = 0`: Uses the full 8-bit 2's complement value of each
     /// `x_THR_CONFIG` register as a signed threshold.  Combined with
-    /// `ThresholdDirection`, creates a one-sided limit check.
+    /// `MagneticThresholdDirection`, creates a one-sided limit cross check
+    /// (datasheet §7.2.1.1, Figures 7-4 and 7-5).
     ///
     /// Example: X_THR = +10, direction = Above → INT fires when X > +10 LSB.
-    Signed = 0,
+    LimitCross = 0,
 
     /// `THR_HYST = 1`: Uses the 7 LSB bits of each `x_THR_CONFIG` register
     /// to create two symmetric thresholds of equal magnitude (one positive,
@@ -416,7 +406,7 @@ pub enum ThresholdHysteresis {
 }
 
 impl_try_from_u8!(ThresholdHysteresis {
-    0 => Signed,
+    0 => LimitCross,
     1 => SymmetricBand,
 });
 
@@ -442,7 +432,7 @@ pub struct ThresholdConfig {
     /// Threshold hysteresis mode (maps to `THR_HYST` register field).
     ///
     /// Selects between signed one-sided thresholds
-    /// ([`ThresholdHysteresis::Signed`]) and symmetric ±band thresholds
+    /// ([`ThresholdHysteresis::LimitCross`]) and symmetric ±band thresholds
     /// ([`ThresholdHysteresis::SymmetricBand`]).
     ///
     /// **Only values 0 and 1 are valid.**  The enum enforces this at the
@@ -462,6 +452,20 @@ pub struct ThresholdConfig {
     /// [`hysteresis`](ThresholdConfig::hysteresis) is
     /// [`SymmetricBand`](ThresholdHysteresis::SymmetricBand).
     pub direction: MagneticThresholdDirection,
+}
+
+impl Default for ThresholdConfig {
+    fn default() -> Self {
+        Self {
+            x: 0,
+            y: 0,
+            z: 0,
+            temperature: TempThresholdConfig::DISABLED,
+            hysteresis: ThresholdHysteresis::LimitCross,
+            crossing_count: ThresholdCrossingCount::One,
+            direction: MagneticThresholdDirection::Above,
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -484,6 +488,18 @@ pub struct InterruptConfig {
     pub pin_behavior: InterruptState,
     /// Mask the interrupt pin (true = INT output disabled).
     pub mask: bool,
+}
+
+impl Default for InterruptConfig {
+    fn default() -> Self {
+        Self {
+            mode: InterruptMode::None,
+            on_conversion_complete: false,
+            on_threshold_crossing: false,
+            pin_behavior: InterruptState::Latched,
+            mask: false,
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -523,6 +539,17 @@ pub struct CalibrationConfig {
     pub gain_channel: MagneticGainChannel,
 }
 
+impl Default for CalibrationConfig {
+    fn default() -> Self {
+        Self {
+            gain: 0,
+            offset_1: 0,
+            offset_2: 0,
+            gain_channel: MagneticGainChannel::First,
+        }
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
@@ -536,19 +563,19 @@ mod tests {
     fn builder_defaults_match_sparkfun_begin() {
         let config = ConfigBuilder::new().build().unwrap();
         assert_eq!(config.operating_mode, OperatingMode::ContinuousMeasure);
-        assert_eq!(config.magnetic_channels, MagneticChannel::XYZ);
-        assert!(config.temperature_enabled);
-        assert_eq!(config.angle_calculation, AngleEnable::None);
+        assert_eq!(config.magnetic_channels_enabled, MagneticChannel::XYZ);
+        assert!(config.temp_channel_enabled);
+        assert_eq!(config.angle_enabled, AngleEnable::None);
         assert_eq!(config.xy_range, Range::High);
         assert_eq!(config.z_range, Range::High);
-        assert_eq!(config.power_mode, PowerNoiseMode::LowActiveCurrent);
+        assert_eq!(config.power_noise_mode, PowerNoiseMode::LowActiveCurrent);
     }
 
     #[test]
     fn angle_requires_two_channels_x_only() {
         let result = ConfigBuilder::new()
-            .magnetic_channels(MagneticChannel::X)
-            .angle_calculation(AngleEnable::XY)
+            .magnetic_channels_enabled(MagneticChannel::X)
+            .angle_enabled(AngleEnable::XY)
             .build();
         assert_eq!(result.unwrap_err(), ConfigError::AngleRequiresTwoChannels);
     }
@@ -556,8 +583,8 @@ mod tests {
     #[test]
     fn angle_with_two_channels_ok() {
         let result = ConfigBuilder::new()
-            .magnetic_channels(MagneticChannel::XY)
-            .angle_calculation(AngleEnable::XY)
+            .magnetic_channels_enabled(MagneticChannel::XY)
+            .angle_enabled(AngleEnable::XY)
             .build();
         assert!(result.is_ok());
     }
@@ -568,7 +595,7 @@ mod tests {
         // X1 + XYZ + temp = 100 µs conversion, well under 1000 µs.
         let result = ConfigBuilder::new()
             .operating_mode(OperatingMode::WakeUpAndSleep)
-            .sleep_duration(SleepTime::Ms1)
+            .sleep_time(SleepTime::Ms1)
             .build();
         assert!(result.is_ok());
     }
@@ -612,16 +639,16 @@ mod tests {
         // Ms1 (1000 µs) < X32 + XYZ + temp conversion time (3225 µs).
         let result = ConfigBuilder::new()
             .operating_mode(OperatingMode::WakeUpAndSleep)
-            .sleep_duration(SleepTime::Ms1)
+            .sleep_time(SleepTime::Ms1)
             .conversion_average(ConversionAverage::X32)
-            .magnetic_channels(MagneticChannel::XYZ)
-            .temperature_enabled(true)
+            .magnetic_channels_enabled(MagneticChannel::XYZ)
+            .temp_channel_enabled(true)
             .build();
         assert_eq!(
             result.unwrap_err(),
             ConfigError::SleepShorterThanConversion {
-                sleep: Micros(1_000),
-                conversion: Micros(3_225),
+                sleep: MicrosIsr(1_000),
+                conversion: MicrosIsr(3_225),
             },
         );
     }
@@ -631,10 +658,10 @@ mod tests {
         // Ms5 (5000 µs) > X32 + XYZ + temp (3225 µs) — always valid.
         let result = ConfigBuilder::new()
             .operating_mode(OperatingMode::WakeUpAndSleep)
-            .sleep_duration(SleepTime::Ms5)
+            .sleep_time(SleepTime::Ms5)
             .conversion_average(ConversionAverage::X32)
-            .magnetic_channels(MagneticChannel::XYZ)
-            .temperature_enabled(true)
+            .magnetic_channels_enabled(MagneticChannel::XYZ)
+            .temp_channel_enabled(true)
             .build();
         assert!(result.is_ok());
     }
@@ -665,7 +692,7 @@ mod tests {
         let result = ConfigBuilder::new()
             .operating_mode(OperatingMode::WakeUpAndSleep)
             .trigger_mode(TriggerMode::IntPin)
-            .sleep_duration(SleepTime::Ms5)
+            .sleep_time(SleepTime::Ms5)
             .build();
         assert_eq!(
             result.unwrap_err(),
@@ -679,6 +706,53 @@ mod tests {
         let result = ConfigBuilder::new()
             .operating_mode(OperatingMode::ContinuousMeasure)
             .trigger_mode(TriggerMode::I2cCommand)
+            .build();
+        assert!(result.is_ok());
+    }
+
+    // -- AngleMixedRanges validation -----------------------------------------
+
+    #[test]
+    fn angle_yz_rejects_mixed_ranges() {
+        let result = ConfigBuilder::new()
+            .magnetic_channels_enabled(MagneticChannel::YZ)
+            .angle_enabled(AngleEnable::YZ)
+            .xy_range(Range::Low)
+            .z_range(Range::High)
+            .build();
+        assert_eq!(result.unwrap_err(), ConfigError::AngleMixedRanges);
+    }
+
+    #[test]
+    fn angle_xz_rejects_mixed_ranges() {
+        let result = ConfigBuilder::new()
+            .magnetic_channels_enabled(MagneticChannel::ZX)
+            .angle_enabled(AngleEnable::XZ)
+            .xy_range(Range::High)
+            .z_range(Range::Low)
+            .build();
+        assert_eq!(result.unwrap_err(), ConfigError::AngleMixedRanges);
+    }
+
+    #[test]
+    fn angle_yz_accepts_matching_ranges() {
+        let result = ConfigBuilder::new()
+            .magnetic_channels_enabled(MagneticChannel::YZ)
+            .angle_enabled(AngleEnable::YZ)
+            .xy_range(Range::High)
+            .z_range(Range::High)
+            .build();
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn angle_xy_ignores_z_range_mismatch() {
+        // XY angle only uses xy_range — z_range doesn't matter.
+        let result = ConfigBuilder::new()
+            .magnetic_channels_enabled(MagneticChannel::XY)
+            .angle_enabled(AngleEnable::XY)
+            .xy_range(Range::High)
+            .z_range(Range::Low)
             .build();
         assert!(result.is_ok());
     }

@@ -45,6 +45,10 @@
 //!
 //! - `crc` — Enables CRC-8 validation on I2C reads (disables burst reads)
 //! - `defmt` — Enables `defmt::Format` derives on all public types
+//! - `libm` — Enables the L3 analysis layer: `magnitude_3d()`, `plane_angles()` with
+//!   per-plane angle/magnitude, `AxisCalibrator` for auto-detecting the optimal hardware
+//!   angle axis pair, and related types (`PlaneAxis`, `PlaneAngle`, `PlaneAngles`,
+//!   `AxisRecommendation`)
 //!
 //! [`embedded-hal`]: https://docs.rs/embedded-hal/1.0
 
@@ -138,18 +142,25 @@ mod config;
 mod device;
 mod error;
 mod register;
+mod rotation;
 mod types;
 
+#[cfg(feature = "libm")]
+mod angle;
+
+#[cfg(feature = "libm")]
+pub use angle::{AxisCalibrator, AxisRecommendation, PlaneAngle, PlaneAngles, PlaneAxis, Welford};
 pub use config::{
     CalibrationConfig, Config, ConfigBuilder, InterruptConfig, ThresholdConfig, ThresholdHysteresis,
 };
 pub use device::{Configured, Tmag5273, Unconfigured};
 pub use error::{ConfigError, Error, InitError};
-pub use register::{X_THR_CONFIG, Y_THR_CONFIG, Z_THR_CONFIG};
+pub use rotation::{Cordic, CordicTracker, RotationTracker, TrackingMode, ZeroCrossing};
 pub use types::{
-    AngleEnable, AngleReading, Celsius, ConversionAverage, ConversionStatus, Degrees, DeviceStatus,
-    DeviceVariant, Diagnostics, I2cReadMode, InterruptMode, InterruptState, MagneticChannel,
-    MagneticGainChannel, MagneticReading, MagneticTempCoefficient, MagneticThresholdDirection,
-    Micros, MicrosRange, MilliTesla, NoDelay, OperatingMode, PowerNoiseMode, Range, SensorReading,
-    SleepTime, TempThresholdConfig, ThresholdCrossingCount, TriggerMode, WAKE_DELAY,
+    AngleEnable, AngleReading, Axis, Celsius, ConversionAverage, ConversionStatus, CordicMagnitude,
+    Crossings, Degrees, DeviceStatus, DeviceVariant, Diagnostics, I2cReadMode, InterruptMode,
+    InterruptState, MagneticChannel, MagneticGainChannel, MagneticReading, MagneticTempCoefficient,
+    MagneticThresholdDirection, MicrosIsr, MicrosRange, MilliTesla, NoDelay, OperatingMode,
+    PoleCount, PowerNoiseMode, Range, Rpm, SensorReading, SignedDegrees, SleepTime,
+    TempThresholdConfig, ThresholdCrossingCount, TriggerMode, WAKE_DELAY, WAKE_RETRY_DELAY,
 };

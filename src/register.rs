@@ -68,7 +68,7 @@ pub(crate) const I2C_RD_SHIFT: u8 = 0;
 pub(crate) const DEVICE_CONFIG_2: u8 = 0x01;
 
 /// Bit mask for `THR_HYST` field in `DEVICE_CONFIG_2` — magnetic threshold hysteresis
-/// (Signed / SymmetricBand 1–7 LSB).
+/// (LimitCross / SymmetricBand 1–7 LSB).
 pub(crate) const THR_HYST_MASK: u8 = 0b1110_0000;
 /// Bit shift for `THR_HYST` field in `DEVICE_CONFIG_2`.
 pub(crate) const THR_HYST_SHIFT: u8 = 5;
@@ -166,19 +166,19 @@ pub(crate) const Z_RANGE_SHIFT: u8 = 0;
 // 0x04 — X_THR_CONFIG
 // ---------------------------------------------------------------------------
 /// X-axis magnetic threshold configuration register address (0x04).
-pub const X_THR_CONFIG: u8 = 0x04;
+pub(crate) const X_THR_CONFIG: u8 = 0x04;
 
 // ---------------------------------------------------------------------------
 // 0x05 — Y_THR_CONFIG
 // ---------------------------------------------------------------------------
 /// Y-axis magnetic threshold configuration register address (0x05).
-pub const Y_THR_CONFIG: u8 = 0x05;
+pub(crate) const Y_THR_CONFIG: u8 = 0x05;
 
 // ---------------------------------------------------------------------------
 // 0x06 — Z_THR_CONFIG
 // ---------------------------------------------------------------------------
 /// Z-axis magnetic threshold configuration register address (0x06).
-pub const Z_THR_CONFIG: u8 = 0x06;
+pub(crate) const Z_THR_CONFIG: u8 = 0x06;
 
 // ---------------------------------------------------------------------------
 // 0x07 — T_CONFIG
@@ -961,43 +961,43 @@ mod tests {
 
         // Bit 0 = VCC_UV
         let s = DeviceStatus::from_register(1 << 0);
-        assert!(s.vcc_undervoltage);
+        assert!(s.vcc_undervoltage_error);
         assert!(!s.otp_crc_error);
         assert!(!s.int_error);
         assert!(!s.oscillator_error);
-        assert!(!s.int_pin_active);
+        assert!(!s.int_bar_readback_high);
 
         // Bit 1 = OTP_CRC
         let s = DeviceStatus::from_register(1 << 1);
-        assert!(!s.vcc_undervoltage);
+        assert!(!s.vcc_undervoltage_error);
         assert!(s.otp_crc_error);
         assert!(!s.int_error);
         assert!(!s.oscillator_error);
-        assert!(!s.int_pin_active);
+        assert!(!s.int_bar_readback_high);
 
         // Bit 2 = INT_ERR
         let s = DeviceStatus::from_register(1 << 2);
-        assert!(!s.vcc_undervoltage);
+        assert!(!s.vcc_undervoltage_error);
         assert!(!s.otp_crc_error);
         assert!(s.int_error);
         assert!(!s.oscillator_error);
-        assert!(!s.int_pin_active);
+        assert!(!s.int_bar_readback_high);
 
         // Bit 3 = OSC_ERR
         let s = DeviceStatus::from_register(1 << 3);
-        assert!(!s.vcc_undervoltage);
+        assert!(!s.vcc_undervoltage_error);
         assert!(!s.otp_crc_error);
         assert!(!s.int_error);
         assert!(s.oscillator_error);
-        assert!(!s.int_pin_active);
+        assert!(!s.int_bar_readback_high);
 
         // Bit 4 = INTB_RB
         let s = DeviceStatus::from_register(1 << 4);
-        assert!(!s.vcc_undervoltage);
+        assert!(!s.vcc_undervoltage_error);
         assert!(!s.otp_crc_error);
         assert!(!s.int_error);
         assert!(!s.oscillator_error);
-        assert!(s.int_pin_active);
+        assert!(s.int_bar_readback_high);
     }
 
     // TI datasheet SBASAI4 Rev C, Tables 7-6 through 7-18

@@ -26,6 +26,7 @@ tmag5273 = "0.1"
 # Optional features:
 # tmag5273 = { version = "0.1", features = ["crc"] }
 # tmag5273 = { version = "0.1", features = ["defmt"] }
+# tmag5273 = { version = "0.1", features = ["libm"] }
 ```
 
 ## Quick Start
@@ -64,27 +65,15 @@ use tmag5273::{Tmag5273, DeviceVariant, ConfigBuilder};
 let sensor = Tmag5273::new(i2c, DeviceVariant::B1);
 ```
 
-## Cargo Commands
+## Features
 
-```bash
-# Run all unit tests (no hardware required, 185 tests)
-cargo test -p tmag5273
+| Feature | Description |
+| ------- | ----------- |
+| `crc`   | Enables CRC-8 validation on all I2C reads. Burst reads use 4-byte block reads with per-block CRC. |
+| `defmt` | Enables `defmt::Format` derives on all public types (requires `defmt` 1.0). |
+| `libm`  | Enables software angle computation (`plane_angles`, `magnitude_3d`), axis calibration (`AxisCalibrator`), and related types. Pure Rust, ~30KB. |
 
-# Verify feature gates are additive (same 185 tests)
-cargo test -p tmag5273 --no-default-features
-
-# Run tests with CRC feature (190 tests — adds CRC read-path + mismatch tests)
-cargo test -p tmag5273 --features crc
-
-# Run tests with all features (190 tests — crc + defmt)
-cargo test -p tmag5273 --all-features
-
-# Build docs locally (with feature annotations)
-cargo doc -p tmag5273 --all-features --open
-
-# Check the crate compiles for a bare-metal target
-cargo check -p tmag5273 --target thumbv7em-none-eabihf
-```
+All features are off by default.
 
 ## Configuration
 
@@ -93,40 +82,41 @@ Use `ConfigBuilder` to construct a validated `Config`:
 ```rust,no_run
 use tmag5273::{
     ConfigBuilder, OperatingMode, MagneticChannel, AngleEnable,
-    ConversionAverage, Range, PowerNoiseMode, SleepTime, MagneticTempCoefficient,
+    ConversionAverage, Range, PowerNoiseMode, MagneticTempCoefficient,
 };
 
 let config = ConfigBuilder::new()
     .operating_mode(OperatingMode::ContinuousMeasure) // default
-    .magnetic_channels(MagneticChannel::XYZ)          // default
-    .temperature_enabled(true)                         // default
-    .angle_calculation(AngleEnable::None)         // default
+    .magnetic_channels_enabled(MagneticChannel::XYZ)  // default
+    .temp_channel_enabled(true)                       // default
+    .angle_enabled(AngleEnable::None)                 // default
     .conversion_average(ConversionAverage::X4)
-    .xy_range(Range::High)                             // default: ±80 mT (v1)
+    .xy_range(Range::High)                            // default: ±80 mT (v1)
     .z_range(Range::High)
-    .power_mode(PowerNoiseMode::LowNoise)
-    .temp_coefficient(MagneticTempCoefficient::NdBFe)
+    .power_noise_mode(PowerNoiseMode::LowNoise)
+    .magnetic_temp_coefficient(MagneticTempCoefficient::NdBFe)
     .build()?;
 ```
 
 `build()` validates cross-field constraints before writing any register:
 
 - `AngleEnable` ≠ `None` requires at least two magnetic channels.
-- `OperatingMode::WakeUpAndSleep` requires `SleepTime` > 1 ms.
+- `OperatingMode::WakeUpAndSleep` requires `SleepTime` ≥ conversion time.
+- `AngleEnable::YZ` or `AngleEnable::XZ` requires matching XY and Z ranges.
 
 ### Defaults (match SparkFun `begin()`)
 
-| Field                  | Default             |
-| ---------------------- | ------------------- |
-| `operating_mode`       | `ContinuousMeasure` |
-| `magnetic_channels`    | `XYZ`               |
-| `temperature_enabled`  | `true`              |
-| `angle_calculation`    | `None`              |
-| `conversion_average`   | `X1` (no averaging) |
-| `xy_range` / `z_range` | `High` (±80 mT v1)  |
-| `power_mode`           | `LowActiveCurrent`  |
-| `glitch_filter`        | `true`              |
-| `temp_coefficient`     | `None`              |
+| Field                       | Default             |
+| --------------------------- | ------------------- |
+| `operating_mode`            | `ContinuousMeasure` |
+| `magnetic_channels_enabled` | `XYZ`               |
+| `temp_channel_enabled`      | `true`              |
+| `angle_enabled`             | `None`              |
+| `conversion_average`        | `X1` (no averaging) |
+| `xy_range` / `z_range`      | `High` (±80 mT v1)  |
+| `power_noise_mode`          | `LowActiveCurrent`  |
+| `i2c_glitch_filter`         | `true`              |
+| `magnetic_temp_coefficient` | `None`              |
 
 ### Conversion Time
 
@@ -134,10 +124,10 @@ Use `ConversionAverage::conversion_time()` to query the expected conversion
 duration (useful for polling delays or scheduling):
 
 ```rust,no_run
-use tmag5273::{ConversionAverage, MagneticChannel, Micros};
+use tmag5273::{ConversionAverage, MagneticChannel, MicrosIsr};
 
-let t: Micros = ConversionAverage::X8.conversion_time(MagneticChannel::XYZ, true);
-// t.0 is microseconds
+let t: MicrosIsr = ConversionAverage::X8.conversion_time(MagneticChannel::XYZ, true);
+// t.0 is micros_isreconds
 ```
 
 ## Reading Data
@@ -157,7 +147,7 @@ let temp: tmag5273::Celsius = sensor.read_temperature()?;
 // temp.0 is degrees Celsius
 ```
 
-### Angle (CORDIC Engine)
+### Angle (Hardware CORDIC Engine)
 
 Requires `AngleEnable` ≠ `None` in the config.
 
@@ -165,15 +155,81 @@ Requires `AngleEnable` ≠ `None` in the config.
 use tmag5273::{ConfigBuilder, AngleEnable, MagneticChannel};
 
 let config = ConfigBuilder::new()
-    .angle_calculation(AngleEnable::XY)
-    .magnetic_channels(MagneticChannel::XY)
+    .angle_enabled(AngleEnable::XY)
+    .magnetic_channels_enabled(MagneticChannel::XYX) // pseudo-simultaneous
     .build()?;
 
 let mut sensor = sensor.init(&config)?;
 let angle = sensor.read_angle()?;
 // angle.angle.0 is degrees (0–360, f32)
-// angle.magnitude is 0–255 (unitless field magnitude)
+// angle.magnitude.0 is millitesla (CordicMagnitude)
 ```
+
+### Software Angle Computation (`libm` feature)
+
+Compute angle and magnitude for all three canonical planes from any
+`MagneticReading` — no hardware CORDIC configuration needed:
+
+```rust,no_run
+use tmag5273::{ConfigBuilder, MagneticReading};
+
+let reading = sensor.read_magnetic()?;
+let planes = reading.plane_angles();
+
+// Each plane is Option — None if axes missing or zero-magnitude field
+if let Some(xy) = planes.xy {
+    // xy.angle.0 — degrees (0–360), matching hardware CORDIC convention
+    // xy.magnitude.0 — millitesla
+    // xy.plane — PlaneAxis::XY
+}
+
+// Get the plane with the strongest signal
+if let Some(dominant) = planes.dominant() {
+    // dominant.plane tells you which axis pair has the strongest field
+}
+
+// 3-axis software magnitude
+if let Some(mag) = reading.magnitude_3d() {
+    // mag.0 — millitesla, sqrt(x² + y² + z²)
+}
+```
+
+### Auto-Axis Calibration (`libm` feature)
+
+Automatically detect the optimal hardware angle axis pair by analyzing
+magnetic field variance during magnet rotation:
+
+```rust,no_run
+use tmag5273::{AxisCalibrator, ConfigBuilder};
+
+// 1. Collect samples during magnet rotation
+let mut cal = AxisCalibrator::default();
+for _ in 0..50 {
+    let reading = sensor.read_magnetic()?;
+    cal.update(&reading);
+    delay.delay_ms(100);
+}
+
+// 2. Get the recommended hardware configuration
+if let Some(rec) = cal.recommend() {
+    // rec.plane — the detected rotation plane (XY, YZ, or XZ)
+    // rec.angle_enable — for ConfigBuilder::angle_enabled()
+    // rec.magnetic_channel — for ConfigBuilder::magnetic_channels_enabled()
+    // rec.variances — per-axis variance for transparency
+
+    // 3. Apply to hardware
+    let config = ConfigBuilder::new()
+        .angle_enabled(rec.angle_enable)
+        .magnetic_channels_enabled(rec.magnetic_channel)
+        .build()?;
+
+    let mut sensor = sensor.init(&config)?;
+    let angle = sensor.read_angle()?; // hardware CORDIC, optimal axis pair
+}
+```
+
+The calibrator uses Welford's online algorithm for numerically stable
+variance on f32. Fixed-size, zero heap allocation.
 
 ### Coherent Burst Read
 
@@ -196,8 +252,7 @@ use tmag5273::{ConfigBuilder, OperatingMode};
 
 let config = ConfigBuilder::new()
     .operating_mode(OperatingMode::Standby)
-    .build()
-    ?;
+    .build()?;
 let mut sensor = sensor.init(&config)?;
 
 // Trigger a conversion, then poll for completion
@@ -210,58 +265,61 @@ let reading = sensor.read_magnetic()?;
 
 ## Runtime Controls
 
-| Method                                       | Description                                     |
-| -------------------------------------------- | ----------------------------------------------- |
-| `set_mode(OperatingMode)`                    | Switch operating mode at runtime                |
-| `trigger_conversion()`                       | Trigger one conversion (standby / trigger mode) |
-| `wait_for_conversion()` → `ConversionStatus` | Blocking poll with bounded retry                |
-| `is_conversion_complete()` → `bool`          | Non-blocking check                              |
-| `read_status()` → `DeviceStatus`             | Read fault-flag register                        |
-| `check_diag()` → `DeviceStatus`              | Lazy diagnostic read (skips status if no fault) |
-| `is_interrupt_active()` → `bool`             | Read INT pin state                              |
-| `set_crc_enabled(bool)`                      | Toggle sensor-side CRC-8 generation             |
-| `get_crc_enabled()` → `bool`                 | Read sensor-side CRC setting                    |
-| `set_read_mode(I2cReadMode)`                 | Change I2C response format                      |
-| `get_read_mode()` → `I2cReadMode`            | Read current response format                    |
+| Method | Description |
+| --- | --- |
+| `set_mode(OperatingMode)` | Switch operating mode at runtime |
+| `trigger_conversion()` | Trigger one conversion (standby / trigger mode) |
+| `wait_for_conversion()` → `ConversionStatus` | Blocking poll with bounded retry |
+| `is_conversion_complete()` → `bool` | Non-blocking check |
+| `read_status()` → `DeviceStatus` | Read fault-flag register |
+| `check_diag()` → `DeviceStatus` | Lazy diagnostic read (skips status if no fault) |
+| `is_interrupt_active()` → `bool` | Read INT̅ pin state via `INTB_RB` register readback |
+| `set_diagnostics(Diagnostics)` | Set per-sample diagnostic checking policy at runtime |
+| `diagnostics()` → `Diagnostics` | Read current diagnostic policy |
+| `set_crc_enabled(bool)` | Toggle sensor-side CRC-8 generation |
+| `get_crc_enabled()` → `bool` | Read sensor-side CRC setting |
+| `set_read_mode(I2cReadMode)` | Change I2C response format |
+| `get_read_mode()` → `I2cReadMode` | Read current response format |
 
 ## Per-Sample Diagnostics
 
-Opt-in per-sample `CONV_STATUS.DIAG_FAIL` checking on every measurement
-via [`Diagnostics`]:
+Opt-in per-sample `CONV_STATUS.DIAG_STATUS` checking on every measurement.
+Set at runtime via `set_diagnostics()` — no sensor re-initialization needed:
 
 ```rust,no_run
-use tmag5273::{ConfigBuilder, Diagnostics};
+use tmag5273::Diagnostics;
 
 // Halt on fault — returns Error::DiagnosticFailure(DeviceStatus)
-let config = ConfigBuilder::new()
-    .diagnostics(Diagnostics::Halt)
-    .build()?;
+sensor.set_diagnostics(Diagnostics::Halt);
 
 // Warn on fault — emits defmt::warn! but reads succeed (requires `defmt` feature)
-let config = ConfigBuilder::new()
-    .diagnostics(Diagnostics::Warn)
-    .build()?;
+sensor.set_diagnostics(Diagnostics::Warn);
 
 // Ignore faults — for noisy environments (EMI, motor controllers)
-let config = ConfigBuilder::new()
-    .diagnostics(Diagnostics::Ignore)
-    .build()?;
+sensor.set_diagnostics(Diagnostics::Ignore);
+
+// Default — no overhead, no extra I2C transactions
+sensor.set_diagnostics(Diagnostics::Off);
 ```
 
-Zero overhead when disabled (default `Diagnostics::Off`) — no extra I2C
-transactions. Manual `check_diag()` works independently of this setting.
+Manual `check_diag()` works independently of this setting.
 
 ## Advanced
 
 ### Threshold Interrupts
 
 ```rust,no_run
-use tmag5273::{ThresholdConfig, ThresholdDirection, InterruptConfig, InterruptMode, InterruptState};
+use tmag5273::{
+    ThresholdConfig, MagneticThresholdDirection, TempThresholdConfig,
+    InterruptConfig, InterruptMode, InterruptState, ThresholdHysteresis,
+};
 
 sensor.set_thresholds(&ThresholdConfig {
-    x: 50, y: 50, z: 50, temperature: 0,
-    direction: ThresholdDirection::Above,
-    hysteresis: 1,
+    x: 50, y: 50, z: 50,
+    temperature: TempThresholdConfig::DISABLED,
+    direction: MagneticThresholdDirection::Above,
+    hysteresis: ThresholdHysteresis::LimitCross,
+    ..Default::default()
 })?;
 
 sensor.set_interrupt(&InterruptConfig {
@@ -269,7 +327,7 @@ sensor.set_interrupt(&InterruptConfig {
     on_threshold_crossing: true,
     mode: InterruptMode::ThroughInt,
     pin_behavior: InterruptState::Pulse10us,
-    mask: false,
+    ..Default::default()
 })?;
 ```
 
@@ -282,14 +340,15 @@ sensor.set_calibration(&CalibrationConfig {
     gain: 128,
     offset_1: 0,
     offset_2: 0,
-    gain_channel: MagneticGainChannel::X,
+    gain_channel: MagneticGainChannel::First,
+    ..Default::default()
 })?;
 ```
 
 ### Wake-Up-and-Sleep Mode
 
 Implements TI datasheet section 8.2.1.2 with TI-recommended settings:
-threshold interrupt on INT pin, 10 µs pulse, hysteresis = 1.
+threshold interrupt on INT pin, 10 µs pulse.
 
 ```rust,no_run
 // Set thresholds first, then activate wake-and-sleep
@@ -309,22 +368,32 @@ sensor.change_address(0x30)?;
 
 `Error<E>` is generic over the I2C bus error type:
 
-| Variant                                    | Cause                                                                   |
-| ------------------------------------------ | ----------------------------------------------------------------------- |
-| `I2c(E)`                                   | I2C bus error                                                           |
-| `InvalidManufacturerId(u16)`               | Device ID is not `0x5449` (ASCII "TI")                                  |
-| `VersionMismatch { expected, got }`        | Device version does not match variant                                   |
-| `CrcMismatch { expected, computed }`       | CRC-8 validation failed (`crc` feature)                                 |
-| `ConversionTimeout`                        | Conversion not ready within poll limit                                  |
-| `AngleRequiresTwoChannels`                 | Angle config without two axes enabled                                   |
-| `SleepDurationRequired`                    | Wake-sleep mode without sleep duration > 1 ms                           |
-| `AddressChangeFailed { new_address }`      | Device did not respond at new address                                   |
-| `InvalidRegisterValue { register, value }` | Unknown enum value in register                                          |
-| `NonStandardReadMode { mode }`             | High-level read called in non-Standard I2C mode                         |
-| `TempDisabled`                      | `read_temperature()` called with temperature channel disabled in config |
+| Variant | Cause |
+| --- | --- |
+| `I2c(E)` | I2C bus error |
+| `InvalidManufacturerId(u16)` | Device ID is not `0x5449` (ASCII "TI") |
+| `VersionMismatch { expected, got }` | Device version does not match variant |
+| `CrcMismatch { expected, computed }` | CRC-8 validation failed (`crc` feature) |
+| `ConversionTimeout` | Conversion not ready within poll limit |
+| `AngleNotEnabled` | `read_angle()` called without angle config |
+| `InvalidRegisterValue { register, value }` | Unknown enum value in register |
+| `NonStandardReadMode { mode }` | High-level read called in non-Standard I2C mode |
+| `TempDisabled` | `read_temperature()` with temperature channel disabled |
+| `DiagnosticFailure(DeviceStatus)` | Sensor diagnostic fault (`Diagnostics::Halt`) |
+| `CrcFeatureRequired` | Sensor CRC enabled without `crc` Cargo feature |
+| `AddressChangeFailed { old, new }` | Device did not respond at new address |
 
-`InitError<I2C>` wraps `Error` together with the I2C bus so callers can
-recover the peripheral on initialization failure.
+`ConfigError` (from `ConfigBuilder::build()`):
+
+| Variant | Cause |
+| --- | --- |
+| `AngleRequiresTwoChannels` | Angle enabled with < 2 magnetic channels |
+| `SleepShorterThanConversion` | Wake-sleep mode with sleep < conversion time |
+| `IntPinTriggerRequiresStandby` | INT pin trigger in non-standby mode |
+| `AngleMixedRanges` | YZ/XZ angle with mismatched XY and Z ranges |
+
+`InitError<I2C, D>` wraps `Error` together with the I2C bus and delay so
+callers can recover peripherals on initialization failure.
 
 ```rust,no_run
 match sensor.init(&config) {
@@ -350,29 +419,38 @@ let sensor_a = Tmag5273::new(RefCellDevice::new(&bus), DeviceVariant::A1);
 let sensor_b = Tmag5273::new(RefCellDevice::new(&bus), DeviceVariant::C1);
 ```
 
-## Features
+## Cargo Commands
 
-| Feature | Description                                                                                                                     |
-| ------- | ------------------------------------------------------------------------------------------------------------------------------- |
-| `crc`   | Enables CRC-8 validation on all I2C reads. Burst reads (`read_magnetic`, `read_all`) use 4-byte block reads with per-block CRC. |
-| `defmt` | Enables `defmt::Format` derives on all public types (requires `defmt` 1.0).                                                     |
+```bash
+# Unit tests (no hardware required)
+cargo test -p tmag5273                     # 265 tests (default features)
+cargo test -p tmag5273 --features libm     # 310 tests (+ angle/calibrator)
+cargo test -p tmag5273 --features crc      # 257 tests (+ CRC read paths)
 
-Both features are off by default.
+# Build docs with feature annotations
+cargo doc -p tmag5273 --all-features --open
+
+# Verify bare-metal compilation
+cargo check -p tmag5273 --target thumbv7em-none-eabihf
+
+# HIL tests (requires ESP32-S3 + TMAG5273 B1 on GPIO8/GPIO9)
+make hil-test                              # 35 non-interactive tests
+make hil-test-interactive                  # 37 tests (+ operator with magnet)
+```
 
 ## Design
 
-| Property                  | Detail                                                                                               |
-| ------------------------- | ---------------------------------------------------------------------------------------------------- |
-| `no_std`                  | Zero allocations — no heap dependency                                                                |
-| `#![forbid(unsafe_code)]` | No unsafe blocks in this crate                                                                       |
-| Typestate                 | `Unconfigured` → `Configured` enforced at compile time via `PhantomData`                             |
-| Builder config            | Cross-field validation at build time, not at register write                                          |
-| `InitError`               | Returns the I2C bus on init failure for downstream recovery                                          |
-| Newtypes                  | `MilliTesla`, `Celsius`, `Degrees`, `Micros` prevent unit confusion                                  |
-| Burst reads               | `read_magnetic()` and `read_all()` use single I2C transactions for data coherence                    |
-| Const reciprocals         | Temperature / magnetic / angle conversions multiply by `const f32` reciprocals — no runtime division |
-
-See [`DESIGN.md`](DESIGN.md) for a detailed comparison with the SparkFun Arduino library.
+| Property | Detail |
+| --- | --- |
+| `no_std` | Zero allocations — no heap dependency |
+| `#![forbid(unsafe_code)]` | No unsafe blocks in this crate |
+| Typestate | `Unconfigured` → `Configured` enforced at compile time via `PhantomData` |
+| Builder config | Cross-field validation at build time, not at register write |
+| `InitError` | Returns the I2C bus on init failure for downstream recovery |
+| Newtypes | `MilliTesla`, `Celsius`, `Degrees`, `MicrosIsr`, `CordicMagnitude` prevent unit confusion |
+| Burst reads | `read_magnetic()` and `read_all()` use single I2C transactions for data coherence |
+| Datasheet parity | Type names, field names, and constants trace to TI SBASAI4 Rev C sections |
+| Welford variance | `AxisCalibrator` uses numerically stable online algorithm for f32 (`libm` feature) |
 
 ## Minimum Supported Rust Version
 

@@ -55,6 +55,67 @@ impl_try_from_u8!(OperatingMode {
     0x03 => WakeUpAndSleep,
 });
 
+/// Single physical sensor axis.
+///
+/// This is a software-only convenience type for logic that needs to refer to
+/// exactly one of the TMAG5273's three physical magnetic axes. Unlike
+/// [`MagneticChannel`], it cannot represent multi-axis or pseudo-simultaneous
+/// measurement modes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[cfg_attr(feature = "defmt", derive(defmt::Format))]
+#[repr(u8)]
+pub enum Axis {
+    /// X axis.
+    X = 0,
+    /// Y axis.
+    Y = 1,
+    /// Z axis.
+    Z = 2,
+}
+
+impl_try_from_u8!(Axis {
+    0 => X,
+    1 => Y,
+    2 => Z,
+});
+
+/// Supported magnet pole counts for rotation tracking.
+///
+/// [`ZeroCrossing`](crate::ZeroCrossing) supports 2 to 4 poles.
+/// [`Cordic`](crate::Cordic) requires [`Two`](Self::Two).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[cfg_attr(feature = "defmt", derive(defmt::Format))]
+#[repr(u8)]
+pub enum PoleCount {
+    /// Two-pole assembly (one pole pair).
+    Two = 2,
+    /// Three-pole assembly.
+    Three = 3,
+    /// Four-pole assembly (two pole pairs).
+    Four = 4,
+}
+
+impl_try_from_u8!(PoleCount {
+    2 => Two,
+    3 => Three,
+    4 => Four,
+});
+
+impl PoleCount {
+    /// Returns the pole count as a raw integer.
+    #[inline]
+    pub const fn count(self) -> u8 {
+        self as u8
+    }
+}
+
+impl From<PoleCount> for u8 {
+    #[inline]
+    fn from(v: PoleCount) -> Self {
+        v.count()
+    }
+}
+
 /// Magnetic channel selection.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 #[cfg_attr(feature = "defmt", derive(defmt::Format))]
@@ -100,6 +161,17 @@ impl_try_from_u8!(MagneticChannel {
     0xA => YZY,
     0xB => XZX,
 });
+
+impl From<Axis> for MagneticChannel {
+    #[inline]
+    fn from(axis: Axis) -> Self {
+        match axis {
+            Axis::X => Self::X,
+            Axis::Y => Self::Y,
+            Axis::Z => Self::Z,
+        }
+    }
+}
 
 impl MagneticChannel {
     /// Returns the number of distinct physical axes enabled.
@@ -193,37 +265,56 @@ impl_try_from_u8!(ConversionAverage {
 });
 
 impl ConversionAverage {
-    /// Returns the expected conversion time in microseconds for the given
+    /// Single-sample, single-channel conversion quantum in micros_isreconds.
+    ///
+    /// Derived from datasheet §5.11 `t_measure` notes:
+    /// - Note (2): "Add **25 µs** for each additional magnetic channel"
+    ///   at `CONV_AVG = 000b`.
+    /// - Note (3): "add **32×25 µs = 800 µs**" per additional channel
+    ///   at `CONV_AVG = 101b`.
+    ///
+    /// The datasheet reports `t_measure = 50 µs` for one channel at X1
+    /// because that includes one overhead slot: `25 × (1×1 + 1) = 50`.
+    const T_SAMPLE_US: u32 = 25;
+
+    /// Number of samples collected per channel for this averaging mode.
+    ///
+    /// Datasheet §6.3.6, Table 6-4: X1 = 1, X2 = 2, … X32 = 32.
+    /// The `CONV_AVG` register field encodes the exponent (0–5), so
+    /// the sample count is `2^CONV_AVG`.
+    #[inline]
+    pub const fn samples_per_channel(self) -> u32 {
+        1 << (self as u32)
+    }
+
+    /// Returns the expected conversion time in micros_isreconds for the given
     /// channel configuration.
     ///
-    /// Formula from TI datasheet (SBASAI4 Rev C, Table 7-5):
-    /// `((1 << avg) * 25) * num_channels + 25` microseconds,
-    /// where `avg` is the averaging exponent (0 for X1, 5 for X32) and
-    /// `num_channels` includes magnetic axes plus temperature (if enabled).
+    /// Formula derived from datasheet §5.11 `t_measure` and notes (2)/(3):
     ///
-    /// Per datasheet Section 5.11 note (2): "When CONV_AVG = 000b, the
+    /// `T_SAMPLE_US × (samples_per_channel × num_channels + 1)`
+    ///
+    /// where the `+ 1` accounts for the fixed overhead slot.
+    ///
+    /// Per datasheet §5.11 note (2): "When CONV_AVG = 000b, the
     /// conversion time doesn't change with the T_CH_EN bit setting."
     /// Temperature only adds a measurement slot when averaging is enabled.
-    ///
-    /// Based on datasheet Table 7-5 with the CONV_AVG=000b temperature
-    /// correction from §5.11 note (2).
     pub const fn conversion_time(
         self,
         channels: MagneticChannel,
-        temperature_enabled: bool,
-    ) -> Micros {
+        temp_channel_enabled: bool,
+    ) -> MicrosIsr {
         // Temperature doesn't add conversion time at CONV_AVG = 000b (X1)
-        // per datasheet Section 5.11 note (2).
+        // per datasheet §5.11 note (2).
         let temp_adds_slot = !matches!(self, Self::X1);
-        let temp_channel: u32 = if temperature_enabled && temp_adds_slot {
+        let temp_channel: u32 = if temp_channel_enabled && temp_adds_slot {
             1
         } else {
             0
         };
         let num_channels = channels.measurement_slots() as u32 + temp_channel;
-        let samples_per_channel = 1u32 << (self as u32);
-        let us = samples_per_channel * 25 * num_channels + 25;
-        Micros(us)
+        let us = Self::T_SAMPLE_US * (self.samples_per_channel() * num_channels + 1);
+        MicrosIsr(us)
     }
 
     /// Maximum poll count for conversion timeout (2x safety margin over
@@ -297,9 +388,9 @@ impl_try_from_u8!(SleepTime {
 });
 
 impl SleepTime {
-    /// Returns the sleep duration in microseconds.
-    pub const fn as_micros(self) -> Micros {
-        Micros(match self {
+    /// Returns the sleep duration in micros_isreconds.
+    pub const fn as_micros_isr(self) -> MicrosIsr {
+        MicrosIsr(match self {
             Self::Ms1 => 1_000,
             Self::Ms5 => 5_000,
             Self::Ms10 => 10_000,
@@ -473,19 +564,13 @@ impl TempThresholdConfig {
     /// No threshold comparison (register code `0x00`). This is the default.
     pub const DISABLED: Self = Self(0);
 
-    /// Lowest valid active code (from [`register::T_THR_CONFIG_MIN`]).
-    pub const MIN_CODE: u8 = T_THR_CONFIG_MIN;
-
-    /// Highest valid active code (from [`register::T_THR_CONFIG_MAX`]).
-    pub const MAX_CODE: u8 = T_THR_CONFIG_MAX;
-
     /// Construct from a raw 7-bit register code.
     ///
     /// Returns `Some` for `0x00` (disabled) or `0x1A..=0x34` (active range).
     /// Returns `None` for any other value.
     #[inline]
     pub const fn from_code(code: u8) -> Option<Self> {
-        if code == 0 || (code >= Self::MIN_CODE && code <= Self::MAX_CODE) {
+        if code == 0 || (code >= T_THR_CONFIG_MIN && code <= T_THR_CONFIG_MAX) {
             Some(Self(code))
         } else {
             None
@@ -632,37 +717,6 @@ impl_try_from_u8!(Range {
     1 => High,
 });
 
-// ---------------------------------------------------------------------------
-// Device variant
-// ---------------------------------------------------------------------------
-
-/// Default I2C address for device family letter A.
-const I2C_ADDR_A: u8 = 0x35;
-/// Default I2C address for device family letter B.
-const I2C_ADDR_B: u8 = 0x22;
-/// Default I2C address for device family letter C.
-const I2C_ADDR_C: u8 = 0x78;
-/// Default I2C address for device family letter D.
-const I2C_ADDR_D: u8 = 0x44;
-
-/// Full-scale XY range in mT — version 1, low range.
-const RANGE_V1_LOW_XY: f32 = 40.0;
-/// Full-scale XY range in mT — version 1, high range.
-const RANGE_V1_HIGH_XY: f32 = 80.0;
-/// Full-scale XY range in mT — version 2, low range.
-const RANGE_V2_LOW_XY: f32 = 133.0;
-/// Full-scale XY range in mT — version 2, high range.
-const RANGE_V2_HIGH_XY: f32 = 266.0;
-
-/// Full-scale Z range in mT — version 1, low range.
-const RANGE_V1_LOW_Z: f32 = 40.0;
-/// Full-scale Z range in mT — version 1, high range.
-const RANGE_V1_HIGH_Z: f32 = 80.0;
-/// Full-scale Z range in mT — version 2, low range.
-const RANGE_V2_LOW_Z: f32 = 133.0;
-/// Full-scale Z range in mT — version 2, high range.
-const RANGE_V2_HIGH_Z: f32 = 266.0;
-
 /// TMAG5273 device variant.
 ///
 /// The letter (A–D) determines the default I2C address and the number (1/2)
@@ -689,11 +743,52 @@ pub enum DeviceVariant {
 }
 
 impl DeviceVariant {
+    // -- Factory I2C addresses -----------------------------------------------
+    // Datasheet §6.3.4, Table 6-2 "I²C Default Address",
+    // column "I²C ADDRESS (7 MSB BITS)".
+
+    /// Default 7-bit I2C address for A-family (TMAG5273Ax).
+    const I2C_ADDR_A: u8 = 0x35;
+    /// Default 7-bit I2C address for B-family (TMAG5273Bx).
+    const I2C_ADDR_B: u8 = 0x22;
+    /// Default 7-bit I2C address for C-family (TMAG5273Cx).
+    const I2C_ADDR_C: u8 = 0x78;
+    /// Default 7-bit I2C address for D-family (TMAG5273Dx).
+    const I2C_ADDR_D: u8 = 0x44;
+
+    // -- Full-scale magnetic input range (B_R) -------------------------------
+    // Datasheet §6.3.5, Table 6-3 "Magnetic Range Selection".
+    // Rows are keyed by axis group (X_Y_RANGE / Z_RANGE) and register
+    // setting (0b = Low, 1b = High); columns split by version (x1 / x2).
+
+    /// X_Y_RANGE = 0b, version x1: ±40 mT.
+    const XY_RANGE_V1_LOW: f32 = 40.0;
+    /// X_Y_RANGE = 1b, version x1: ±80 mT.
+    const XY_RANGE_V1_HIGH: f32 = 80.0;
+    /// X_Y_RANGE = 0b, version x2: ±133 mT.
+    const XY_RANGE_V2_LOW: f32 = 133.0;
+    /// X_Y_RANGE = 1b, version x2: ±266 mT.
+    const XY_RANGE_V2_HIGH: f32 = 266.0;
+
+    /// Z_RANGE = 0b, version x1: ±40 mT.
+    const Z_RANGE_V1_LOW: f32 = 40.0;
+    /// Z_RANGE = 1b, version x1: ±80 mT.
+    const Z_RANGE_V1_HIGH: f32 = 80.0;
+    /// Z_RANGE = 0b, version x2: ±133 mT.
+    const Z_RANGE_V2_LOW: f32 = 133.0;
+    /// Z_RANGE = 1b, version x2: ±266 mT.
+    const Z_RANGE_V2_HIGH: f32 = 266.0;
+
     /// Factory-default I2C addresses for all TMAG5273 families.
     ///
     /// Ordered B, A, D, C — B-family (0x22, SparkFun default) first since
     /// it's the most common breakout board.
-    pub const KNOWN_ADDRESSES: [u8; 4] = [I2C_ADDR_B, I2C_ADDR_A, I2C_ADDR_D, I2C_ADDR_C];
+    pub const KNOWN_ADDRESSES: [u8; 4] = [
+        Self::I2C_ADDR_B,
+        Self::I2C_ADDR_A,
+        Self::I2C_ADDR_D,
+        Self::I2C_ADDR_C,
+    ];
 
     /// Resolve the device variant from a known I2C address and version byte.
     ///
@@ -702,14 +797,14 @@ impl DeviceVariant {
     #[inline]
     pub const fn from_address_version(address: u8, version: u8) -> Option<Self> {
         match (address, version) {
-            (I2C_ADDR_A, VER_V1) => Some(Self::A1),
-            (I2C_ADDR_A, VER_V2) => Some(Self::A2),
-            (I2C_ADDR_B, VER_V1) => Some(Self::B1),
-            (I2C_ADDR_B, VER_V2) => Some(Self::B2),
-            (I2C_ADDR_C, VER_V1) => Some(Self::C1),
-            (I2C_ADDR_C, VER_V2) => Some(Self::C2),
-            (I2C_ADDR_D, VER_V1) => Some(Self::D1),
-            (I2C_ADDR_D, VER_V2) => Some(Self::D2),
+            (Self::I2C_ADDR_A, VER_V1) => Some(Self::A1),
+            (Self::I2C_ADDR_A, VER_V2) => Some(Self::A2),
+            (Self::I2C_ADDR_B, VER_V1) => Some(Self::B1),
+            (Self::I2C_ADDR_B, VER_V2) => Some(Self::B2),
+            (Self::I2C_ADDR_C, VER_V1) => Some(Self::C1),
+            (Self::I2C_ADDR_C, VER_V2) => Some(Self::C2),
+            (Self::I2C_ADDR_D, VER_V1) => Some(Self::D1),
+            (Self::I2C_ADDR_D, VER_V2) => Some(Self::D2),
             _ => None,
         }
     }
@@ -718,10 +813,10 @@ impl DeviceVariant {
     #[inline]
     pub const fn default_address(&self) -> u8 {
         match self {
-            Self::A1 | Self::A2 => I2C_ADDR_A,
-            Self::B1 | Self::B2 => I2C_ADDR_B,
-            Self::C1 | Self::C2 => I2C_ADDR_C,
-            Self::D1 | Self::D2 => I2C_ADDR_D,
+            Self::A1 | Self::A2 => Self::I2C_ADDR_A,
+            Self::B1 | Self::B2 => Self::I2C_ADDR_B,
+            Self::C1 | Self::C2 => Self::I2C_ADDR_C,
+            Self::D1 | Self::D2 => Self::I2C_ADDR_D,
         }
     }
 
@@ -736,24 +831,24 @@ impl DeviceVariant {
 
     /// Returns the full-scale magnetic range in mT for the X and Y axes.
     #[inline]
-    pub const fn range_mt_xy(&self, range: Range) -> f32 {
-        match (self, range) {
-            (Self::A1 | Self::B1 | Self::C1 | Self::D1, Range::Low) => RANGE_V1_LOW_XY,
-            (Self::A1 | Self::B1 | Self::C1 | Self::D1, Range::High) => RANGE_V1_HIGH_XY,
-            (Self::A2 | Self::B2 | Self::C2 | Self::D2, Range::Low) => RANGE_V2_LOW_XY,
-            (Self::A2 | Self::B2 | Self::C2 | Self::D2, Range::High) => RANGE_V2_HIGH_XY,
-        }
+    pub const fn range_xy(&self, range: Range) -> MilliTesla {
+        MilliTesla(match (self, range) {
+            (Self::A1 | Self::B1 | Self::C1 | Self::D1, Range::Low) => Self::XY_RANGE_V1_LOW,
+            (Self::A1 | Self::B1 | Self::C1 | Self::D1, Range::High) => Self::XY_RANGE_V1_HIGH,
+            (Self::A2 | Self::B2 | Self::C2 | Self::D2, Range::Low) => Self::XY_RANGE_V2_LOW,
+            (Self::A2 | Self::B2 | Self::C2 | Self::D2, Range::High) => Self::XY_RANGE_V2_HIGH,
+        })
     }
 
     /// Returns the full-scale magnetic range in mT for the Z axis.
     #[inline]
-    pub const fn range_mt_z(&self, range: Range) -> f32 {
-        match (self, range) {
-            (Self::A1 | Self::B1 | Self::C1 | Self::D1, Range::Low) => RANGE_V1_LOW_Z,
-            (Self::A1 | Self::B1 | Self::C1 | Self::D1, Range::High) => RANGE_V1_HIGH_Z,
-            (Self::A2 | Self::B2 | Self::C2 | Self::D2, Range::Low) => RANGE_V2_LOW_Z,
-            (Self::A2 | Self::B2 | Self::C2 | Self::D2, Range::High) => RANGE_V2_HIGH_Z,
-        }
+    pub const fn range_z(&self, range: Range) -> MilliTesla {
+        MilliTesla(match (self, range) {
+            (Self::A1 | Self::B1 | Self::C1 | Self::D1, Range::Low) => Self::Z_RANGE_V1_LOW,
+            (Self::A1 | Self::B1 | Self::C1 | Self::D1, Range::High) => Self::Z_RANGE_V1_HIGH,
+            (Self::A2 | Self::B2 | Self::C2 | Self::D2, Range::Low) => Self::Z_RANGE_V2_LOW,
+            (Self::A2 | Self::B2 | Self::C2 | Self::D2, Range::High) => Self::Z_RANGE_V2_HIGH,
+        })
     }
 }
 
@@ -764,96 +859,220 @@ impl DeviceVariant {
 /// Magnetic flux density in millitesla.
 #[derive(Debug, Default, Clone, Copy, PartialEq, PartialOrd)]
 #[cfg_attr(feature = "defmt", derive(defmt::Format))]
+#[must_use]
 pub struct MilliTesla(pub f32);
 
 impl From<MilliTesla> for f32 {
     #[inline]
-    fn from(v: MilliTesla) -> f32 {
+    fn from(v: MilliTesla) -> Self {
         v.0
     }
 }
 
-impl MilliTesla {
-    /// Construct from a raw 16-bit 2's complement ADC code.
-    ///
-    /// The sign is **negated** relative to TI datasheet equation 10
-    /// (`B = raw / 32768 × range`). This follows the Linux kernel driver
-    /// convention: positive [`MilliTesla`] values indicate a magnetic south
-    /// pole approaching the sensor's sensitive face, while the TI raw
-    /// encoding produces positive ADC codes for north poles (datasheet §6.3.1).
+impl core::ops::Add for MilliTesla {
+    type Output = Self;
     #[inline]
-    pub(crate) fn from_raw(raw: i16, range_mt: f32) -> Self {
-        Self(-(raw as f32) * range_mt * INV_32768)
-    }
-
-    /// Construct from the 8-bit CORDIC magnitude register value (0x1B).
-    ///
-    /// The CORDIC hardware computes `M = sqrt(Ch1² + Ch2²)` using the same
-    /// unsigned 16-bit scale as the magnetic ADC: 32 768 codes = `range_mt`.
-    /// The register stores only the upper 8 bits of that 16-bit result, so
-    /// `raw = 128` corresponds to a single-axis full-scale vector (one axis at
-    /// `range_mt`, the other at zero). Two axes simultaneously at full scale
-    /// yields `raw ≈ 181` (`√2 × 128`), producing `~√2 × range_mt`.
-    ///
-    /// This gives a **strictly monotonic** unsigned output — every increment of
-    /// `raw` increases the returned value.
-    #[inline]
-    pub(crate) fn from_magnitude_raw(raw: u8, range_mt: f32) -> Self {
-        // CORDIC 16-bit scale: 32768 codes = range_mt → upper-byte scale = range_mt / 128.
-        Self(raw as f32 * (range_mt / 128.0))
+    fn add(self, rhs: Self) -> Self {
+        Self(self.0 + rhs.0)
     }
 }
 
-/// Software `sqrt` for `no_std` — fast inverse square root (Quake-style)
-/// refined with three Newton–Raphson iterations for maximum `f32` precision
-/// (~1 ULP error, matching hardware `fsqrt` accuracy).
-#[inline]
-pub(crate) fn sqrt(x: f32) -> f32 {
-    if x <= 0.0 {
-        return 0.0;
+impl core::ops::Sub for MilliTesla {
+    type Output = Self;
+    #[inline]
+    fn sub(self, rhs: Self) -> Self {
+        Self(self.0 - rhs.0)
     }
-    let half = 0.5 * x;
-    let bits = x.to_bits();
-    let guess = f32::from_bits(0x5f37_5a86 - (bits >> 1)); // initial estimate
-    let guess = guess * (1.5 - half * guess * guess); // 1st Newton iteration
-    let guess = guess * (1.5 - half * guess * guess); // 2nd Newton iteration
-    let guess = guess * (1.5 - half * guess * guess); // 3rd Newton iteration
-    x * guess // convert 1/sqrt(x) → sqrt(x)
+}
+
+impl core::ops::AddAssign for MilliTesla {
+    #[inline]
+    fn add_assign(&mut self, rhs: Self) {
+        self.0 += rhs.0;
+    }
+}
+
+impl core::ops::SubAssign for MilliTesla {
+    #[inline]
+    fn sub_assign(&mut self, rhs: Self) {
+        self.0 -= rhs.0;
+    }
+}
+
+impl core::ops::Neg for MilliTesla {
+    type Output = Self;
+    #[inline]
+    fn neg(self) -> Self {
+        Self(-self.0)
+    }
+}
+
+impl MilliTesla {
+    /// Absolute value of the magnetic flux density.
+    #[inline]
+    pub fn abs(self) -> Self {
+        Self(self.0.abs())
+    }
+
+    /// Reciprocal of 2^15 — the 16-bit ADC full-scale divisor from
+    /// datasheet §6.5.2.1, Equation 10: `B = raw / 2^16 × 2|B_R|`.
+    /// Rewritten as `B = raw × B_R / 2^15` (multiply instead of divide).
+    const INV_2_POW_15: f32 = 1.0 / 32768.0;
+
+    /// Construct from a raw 16-bit 2's complement ADC code.
+    ///
+    /// Follows TI datasheet Equation 10 (§6.5.2.1):
+    /// `B = raw / 2^16 × 2|B_R|` = `raw × B_R / 2^15`.
+    ///
+    /// Sign convention matches the datasheet (§6.3.1): positive values
+    /// indicate a magnetic **north** pole approaching the sensor's
+    /// sensitive face; negative values indicate a **south** pole.
+    #[inline]
+    pub(crate) fn from_raw(raw: i16, range: MilliTesla) -> Self {
+        Self((raw as f32) * range.0 * Self::INV_2_POW_15)
+    }
+}
+
+/// Hardware-computed 2-axis CORDIC magnitude in millitesla.
+#[derive(Debug, Default, Clone, Copy, PartialEq, PartialOrd)]
+#[cfg_attr(feature = "defmt", derive(defmt::Format))]
+#[must_use]
+pub struct CordicMagnitude(pub f32);
+
+impl From<CordicMagnitude> for f32 {
+    #[inline]
+    fn from(v: CordicMagnitude) -> Self {
+        v.0
+    }
+}
+
+impl CordicMagnitude {
+    /// Construct from the raw 8-bit `MAGNITUDE_RESULT` register value (0x1B).
+    ///
+    /// The CORDIC hardware computes `M = sqrt(Ch1² + Ch2²)` using the same
+    /// unsigned 16-bit scale as the magnetic ADC: 32 768 codes = `range`.
+    /// The register stores only the upper 8 bits of that 16-bit result, so
+    /// `raw = 128` corresponds to a single-axis full-scale vector (one axis at
+    /// `range`, the other at zero). Two axes simultaneously at full scale
+    /// yields `raw ≈ 181` (`√2 × 128`), producing `~√2 × range`.
+    ///
+    /// This gives a strictly monotonic unsigned output: every increment of
+    /// `raw` increases the returned value.
+    #[inline]
+    pub(crate) fn from_raw(raw: u8, range: MilliTesla) -> Self {
+        Self(raw as f32 * (range.0 / 128.0))
+    }
 }
 
 /// Temperature in degrees Celsius.
 #[derive(Debug, Default, Clone, Copy, PartialEq, PartialOrd)]
 #[cfg_attr(feature = "defmt", derive(defmt::Format))]
+#[must_use]
 pub struct Celsius(pub f32);
 
 impl From<Celsius> for f32 {
     #[inline]
-    fn from(v: Celsius) -> f32 {
+    fn from(v: Celsius) -> Self {
         v.0
     }
 }
 
 impl Celsius {
-    /// Construct from a raw 16-bit 2's complement ADC code (datasheet eq. 12).
+    // -- Datasheet §5.6 "Temperature Sensor" electrical characteristics -------
+    // and §6.5.2.2 Equation 12: T = T_SENS_T0 + (T_ADC_T − T_ADC_T0) / T_ADC_RES
+
+    /// `T_SENS_T0`: reference temperature (°C).
+    /// Datasheet §5.6, electrical characteristics table.
+    const T_SENS_T0: f32 = 25.0;
+
+    /// `T_ADC_T0`: ADC code at the reference temperature (16-bit format).
+    /// Datasheet §5.6, electrical characteristics table.
+    const T_ADC_T0: f32 = 17508.0;
+
+    /// Reciprocal of `T_ADC_RES` (60.1 LSB/°C).
+    /// Datasheet §5.6, electrical characteristics table.
+    /// Pre-inverted so `from_raw` multiplies instead of divides.
+    const T_ADC_RES_INV: f32 = 1.0 / 60.1;
+
+    /// Construct from a raw 16-bit 2's complement ADC code.
+    ///
+    /// Datasheet §6.5.2.2, Equation 12:
+    /// `T = T_SENS_T0 + (T_ADC_T − T_ADC_T0) / T_ADC_RES`
     #[inline]
     pub(crate) fn from_raw(raw: i16) -> Self {
-        Self(T_SENS_T0 + ((raw as f32) - T_ADC_T0) * T_ADC_RES_INV)
+        Self(Self::T_SENS_T0 + ((raw as f32) - Self::T_ADC_T0) * Self::T_ADC_RES_INV)
     }
 }
 
-/// Angle in degrees (0–360).
+/// Rotational speed in revolutions per minute.
 #[derive(Debug, Default, Clone, Copy, PartialEq, PartialOrd)]
 #[cfg_attr(feature = "defmt", derive(defmt::Format))]
-pub struct Degrees(pub f32);
+#[must_use]
+pub struct Rpm(pub f32);
 
-impl From<Degrees> for f32 {
+impl From<Rpm> for f32 {
     #[inline]
-    fn from(v: Degrees) -> f32 {
+    fn from(v: Rpm) -> Self {
         v.0
     }
 }
 
+/// Absolute sensor angle in degrees, always in the range [0°, 360°].
+///
+/// Represents the output of the TMAG5273 CORDIC engine. Constructed from
+/// hardware register values via [`Degrees::from_raw`]; validated by
+/// [`Degrees::is_valid`].
+///
+/// For signed angular deltas (rotation steps), use [`SignedDegrees`].
+#[derive(Debug, Default, Clone, Copy, PartialEq, PartialOrd)]
+#[cfg_attr(feature = "defmt", derive(defmt::Format))]
+#[must_use]
+pub struct Degrees(pub f32);
+
+impl From<Degrees> for f32 {
+    #[inline]
+    fn from(v: Degrees) -> Self {
+        v.0
+    }
+}
+
+impl core::ops::Sub for Degrees {
+    type Output = SignedDegrees;
+    #[inline]
+    fn sub(self, rhs: Self) -> SignedDegrees {
+        SignedDegrees(self.0 - rhs.0)
+    }
+}
+
 impl Degrees {
+    /// Minimum valid angle (0°).
+    pub const MIN: Self = Self(0.0);
+
+    /// Maximum valid angle (360°).
+    pub const MAX: Self = Self(360.0);
+
+    /// Returns `true` if this angle is finite and within the valid 0–360° range.
+    ///
+    /// Rejects `NaN`, `Infinity`, negative values, and values above 360°.
+    #[inline]
+    pub fn is_valid(self) -> bool {
+        self.0 >= Self::MIN.0 && self.0 <= Self::MAX.0
+    }
+
+    // -- Angle bit layout from datasheet §6.5.2.3, Equation 14 ---------------
+    // The register map (§8.1.26–8.1.27) describes ANGLE_RESULT_MSB/LSB as
+    // opaque bytes; the 9.4 fixed-point layout is only implied by Eq. 14:
+    //   A = Σ(D_i × 2^(i−4)), i=4..12  +  Σ(D_i × 2^i) / 16, i=0..3
+
+    /// Bit mask for the 9-bit integer part (bits [12:4]).
+    const INT_MASK: u16 = 0x1FF;
+    /// Bit shift to extract the integer part.
+    const INT_SHIFT: u16 = 4;
+    /// Bit mask for the 4-bit fractional part (bits [3:0]).
+    const FRAC_MASK: u16 = 0x0F;
+    /// Reciprocal of 2^4 — converts the fractional field to degrees.
+    const FRAC_SCALE: f32 = 1.0 / 16.0;
+
     /// Construct from a raw 16-bit angle register value (9.4 fixed-point).
     ///
     /// Bits \[12:4\]: 9-bit integer part (0–360).
@@ -864,43 +1083,167 @@ impl Degrees {
     /// a corrupted I2C read (enable the `crc` feature to detect this reliably).
     #[inline]
     pub(crate) fn from_raw(raw: u16) -> Option<Self> {
-        let integer = ((raw >> ANGLE_INT_SHIFT) & ANGLE_INT_MASK) as f32;
-        let fraction = (raw & ANGLE_FRAC_MASK) as f32 * ANGLE_FRAC_SCALE;
-        let angle = integer + fraction;
-        if angle > 360.0 {
-            None
+        let integer = ((raw >> Self::INT_SHIFT) & Self::INT_MASK) as f32;
+        let fraction = (raw & Self::FRAC_MASK) as f32 * Self::FRAC_SCALE;
+        let candidate = Self(integer + fraction);
+        if candidate.is_valid() {
+            Some(candidate)
         } else {
-            Some(Self(angle))
+            defmt_warn!(
+                "from_raw: angle {}° out of valid range, corrupted I2C read",
+                candidate.0
+            );
+            None
         }
     }
 }
 
-/// Duration in microseconds.
-#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+/// Signed angular delta in degrees, used for rotation steps and displacements.
+///
+/// Represents a signed difference between two [`Degrees`] angles — for example,
+/// the output of [`RotationTracker::update`](crate::RotationTracker::update).
+/// Values are in the range (−180°, +180°] after shortest-path normalization.
+///
+/// Unlike [`Degrees`], this type has no valid-range restriction and supports
+/// negation and absolute value.
+#[derive(Debug, Default, Clone, Copy, PartialEq, PartialOrd)]
 #[cfg_attr(feature = "defmt", derive(defmt::Format))]
-pub struct Micros(pub u32);
+#[must_use]
+pub struct SignedDegrees(pub f32);
 
-impl From<Micros> for u32 {
+impl From<SignedDegrees> for f32 {
     #[inline]
-    fn from(v: Micros) -> u32 {
+    fn from(v: SignedDegrees) -> Self {
         v.0
     }
 }
 
-impl core::fmt::Display for Micros {
+impl core::ops::Neg for SignedDegrees {
+    type Output = Self;
+    #[inline]
+    fn neg(self) -> Self {
+        Self(-self.0)
+    }
+}
+
+impl core::ops::Add for SignedDegrees {
+    type Output = Self;
+    #[inline]
+    fn add(self, rhs: Self) -> Self {
+        Self(self.0 + rhs.0)
+    }
+}
+
+impl core::ops::Sub for SignedDegrees {
+    type Output = Self;
+    #[inline]
+    fn sub(self, rhs: Self) -> Self {
+        Self(self.0 - rhs.0)
+    }
+}
+
+impl core::ops::AddAssign for SignedDegrees {
+    #[inline]
+    fn add_assign(&mut self, rhs: Self) {
+        self.0 += rhs.0;
+    }
+}
+
+impl core::ops::SubAssign for SignedDegrees {
+    #[inline]
+    fn sub_assign(&mut self, rhs: Self) {
+        self.0 -= rhs.0;
+    }
+}
+
+impl SignedDegrees {
+    /// One full revolution forward (+360°).
+    pub const MAX: Self = Self(360.0);
+
+    /// One full revolution backward (−360°).
+    pub const MIN: Self = Self(-360.0);
+
+    /// Absolute value of this delta.
+    #[inline]
+    pub fn abs(self) -> Self {
+        Self(self.0.abs())
+    }
+}
+
+// Cross-type ops: update an absolute Degrees position by a signed displacement.
+
+impl core::ops::AddAssign<SignedDegrees> for Degrees {
+    #[inline]
+    fn add_assign(&mut self, rhs: SignedDegrees) {
+        self.0 += rhs.0;
+    }
+}
+
+impl core::ops::Add<SignedDegrees> for Degrees {
+    type Output = Degrees;
+    #[inline]
+    fn add(self, rhs: SignedDegrees) -> Degrees {
+        Degrees(self.0 + rhs.0)
+    }
+}
+
+impl core::ops::SubAssign<SignedDegrees> for Degrees {
+    #[inline]
+    fn sub_assign(&mut self, rhs: SignedDegrees) {
+        self.0 -= rhs.0;
+    }
+}
+
+impl core::ops::Sub<SignedDegrees> for Degrees {
+    type Output = Degrees;
+    #[inline]
+    fn sub(self, rhs: SignedDegrees) -> Degrees {
+        Degrees(self.0 - rhs.0)
+    }
+}
+
+/// Duration in micros_isreconds.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[cfg_attr(feature = "defmt", derive(defmt::Format))]
+#[must_use]
+pub struct MicrosIsr(pub u32);
+
+impl MicrosIsr {
+    /// Convert to milliseconds as `f32`.
+    #[inline]
+    pub const fn to_millis(self) -> f32 {
+        self.0 as f32 / 1_000.0
+    }
+
+    /// Convert to seconds as `f32`.
+    #[inline]
+    pub const fn to_seconds(self) -> f32 {
+        self.0 as f32 / 1_000_000.0
+    }
+}
+
+impl From<MicrosIsr> for u32 {
+    #[inline]
+    fn from(v: MicrosIsr) -> Self {
+        v.0
+    }
+}
+
+/// Required by `thiserror` `#[error()]` formatting in [`ConfigError::SleepShorterThanConversion`].
+impl core::fmt::Display for MicrosIsr {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         write!(f, "{}", self.0)
     }
 }
 
-/// A range of microsecond durations, matching Linux `usleep_range(min, max)` semantics.
+/// A range of micros_isrecond durations, matching Linux `usleep_range(min, max)` semantics.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 #[cfg_attr(feature = "defmt", derive(defmt::Format))]
 pub struct MicrosRange {
     /// Minimum delay (used by the driver for actual `delay_us` calls).
-    pub min: Micros,
+    pub min: MicrosIsr,
     /// Maximum acceptable delay (documentary — for RTOS scheduler batching).
-    pub max: Micros,
+    pub max: MicrosIsr,
 }
 
 /// Wake-up delay range after transitioning from Sleep to an active mode.
@@ -908,9 +1251,47 @@ pub struct MicrosRange {
 /// From TI TMAG5273 datasheet: device needs >=80 µs to wake. The Linux kernel
 /// driver uses `usleep_range(80, 200)` for this boundary.
 pub const WAKE_DELAY: MicrosRange = MicrosRange {
-    min: Micros(80),
-    max: Micros(200),
+    min: MicrosIsr(80),
+    max: MicrosIsr(200),
 };
+
+/// Inter-retry delay between NACK'd register reads during `set_mode()` wake.
+///
+/// The datasheet specifies a 50 µs typical wake time, but ESP32-S3 hardware
+/// with a TMAG5273 B1 under active magnetic field can need up to ~6 ms before
+/// the first I2C read ACKs. Empirically validated from HIL tests: under
+/// ambient conditions 1 ms suffices; under a strong magnetic field (bar magnet)
+/// the ADC settling extends wake time. 5 ms provides reliable margin across
+/// all observed conditions (ambient, idle frother, spinning frother, bar magnet).
+///
+/// See: docs/solutions/hardware-validation/tmag5273-hil-findings-2026-03-26.md
+pub const WAKE_RETRY_DELAY: MicrosIsr = MicrosIsr(5_000);
+
+/// Total zero-crossings counted by a [`ZeroCrossing`](crate::ZeroCrossing) tracker.
+///
+/// Each crossing represents a polarity-flip event — the magnetic signal
+/// passing through the Schmitt trigger's hysteresis band.  Divide by
+/// `POLES_COUNT` for mechanical revolutions, or use
+/// [`cumulative_revolutions()`](crate::RotationTracker::cumulative_revolutions).
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[cfg_attr(feature = "defmt", derive(defmt::Format))]
+#[must_use]
+pub struct Crossings(pub u32);
+
+impl Crossings {
+    /// Saturating increment by `n`, capping at `u32::MAX`.
+    #[inline]
+    pub const fn saturating_add(self, n: u32) -> Self {
+        Self(self.0.saturating_add(n))
+    }
+}
+
+impl From<Crossings> for u32 {
+    #[inline]
+    fn from(v: Crossings) -> Self {
+        v.0
+    }
+}
 
 /// Zero-sized no-op delay backend (default).
 ///
@@ -947,34 +1328,6 @@ pub struct MagneticReading {
     pub z: Option<MilliTesla>,
 }
 
-impl MagneticReading {
-    /// Compute the total magnetic field magnitude: `sqrt(x² + y² + z²)`.
-    ///
-    /// Disabled channels (represented as `None`) are treated as zero.
-    /// Uses a software `sqrt` implementation — no `libm` or `std` required.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use tmag5273::{MagneticReading, MilliTesla};
-    ///
-    /// let reading = MagneticReading {
-    ///     x: Some(MilliTesla(3.0)),
-    ///     y: Some(MilliTesla(4.0)),
-    ///     z: None,
-    /// };
-    /// let mag = reading.magnitude();
-    /// assert!((mag.0 - 5.0).abs() < 0.01); // 3-4-5 triangle
-    /// ```
-    #[inline]
-    pub fn magnitude(&self) -> MilliTesla {
-        let x = self.x.map_or(0.0, |v| v.0);
-        let y = self.y.map_or(0.0, |v| v.0);
-        let z = self.z.map_or(0.0, |v| v.0);
-        MilliTesla(sqrt(x * x + y * y + z * z))
-    }
-}
-
 /// Angle measurement result from the TMAG5273 angle engine.
 #[derive(Debug, Clone, Copy, PartialEq)]
 #[cfg_attr(feature = "defmt", derive(defmt::Format))]
@@ -982,20 +1335,8 @@ impl MagneticReading {
 pub struct AngleReading {
     /// Computed angle in degrees (0–360).
     pub angle: Degrees,
-    /// Magnitude of the magnetic field vector (unitless, 0–255).
-    pub magnitude: u8,
-}
-
-impl AngleReading {
-    /// Convert the raw magnitude to physical units (millitesla).
-    ///
-    /// `range_mt` is the full-scale magnetic range for the axis pair used
-    /// in the angle calculation. Obtain it from
-    /// [`DeviceVariant::range_mt_xy`] or [`DeviceVariant::range_mt_z`].
-    #[inline]
-    pub fn magnitude_millitesla(&self, range_mt: f32) -> MilliTesla {
-        MilliTesla::from_magnitude_raw(self.magnitude, range_mt)
-    }
+    /// Hardware-computed 2-axis CORDIC magnitude in millitesla.
+    pub magnitude: CordicMagnitude,
 }
 
 /// Complete sensor reading from a single conversion cycle.
@@ -1023,33 +1364,37 @@ pub struct SensorReading {
 #[must_use]
 pub struct DeviceStatus {
     /// VCC supply is below the undervoltage threshold.
-    pub vcc_undervoltage: bool,
+    pub vcc_undervoltage_error: bool,
     /// OTP memory CRC check failed.
     pub otp_crc_error: bool,
     /// Internal error detected.
     pub int_error: bool,
     /// Oscillator error detected.
     pub oscillator_error: bool,
-    /// Current state of the INT pin (true = asserted/active).
-    pub int_pin_active: bool,
+    /// `INTB_RB` readback: `true` = INT̅ pin reads high (inactive),
+    /// `false` = INT̅ pin driven low (asserted). Datasheet §8.1.29.
+    pub int_bar_readback_high: bool,
 }
 
 impl DeviceStatus {
     /// Returns `true` if no fault flags are set.
     #[inline]
     pub const fn is_ok(&self) -> bool {
-        !self.vcc_undervoltage && !self.otp_crc_error && !self.int_error && !self.oscillator_error
+        !self.vcc_undervoltage_error
+            && !self.otp_crc_error
+            && !self.int_error
+            && !self.oscillator_error
     }
 
     /// Parses a raw `DEVICE_STATUS` register byte into structured flags.
     #[inline]
     pub const fn from_register(register: u8) -> Self {
         Self {
-            vcc_undervoltage: extract(register, VCC_UV_ER_MASK, VCC_UV_ER_SHIFT) != 0,
+            vcc_undervoltage_error: extract(register, VCC_UV_ER_MASK, VCC_UV_ER_SHIFT) != 0,
             otp_crc_error: extract(register, OTP_CRC_ER_MASK, OTP_CRC_ER_SHIFT) != 0,
             int_error: extract(register, INT_ER_MASK, INT_ER_SHIFT) != 0,
             oscillator_error: extract(register, OSC_ER_MASK, OSC_ER_SHIFT) != 0,
-            int_pin_active: extract(register, INTB_RB_MASK, INTB_RB_SHIFT) != 0,
+            int_bar_readback_high: extract(register, INTB_RB_MASK, INTB_RB_SHIFT) != 0,
         }
     }
 }
@@ -1064,16 +1409,16 @@ pub struct ConversionStatus {
     /// A power-on-reset event was detected since the last read.
     pub power_on_reset: bool,
     /// Diagnostic self-test failed.
-    pub diag_fail: bool,
+    pub diag_status_fail: bool,
     /// A new conversion result is available.
-    pub result_ready: bool,
+    pub result_status_ready: bool,
 }
 
 impl ConversionStatus {
     /// Returns `true` if a new conversion result is available.
     #[inline]
-    pub const fn is_ready(&self) -> bool {
-        self.result_ready
+    pub const fn result_status_ready(&self) -> bool {
+        self.result_status_ready
     }
 
     /// Parses a raw `CONV_STATUS` register byte into structured fields.
@@ -1082,53 +1427,11 @@ impl ConversionStatus {
         Self {
             set_count: extract(register, SET_COUNT_MASK, SET_COUNT_SHIFT),
             power_on_reset: extract(register, POR_MASK, POR_SHIFT) != 0,
-            diag_fail: extract(register, DIAG_STATUS_MASK, DIAG_STATUS_SHIFT) != 0,
-            result_ready: extract(register, RESULT_STATUS_MASK, RESULT_STATUS_SHIFT) != 0,
+            diag_status_fail: extract(register, DIAG_STATUS_MASK, DIAG_STATUS_SHIFT) != 0,
+            result_status_ready: extract(register, RESULT_STATUS_MASK, RESULT_STATUS_SHIFT) != 0,
         }
     }
 }
-
-// ---------------------------------------------------------------------------
-// Conversion constants (precomputed reciprocals for FPU-less targets)
-// ---------------------------------------------------------------------------
-
-/// Reciprocal of 32768 — avoids runtime division in magnetic conversion.
-const INV_32768: f32 = 1.0 / 32768.0;
-
-/// Temperature sensor reference temperature (degrees Celsius).
-const T_SENS_T0: f32 = 25.0;
-
-/// Temperature ADC code at the reference temperature.
-const T_ADC_T0: f32 = 17508.0;
-
-/// Reciprocal of the temperature ADC resolution (60.1 codes per degree C).
-const T_ADC_RES_INV: f32 = 1.0 / 60.1;
-
-// ---------------------------------------------------------------------------
-// The constants above (INV_32768, T_SENS_T0, T_ADC_T0, T_ADC_RES_INV) are
-// directly named and specified in the datasheet (electrical characteristics
-// table and Equations 10–13) and belong in register.rs if they were register
-// fields — but they are conversion formula parameters, so they live here.
-//
-// The constants below (ANGLE_INT_MASK, ANGLE_INT_SHIFT, ANGLE_FRAC_MASK,
-// ANGLE_FRAC_SCALE) are NOT named fields in the datasheet register map.
-// §8.1.26–8.1.27 describe ANGLE_RESULT_MSB/LSB as opaque bytes; the internal
-// bit layout is only implied by Equation 14 in §6.5.2.3. These are
-// implementation constants derived by the developer, not datasheet acronyms,
-// which is why they are not in register.rs alongside the named register fields.
-// ---------------------------------------------------------------------------
-
-/// Bit mask for the 9-bit integer part of the angle result.
-const ANGLE_INT_MASK: u16 = 0x1FF;
-
-/// Bit shift to extract the integer part of the angle result.
-const ANGLE_INT_SHIFT: u16 = 4;
-
-/// Bit mask for the 4-bit fractional part of the angle result.
-const ANGLE_FRAC_MASK: u16 = 0x0F;
-
-/// Reciprocal of 16 — converts the 4-bit fractional angle field to degrees.
-const ANGLE_FRAC_SCALE: f32 = 1.0 / 16.0;
 
 // ---------------------------------------------------------------------------
 // Tests
@@ -1259,42 +1562,42 @@ mod tests {
 
     #[test]
     fn range_v1_low_xy() {
-        assert_eq!(DeviceVariant::A1.range_mt_xy(Range::Low), 40.0);
+        assert_eq!(DeviceVariant::A1.range_xy(Range::Low), MilliTesla(40.0));
     }
 
     #[test]
     fn range_v1_high_xy() {
-        assert_eq!(DeviceVariant::B1.range_mt_xy(Range::High), 80.0);
+        assert_eq!(DeviceVariant::B1.range_xy(Range::High), MilliTesla(80.0));
     }
 
     #[test]
     fn range_v2_low_xy() {
-        assert_eq!(DeviceVariant::C2.range_mt_xy(Range::Low), 133.0);
+        assert_eq!(DeviceVariant::C2.range_xy(Range::Low), MilliTesla(133.0));
     }
 
     #[test]
     fn range_v2_high_xy() {
-        assert_eq!(DeviceVariant::D2.range_mt_xy(Range::High), 266.0);
+        assert_eq!(DeviceVariant::D2.range_xy(Range::High), MilliTesla(266.0));
     }
 
     #[test]
     fn range_v1_low_z() {
-        assert_eq!(DeviceVariant::A1.range_mt_z(Range::Low), 40.0);
+        assert_eq!(DeviceVariant::A1.range_z(Range::Low), MilliTesla(40.0));
     }
 
     #[test]
     fn range_v1_high_z() {
-        assert_eq!(DeviceVariant::B1.range_mt_z(Range::High), 80.0);
+        assert_eq!(DeviceVariant::B1.range_z(Range::High), MilliTesla(80.0));
     }
 
     #[test]
     fn range_v2_low_z() {
-        assert_eq!(DeviceVariant::C2.range_mt_z(Range::Low), 133.0);
+        assert_eq!(DeviceVariant::C2.range_z(Range::Low), MilliTesla(133.0));
     }
 
     #[test]
     fn range_v2_high_z() {
-        assert_eq!(DeviceVariant::D2.range_mt_z(Range::High), 266.0);
+        assert_eq!(DeviceVariant::D2.range_z(Range::High), MilliTesla(266.0));
     }
 
     // -- Temperature conversion ----------------------------------------------
@@ -1330,28 +1633,32 @@ mod tests {
 
     #[test]
     fn from_raw_zero_returns_zero_mt() {
-        let m = MilliTesla::from_raw(0, 40.0);
+        let m = MilliTesla::from_raw(0, MilliTesla(40.0));
         assert_eq!(m.0, 0.0);
     }
 
     #[test]
-    fn from_raw_i16_min_returns_positive_range() {
-        // raw = i16::MIN = -32768 → B = -(-32768) * range / 32768 = +range
-        let m = MilliTesla::from_raw(i16::MIN, 40.0);
-        assert!(approx_eq(m.0, 40.0), "expected ~40.0, got {}", m.0);
-    }
-
-    #[test]
-    fn from_raw_i16_max_returns_negative_range() {
-        // raw = 32767 → B = -(32767) * 40 / 32768 ≈ -39.9988
-        let m = MilliTesla::from_raw(i16::MAX, 40.0);
+    fn from_raw_i16_min_returns_negative_range() {
+        // raw = i16::MIN = -32768 → B = -32768 * 40 / 32768 = -40.0
+        // Negative = south pole approaching (datasheet §6.3.1)
+        let m = MilliTesla::from_raw(i16::MIN, MilliTesla(40.0));
         assert!(approx_eq(m.0, -40.0), "expected ~-40.0, got {}", m.0);
     }
 
     #[test]
-    fn from_raw_i16_min_v2_high_returns_266mt() {
-        let m = MilliTesla::from_raw(i16::MIN, 266.0);
-        assert!(approx_eq(m.0, 266.0), "expected ~266.0, got {}", m.0);
+    fn from_raw_i16_max_returns_positive_range() {
+        // raw = 32767 → B = 32767 * 40 / 32768 ≈ +39.9988
+        // Positive = north pole approaching (datasheet §6.3.1)
+        let m = MilliTesla::from_raw(i16::MAX, MilliTesla(40.0));
+        assert!(approx_eq(m.0, 40.0), "expected ~40.0, got {}", m.0);
+    }
+
+    #[test]
+    fn from_raw_i16_min_v2_high_returns_negative_266mt() {
+        // i16::MIN = -32768 → B = -32768 * 266 / 32768 = -266.0
+        // South pole → negative (datasheet §6.3.1)
+        let m = MilliTesla::from_raw(i16::MIN, MilliTesla(266.0));
+        assert!(approx_eq(m.0, -266.0), "expected ~-266.0, got {}", m.0);
     }
 
     // -- Angle conversion ----------------------------------------------------
@@ -1398,31 +1705,31 @@ mod tests {
     #[test]
     fn device_status_all_clear() {
         let s = DeviceStatus::from_register(0x00);
-        assert!(!s.vcc_undervoltage);
+        assert!(!s.vcc_undervoltage_error);
         assert!(!s.otp_crc_error);
         assert!(!s.int_error);
         assert!(!s.oscillator_error);
-        assert!(!s.int_pin_active);
+        assert!(!s.int_bar_readback_high);
     }
 
     #[test]
     fn device_status_all_set() {
         let s = DeviceStatus::from_register(0x1F);
-        assert!(s.vcc_undervoltage);
+        assert!(s.vcc_undervoltage_error);
         assert!(s.otp_crc_error);
         assert!(s.int_error);
         assert!(s.oscillator_error);
-        assert!(s.int_pin_active);
+        assert!(s.int_bar_readback_high);
     }
 
     #[test]
     fn device_status_individual_bits() {
         let s = DeviceStatus::from_register(0b0000_0001);
-        assert!(s.vcc_undervoltage);
+        assert!(s.vcc_undervoltage_error);
         assert!(!s.otp_crc_error);
 
         let s = DeviceStatus::from_register(0b0000_0010);
-        assert!(!s.vcc_undervoltage);
+        assert!(!s.vcc_undervoltage_error);
         assert!(s.otp_crc_error);
 
         let s = DeviceStatus::from_register(0b0000_0100);
@@ -1435,9 +1742,9 @@ mod tests {
     }
 
     #[test]
-    fn device_status_int_pin_active() {
+    fn device_status_int_bar_readback_high() {
         let s = DeviceStatus::from_register(0b0001_0000);
-        assert!(s.int_pin_active);
+        assert!(s.int_bar_readback_high);
         assert!(s.is_ok()); // INT is not a fault
     }
 
@@ -1448,8 +1755,8 @@ mod tests {
         let s = ConversionStatus::from_register(0x00);
         assert_eq!(s.set_count, 0);
         assert!(!s.power_on_reset);
-        assert!(!s.diag_fail);
-        assert!(!s.result_ready);
+        assert!(!s.diag_status_fail);
+        assert!(!s.result_status_ready);
     }
 
     #[test]
@@ -1473,24 +1780,24 @@ mod tests {
         let s = ConversionStatus::from_register(0b0001_0000);
         assert_eq!(s.set_count, 0);
         assert!(s.power_on_reset);
-        assert!(!s.diag_fail);
-        assert!(!s.result_ready);
+        assert!(!s.diag_status_fail);
+        assert!(!s.result_status_ready);
     }
 
     #[test]
     fn conv_status_diag_fail() {
         // DIAG_STATUS = bit 1 = 0x02
         let s = ConversionStatus::from_register(0b0000_0010);
-        assert!(s.diag_fail);
-        assert!(!s.result_ready);
+        assert!(s.diag_status_fail);
+        assert!(!s.result_status_ready);
     }
 
     #[test]
     fn conv_status_result_ready() {
         // RESULT_STATUS = bit 0 = 0x01
         let s = ConversionStatus::from_register(0b0000_0001);
-        assert!(s.result_ready);
-        assert!(!s.diag_fail);
+        assert!(s.result_status_ready);
+        assert!(!s.diag_status_fail);
     }
 
     #[test]
@@ -1500,25 +1807,25 @@ mod tests {
         let s = ConversionStatus::from_register(0b1111_0011);
         assert_eq!(s.set_count, 7);
         assert!(s.power_on_reset);
-        assert!(s.diag_fail);
-        assert!(s.result_ready);
+        assert!(s.diag_status_fail);
+        assert!(s.result_status_ready);
     }
 
     // -- Magnitude conversion (unsigned monotonic CORDIC) --------------------
 
     #[test]
-    fn from_magnitude_raw_zero_returns_zero() {
-        let m = MilliTesla::from_magnitude_raw(0, 80.0);
+    fn cordic_magnitude_from_raw_zero_returns_zero() {
+        let m = CordicMagnitude::from_raw(0, MilliTesla(80.0));
         assert_eq!(m.0, 0.0);
     }
 
     #[test]
-    fn from_magnitude_raw_monotonic() {
+    fn cordic_magnitude_from_raw_monotonic() {
         // Every increment of raw must produce a strictly larger mT value.
-        let range = 80.0_f32;
-        let mut prev = MilliTesla::from_magnitude_raw(0, range).0;
+        let range = MilliTesla(80.0);
+        let mut prev = CordicMagnitude::from_raw(0, range).0;
         for raw in 1u8..=255 {
-            let cur = MilliTesla::from_magnitude_raw(raw, range).0;
+            let cur = CordicMagnitude::from_raw(raw, range).0;
             assert!(cur > prev, "non-monotonic at raw={raw}: {prev} >= {cur}");
             prev = cur;
         }
@@ -1532,124 +1839,19 @@ mod tests {
         assert_eq!(WAKE_DELAY.max.0, 200);
     }
 
-    // -- sqrt edge cases -------------------------------------------------
-
-    // Note: sqrt is a crate-private function, imported via `use super::*`
-
-    #[test]
-    fn sqrt_zero() {
-        assert_eq!(sqrt(0.0), 0.0);
-    }
-
-    #[test]
-    fn sqrt_negative_returns_zero() {
-        assert_eq!(sqrt(-1.0), 0.0);
-        assert_eq!(sqrt(-100.0), 0.0);
-        assert_eq!(sqrt(f32::NEG_INFINITY), 0.0);
-    }
-
-    #[test]
-    fn sqrt_perfect_squares() {
-        assert!((sqrt(1.0) - 1.0).abs() < 0.001);
-        assert!((sqrt(4.0) - 2.0).abs() < 0.001);
-        assert!((sqrt(9.0) - 3.0).abs() < 0.001);
-        assert!((sqrt(25.0) - 5.0).abs() < 0.001);
-        assert!((sqrt(100.0) - 10.0).abs() < 0.001);
-    }
-
-    #[test]
-    fn sqrt_non_perfect() {
-        assert!((sqrt(2.0) - 1.41421).abs() < 0.001);
-        assert!((sqrt(3.0) - 1.73205).abs() < 0.001);
-        assert!((sqrt(0.5) - 0.70711).abs() < 0.001);
-    }
-
-    #[test]
-    fn sqrt_very_small() {
-        assert!((sqrt(1e-6) - 1e-3).abs() < 1e-5);
-    }
-
-    #[test]
-    fn sqrt_large_values() {
-        assert!((sqrt(10000.0) - 100.0).abs() < 0.01);
-        assert!((sqrt(1e10) - 1e5).abs() < 1.0);
-    }
-
-    #[test]
-    fn sqrt_sensor_typical_values() {
-        // Typical magnitude_squared values from TMAG5273 readings
-        assert!((sqrt(0.1) - 0.31623).abs() < 0.001); // ~0.3 mT ambient
-        assert!((sqrt(6400.0) - 80.0).abs() < 0.01); // full-scale v1
-        assert!((sqrt(70756.0) - 266.0).abs() < 0.1); // full-scale v2
-    }
-
-    // -- MagneticReading::magnitude edge cases --------------------------------
-
-    #[test]
-    fn magnitude_all_none() {
-        let r = MagneticReading {
-            x: None,
-            y: None,
-            z: None,
-        };
-        assert_eq!(r.magnitude().0, 0.0);
-    }
-
-    #[test]
-    fn magnitude_single_axis() {
-        let r = MagneticReading {
-            x: Some(MilliTesla(5.0)),
-            y: None,
-            z: None,
-        };
-        assert!((r.magnitude().0 - 5.0).abs() < 0.01);
-    }
-
-    #[test]
-    fn magnitude_negative_fields() {
-        let r = MagneticReading {
-            x: Some(MilliTesla(-3.0)),
-            y: Some(MilliTesla(-4.0)),
-            z: None,
-        };
-        // sqrt(9 + 16) = 5, sign doesn't matter
-        assert!((r.magnitude().0 - 5.0).abs() < 0.01);
-    }
-
-    #[test]
-    fn magnitude_all_axes() {
-        let r = MagneticReading {
-            x: Some(MilliTesla(1.0)),
-            y: Some(MilliTesla(2.0)),
-            z: Some(MilliTesla(2.0)),
-        };
-        // sqrt(1 + 4 + 4) = 3
-        assert!((r.magnitude().0 - 3.0).abs() < 0.01);
-    }
-
-    #[test]
-    fn magnitude_zero_fields() {
-        let r = MagneticReading {
-            x: Some(MilliTesla(0.0)),
-            y: Some(MilliTesla(0.0)),
-            z: Some(MilliTesla(0.0)),
-        };
-        assert_eq!(r.magnitude().0, 0.0);
-    }
-
-    // -- MilliTesla::from_magnitude_raw key anchor values --------------------
+    // -- CordicMagnitude::from_raw key anchor values -------------------------
 
     #[test]
     fn magnitude_raw_128_is_single_axis_full_scale() {
-        // raw=128 → CORDIC 16-bit value ≈ 32768 = range_mt → exactly range_mt.
-        let m = MilliTesla::from_magnitude_raw(128, 80.0);
+        // raw=128 → CORDIC 16-bit value ≈ 32768 = range → exactly range.
+        let m = CordicMagnitude::from_raw(128, MilliTesla(80.0));
         assert!(approx_eq(m.0, 80.0), "expected ~80.0, got {}", m.0);
     }
 
     #[test]
     fn magnitude_raw_181_is_two_axis_full_scale() {
-        // raw≈181 → √2·128 → √2·range_mt (both X and Y at full scale).
-        let m = MilliTesla::from_magnitude_raw(181, 80.0);
+        // raw≈181 → √2·128 → √2·range (both X and Y at full scale).
+        let m = CordicMagnitude::from_raw(181, MilliTesla(80.0));
         let expected = 80.0_f32 * core::f32::consts::SQRT_2;
         assert!(
             (m.0 - expected).abs() < 1.0,
@@ -1661,13 +1863,13 @@ mod tests {
     #[test]
     fn magnitude_raw_255_is_finite_and_positive() {
         // Maximum raw value must produce a finite, positive result.
-        let m = MilliTesla::from_magnitude_raw(255, 80.0);
+        let m = CordicMagnitude::from_raw(255, MilliTesla(80.0));
         assert!(
             m.0.is_finite() && m.0 > 0.0,
             "expected finite >0, got {}",
             m.0
         );
-        // Should be roughly 2×range_mt (255/128 ≈ 1.992).
+        // Should be roughly 2×range (255/128 ≈ 1.992).
         assert!(approx_eq(m.0, 159.375), "expected ~159.375, got {}", m.0);
     }
 
@@ -1675,29 +1877,31 @@ mod tests {
 
     #[test]
     fn millitesla_max_positive_raw() {
-        // i16::MAX = 32767 → -(32767) * 80 / 32768 ≈ -79.9976 mT
-        let m = MilliTesla::from_raw(i16::MAX, 80.0);
-        assert!(m.0 < 0.0, "max positive raw should give negative mT");
-        assert!(approx_eq(m.0, -80.0), "expected ~-80.0, got {}", m.0);
-    }
-
-    #[test]
-    fn millitesla_min_negative_raw() {
-        // i16::MIN = -32768 → -(-32768) * 80 / 32768 = 80.0 mT
-        let m = MilliTesla::from_raw(i16::MIN, 80.0);
-        assert!(m.0 > 0.0, "min negative raw should give positive mT");
+        // i16::MAX = 32767 → 32767 * 80 / 32768 ≈ +79.9976 mT
+        // North pole → positive (datasheet §6.3.1)
+        let m = MilliTesla::from_raw(i16::MAX, MilliTesla(80.0));
+        assert!(m.0 > 0.0, "max positive raw should give positive mT");
         assert!(approx_eq(m.0, 80.0), "expected ~80.0, got {}", m.0);
     }
 
     #[test]
+    fn millitesla_min_negative_raw() {
+        // i16::MIN = -32768 → -32768 * 80 / 32768 = -80.0 mT
+        // South pole → negative (datasheet §6.3.1)
+        let m = MilliTesla::from_raw(i16::MIN, MilliTesla(80.0));
+        assert!(m.0 < 0.0, "min negative raw should give negative mT");
+        assert!(approx_eq(m.0, -80.0), "expected ~-80.0, got {}", m.0);
+    }
+
+    #[test]
     fn millitesla_zero_raw() {
-        let m = MilliTesla::from_raw(0, 80.0);
+        let m = MilliTesla::from_raw(0, MilliTesla(80.0));
         assert_eq!(m.0, 0.0);
     }
 
     #[test]
     fn millitesla_zero_range() {
-        let m = MilliTesla::from_raw(16384, 0.0);
+        let m = MilliTesla::from_raw(16384, MilliTesla(0.0));
         assert_eq!(m.0, 0.0);
     }
 
@@ -1721,33 +1925,152 @@ mod tests {
     }
 
     #[test]
-    fn micros_into_u32() {
-        assert_eq!(u32::from(Micros(1000)), 1000);
+    fn degrees_constants() {
+        assert_eq!(Degrees::MIN.0, 0.0);
+        assert_eq!(Degrees::MAX.0, 360.0);
     }
 
-    // -- AngleReading::magnitude_millitesla -----------------------------------
+    #[test]
+    fn degrees_is_valid_in_range() {
+        assert!(Degrees(0.0).is_valid());
+        assert!(Degrees(180.0).is_valid());
+        assert!(Degrees(360.0).is_valid());
+    }
 
     #[test]
-    fn angle_reading_magnitude_millitesla() {
+    fn degrees_is_valid_out_of_range() {
+        assert!(!Degrees(-0.1).is_valid());
+        assert!(!Degrees(360.1).is_valid());
+        assert!(!Degrees(f32::NAN).is_valid());
+        assert!(!Degrees(f32::INFINITY).is_valid());
+        assert!(!Degrees(f32::NEG_INFINITY).is_valid());
+    }
+
+    // -- SignedDegrees -------------------------------------------------------
+
+    #[test]
+    fn signed_degrees_into_f32() {
+        assert_eq!(f32::from(SignedDegrees(90.5)), 90.5);
+    }
+
+    #[test]
+    fn signed_degrees_add() {
+        assert_eq!(
+            SignedDegrees(90.0) + SignedDegrees(30.0),
+            SignedDegrees(120.0)
+        );
+    }
+
+    #[test]
+    fn signed_degrees_sub_signed() {
+        assert_eq!(
+            SignedDegrees(10.0) - SignedDegrees(30.0),
+            SignedDegrees(-20.0)
+        );
+    }
+
+    #[test]
+    fn signed_degrees_neg() {
+        assert_eq!(-SignedDegrees(45.0), SignedDegrees(-45.0));
+    }
+
+    #[test]
+    fn signed_degrees_abs_negative() {
+        assert_eq!(SignedDegrees(-45.0).abs(), SignedDegrees(45.0));
+    }
+
+    #[test]
+    fn signed_degrees_abs_positive() {
+        assert_eq!(SignedDegrees(45.0).abs(), SignedDegrees(45.0));
+    }
+
+    #[test]
+    fn signed_degrees_abs_zero() {
+        assert_eq!(SignedDegrees(0.0).abs(), SignedDegrees(0.0));
+    }
+
+    #[test]
+    fn signed_degrees_abs_nan_no_panic() {
+        assert!(SignedDegrees(f32::NAN).abs().0.is_nan());
+    }
+
+    #[test]
+    fn degrees_add_signed_degrees_cross_type() {
+        assert_eq!(Degrees(270.0) + SignedDegrees(45.0), Degrees(315.0));
+    }
+
+    #[test]
+    fn degrees_add_assign_signed_degrees_positive() {
+        let mut d = Degrees(100.0);
+        d += SignedDegrees(30.0);
+        assert_eq!(d, Degrees(130.0));
+    }
+
+    #[test]
+    fn degrees_add_assign_signed_degrees_negative() {
+        let mut d = Degrees(100.0);
+        d += SignedDegrees(-30.0);
+        assert_eq!(d, Degrees(70.0));
+    }
+
+    #[test]
+    fn degrees_is_valid_still_works_after_refactor() {
+        assert!(Degrees(0.0).is_valid());
+        assert!(Degrees(180.0).is_valid());
+        assert!(Degrees(360.0).is_valid());
+        assert!(!Degrees(-0.1).is_valid());
+        assert!(!Degrees(f32::NAN).is_valid());
+    }
+
+    #[test]
+    fn cordic_magnitude_into_f32() {
+        assert_eq!(f32::from(CordicMagnitude(3.14)), 3.14);
+    }
+
+    #[test]
+    fn micros_isr_into_u32() {
+        assert_eq!(u32::from(MicrosIsr(1000)), 1000);
+    }
+
+    // -- AngleReading magnitude field ---------------------------------------
+
+    #[test]
+    fn angle_reading_magnitude_field() {
         let reading = AngleReading {
             angle: Degrees(90.0),
-            magnitude: 128,
+            magnitude: CordicMagnitude(80.0),
         };
-        // from_magnitude_raw(128, 80.0) = 80.0 mT (tested above)
-        let m = reading.magnitude_millitesla(80.0);
+        let m = reading.magnitude;
         assert!(approx_eq(m.0, 80.0), "expected ~80.0, got {}", m.0);
     }
 
     #[test]
-    fn angle_reading_magnitude_millitesla_zero() {
+    fn angle_reading_magnitude_field_zero() {
         let reading = AngleReading {
             angle: Degrees(0.0),
-            magnitude: 0,
+            magnitude: CordicMagnitude(0.0),
         };
-        assert_eq!(reading.magnitude_millitesla(80.0).0, 0.0);
+        assert_eq!(reading.magnitude.0, 0.0);
     }
 
     // -- MagneticChannel helpers ----------------------------------------------
+
+    #[test]
+    fn axis_try_from() {
+        for v in [Axis::X, Axis::Y, Axis::Z] {
+            assert_eq!(Axis::try_from(v as u8), Ok(v));
+        }
+        assert_eq!(Axis::try_from(0x03), Err(0x03));
+    }
+
+    #[test]
+    fn poles_try_from() {
+        for v in [PoleCount::Two, PoleCount::Three, PoleCount::Four] {
+            assert_eq!(PoleCount::try_from(v as u8), Ok(v));
+        }
+        assert_eq!(PoleCount::try_from(0x00), Err(0x00));
+        assert_eq!(PoleCount::try_from(0x05), Err(0x05));
+    }
 
     #[test]
     fn magnetic_channel_axis_count() {
@@ -1822,30 +2145,30 @@ mod tests {
             // All fields must be valid bools (no panic) — the mere act of
             // reading them is the check. Additionally verify is_ok() doesn't
             // panic.
-            let _ = s.vcc_undervoltage;
+            let _ = s.vcc_undervoltage_error;
             let _ = s.otp_crc_error;
             let _ = s.int_error;
             let _ = s.oscillator_error;
-            let _ = s.int_pin_active;
+            let _ = s.int_bar_readback_high;
             let _ = s.is_ok();
         }
 
         // Spot-check: byte 0x00 — all flags clear.
         let s = DeviceStatus::from_register(0x00);
-        assert!(!s.vcc_undervoltage);
+        assert!(!s.vcc_undervoltage_error);
         assert!(!s.otp_crc_error);
         assert!(!s.int_error);
         assert!(!s.oscillator_error);
-        assert!(!s.int_pin_active);
+        assert!(!s.int_bar_readback_high);
         assert!(s.is_ok());
 
         // Spot-check: byte 0x1F — all five defined bits set.
         let s = DeviceStatus::from_register(0x1F);
-        assert!(s.vcc_undervoltage);
+        assert!(s.vcc_undervoltage_error);
         assert!(s.otp_crc_error);
         assert!(s.int_error);
         assert!(s.oscillator_error);
-        assert!(s.int_pin_active);
+        assert!(s.int_bar_readback_high);
         assert!(!s.is_ok()); // faults present
     }
 
@@ -1863,25 +2186,25 @@ mod tests {
 
             // Bool fields readable without panic.
             let _ = s.power_on_reset;
-            let _ = s.diag_fail;
-            let _ = s.result_ready;
-            let _ = s.is_ready();
+            let _ = s.diag_status_fail;
+            let _ = s.result_status_ready;
+            let _ = s.result_status_ready();
         }
 
         // Spot-check: byte 0x00 — all defaults.
         let s = ConversionStatus::from_register(0x00);
         assert_eq!(s.set_count, 0);
         assert!(!s.power_on_reset);
-        assert!(!s.diag_fail);
-        assert!(!s.result_ready);
+        assert!(!s.diag_status_fail);
+        assert!(!s.result_status_ready);
 
         // Spot-check: byte 0xFF — all bits set.
         // SET_COUNT=7 (bits [7:5]), POR (bit 4), reserved [3:2], DIAG (bit 1), RESULT (bit 0)
         let s = ConversionStatus::from_register(0xFF);
         assert_eq!(s.set_count, 7);
         assert!(s.power_on_reset);
-        assert!(s.diag_fail);
-        assert!(s.result_ready);
+        assert!(s.diag_status_fail);
+        assert!(s.result_status_ready);
     }
 
     // -- Exhaustive TryFrom fuzz ----------------------------------------------
@@ -1930,6 +2253,16 @@ mod tests {
     }
 
     #[test]
+    fn exhaustive_axis() {
+        assert_exhaustive_try_from::<Axis>("Axis", 3, |v| v as u8);
+    }
+
+    #[test]
+    fn exhaustive_poles() {
+        assert_exhaustive_try_from::<PoleCount>("PoleCount", 3, |v| v as u8);
+    }
+
+    #[test]
     fn exhaustive_magnetic_channel() {
         assert_exhaustive_try_from::<MagneticChannel>("MagneticChannel", 12, |v| v as u8);
     }
@@ -1940,12 +2273,12 @@ mod tests {
     }
 
     #[test]
-    fn exhaustive_sleep_duration() {
+    fn exhaustive_sleep_time() {
         assert_exhaustive_try_from::<SleepTime>("SleepTime", 13, |v| v as u8);
     }
 
     #[test]
-    fn exhaustive_power_mode() {
+    fn exhaustive_power_noise_mode() {
         assert_exhaustive_try_from::<PowerNoiseMode>("PowerNoiseMode", 2, |v| v as u8);
     }
 
@@ -1955,14 +2288,14 @@ mod tests {
     }
 
     #[test]
-    fn exhaustive_temp_coefficient() {
+    fn exhaustive_magnetic_temp_coefficient() {
         assert_exhaustive_try_from::<MagneticTempCoefficient>("MagneticTempCoefficient", 3, |v| {
             v as u8
         });
     }
 
     #[test]
-    fn exhaustive_angle_calculation() {
+    fn exhaustive_angle_enabled() {
         assert_exhaustive_try_from::<AngleEnable>("AngleEnable", 4, |v| v as u8);
     }
 
@@ -2135,7 +2468,7 @@ mod tests {
         // Linux tmag5273_scale table: microgauss per LSB for each range.
         // Our range constants are in mT; convert:
         //   1 mT = 10 Gauss = 10_000_000 microgauss
-        //   microgauss_per_lsb = range_mt * 10_000_000 / 32768
+        //   microgauss_per_lsb = range * 10_000_000 / 32768
         // Linux rounds these to integers (e.g., 12200 vs exact 12207.03).
         let table: &[(f64, f64, &str)] = &[
             (40.0, 12200.0, "v1 low (40 mT)"),
@@ -2143,8 +2476,8 @@ mod tests {
             (133.0, 40600.0, "v2 low (133 mT)"),
             (266.0, 81200.0, "v2 high (266 mT)"),
         ];
-        for &(range_mt, linux_ugauss_per_lsb, name) in table {
-            let our_ugauss_per_lsb = range_mt * 10_000_000.0 / 32768.0;
+        for &(range, linux_ugauss_per_lsb, name) in table {
+            let our_ugauss_per_lsb = range * 10_000_000.0 / 32768.0;
             let rel_error =
                 ((our_ugauss_per_lsb - linux_ugauss_per_lsb) / linux_ugauss_per_lsb).abs();
             assert!(
@@ -2156,7 +2489,7 @@ mod tests {
     }
 
     #[test]
-    fn linux_xref_temperature_formula() {
+    fn linux_xref_temp_formula() {
         // Linux integer formula: millidegrees = (raw - 16005) * 10000 / 601
         // Our float formula: celsius = 25.0 + (raw - 17508.0) / 60.1
         // Both implement the same datasheet curve but diverge by ~8 millidegrees
@@ -2198,32 +2531,51 @@ mod tests {
         assert_eq!(ConversionAverage::X32.max_polls(), 100);
     }
 
-    // -- coverage: SleepTime::as_micros for all variants ------------------
+    // -- coverage: SleepTime::as_micros_isr for all variants ------------------
 
     #[test]
-    fn sleep_duration_as_micros_all_variants() {
-        assert_eq!(SleepTime::Ms1.as_micros(), Micros(1_000));
-        assert_eq!(SleepTime::Ms5.as_micros(), Micros(5_000));
-        assert_eq!(SleepTime::Ms10.as_micros(), Micros(10_000));
-        assert_eq!(SleepTime::Ms15.as_micros(), Micros(15_000));
-        assert_eq!(SleepTime::Ms20.as_micros(), Micros(20_000));
-        assert_eq!(SleepTime::Ms30.as_micros(), Micros(30_000));
-        assert_eq!(SleepTime::Ms50.as_micros(), Micros(50_000));
-        assert_eq!(SleepTime::Ms100.as_micros(), Micros(100_000));
-        assert_eq!(SleepTime::Ms500.as_micros(), Micros(500_000));
-        assert_eq!(SleepTime::Ms1000.as_micros(), Micros(1_000_000));
-        assert_eq!(SleepTime::Ms2000.as_micros(), Micros(2_000_000));
-        assert_eq!(SleepTime::Ms5000.as_micros(), Micros(5_000_000));
-        assert_eq!(SleepTime::Ms20000.as_micros(), Micros(20_000_000));
+    fn sleep_time_as_micros_isr_all_variants() {
+        assert_eq!(SleepTime::Ms1.as_micros_isr(), MicrosIsr(1_000));
+        assert_eq!(SleepTime::Ms5.as_micros_isr(), MicrosIsr(5_000));
+        assert_eq!(SleepTime::Ms10.as_micros_isr(), MicrosIsr(10_000));
+        assert_eq!(SleepTime::Ms15.as_micros_isr(), MicrosIsr(15_000));
+        assert_eq!(SleepTime::Ms20.as_micros_isr(), MicrosIsr(20_000));
+        assert_eq!(SleepTime::Ms30.as_micros_isr(), MicrosIsr(30_000));
+        assert_eq!(SleepTime::Ms50.as_micros_isr(), MicrosIsr(50_000));
+        assert_eq!(SleepTime::Ms100.as_micros_isr(), MicrosIsr(100_000));
+        assert_eq!(SleepTime::Ms500.as_micros_isr(), MicrosIsr(500_000));
+        assert_eq!(SleepTime::Ms1000.as_micros_isr(), MicrosIsr(1_000_000));
+        assert_eq!(SleepTime::Ms2000.as_micros_isr(), MicrosIsr(2_000_000));
+        assert_eq!(SleepTime::Ms5000.as_micros_isr(), MicrosIsr(5_000_000));
+        assert_eq!(SleepTime::Ms20000.as_micros_isr(), MicrosIsr(20_000_000));
     }
 
-    // -- coverage: Micros Display impl ----------------------------------------
+    // -------------------------------------------------------------------
+    // Crossings
+    // -------------------------------------------------------------------
 
     #[test]
-    fn micros_display_impl() {
-        extern crate alloc;
-        let m = Micros(12345);
-        let s = alloc::format!("{}", m);
-        assert_eq!(s, "12345");
+    fn crossings_default_and_ordering() {
+        assert_eq!(Crossings::default(), Crossings(0));
+        assert!(Crossings(1) < Crossings(2));
+        assert_eq!(Crossings(42).0, 42);
+    }
+
+    #[test]
+    fn crossings_from_u32() {
+        assert_eq!(u32::from(Crossings(0)), 0_u32);
+        assert_eq!(u32::from(Crossings(42)), 42_u32);
+        assert_eq!(u32::from(Crossings(u32::MAX)), u32::MAX);
+    }
+
+    #[test]
+    fn crossings_saturating_add() {
+        assert_eq!(Crossings(0).saturating_add(1), Crossings(1));
+        assert_eq!(Crossings(10).saturating_add(5), Crossings(15));
+        assert_eq!(Crossings(u32::MAX).saturating_add(1), Crossings(u32::MAX));
+        assert_eq!(
+            Crossings(u32::MAX - 1).saturating_add(2),
+            Crossings(u32::MAX)
+        );
     }
 }

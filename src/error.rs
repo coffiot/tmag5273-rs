@@ -15,7 +15,7 @@ use core::fmt;
 use embedded_hal::i2c::I2c;
 
 use crate::DeviceStatus;
-use crate::types::{Micros, NoDelay};
+use crate::types::{MicrosIsr, NoDelay};
 
 // ---------------------------------------------------------------------------
 // Error
@@ -72,7 +72,7 @@ pub enum Error<E> {
     /// Angle calculation was not enabled in the configuration.
     ///
     /// Enable it via
-    /// [`ConfigBuilder::angle_calculation()`](crate::ConfigBuilder) with
+    /// [`ConfigBuilder::angle_enabled()`](crate::ConfigBuilder) with
     /// any value other than [`AngleEnable::None`](crate::AngleEnable::None),
     /// then re-initialize.
     #[error("angle calculation is not enabled; configure it in ConfigBuilder")]
@@ -112,7 +112,7 @@ pub enum Error<E> {
     /// in the configuration.
     ///
     /// Enable the channel via
-    /// [`ConfigBuilder::temperature_enabled(true)`](crate::ConfigBuilder) and
+    /// [`ConfigBuilder::temp_channel_enabled(true)`](crate::ConfigBuilder) and
     /// re-initialize, or use [`Tmag5273::read_all`](crate::Tmag5273) which
     /// returns `None` for the temperature field when the channel is disabled.
     #[error("temperature channel is disabled; enable it in ConfigBuilder")]
@@ -137,7 +137,7 @@ pub enum Error<E> {
     /// the specific fault flags.
     ///
     /// This error is only returned when [`Diagnostics::Halt`](crate::Diagnostics::Halt)
-    /// is set via [`ConfigBuilder::diagnostics`](crate::ConfigBuilder::diagnostics).
+    /// is set via [`Tmag5273::set_diagnostics`](crate::Tmag5273::set_diagnostics).
     /// Use [`Diagnostics::Warn`](crate::Diagnostics::Warn) or
     /// [`Diagnostics::Ignore`](crate::Diagnostics::Ignore) to suppress this error
     /// in noisy environments.
@@ -175,9 +175,9 @@ pub enum ConfigError {
     #[error("sleep duration ({sleep} µs) < conversion time ({conversion} µs)")]
     SleepShorterThanConversion {
         /// Sleep duration.
-        sleep: Micros,
+        sleep: MicrosIsr,
         /// Required conversion time.
-        conversion: Micros,
+        conversion: MicrosIsr,
     },
 
     /// INT-pin trigger mode is only available in standby mode.
@@ -187,6 +187,17 @@ pub enum ConfigError {
     /// conversion-trigger effect.
     #[error("TriggerMode::IntPin requires OperatingMode::Standby")]
     IntPinTriggerRequiresStandby,
+
+    /// YZ or XZ angle calculation requires matching XY and Z ranges.
+    ///
+    /// The CORDIC engine computes `sqrt(Ch1² + Ch2²)` from raw ADC codes.
+    /// When the two input axes have different full-scale ranges, the
+    /// magnitude register cannot be scaled to a single physical mT value.
+    /// Set `xy_range` and `z_range` to the same [`Range`](crate::Range)
+    /// variant, or use [`AngleEnable::XY`](crate::AngleEnable::XY) which
+    /// only uses the XY range.
+    #[error("YZ/XZ angle calculation requires xy_range == z_range")]
+    AngleMixedRanges,
 }
 
 // ---------------------------------------------------------------------------
@@ -344,7 +355,7 @@ mod tests {
     }
 
     #[test]
-    fn variant_temperature_disabled() {
+    fn variant_temp_disabled() {
         let err: Error<FakeI2cError> = Error::TempDisabled;
         assert_eq!(err, Error::TempDisabled);
     }
@@ -380,14 +391,14 @@ mod tests {
     #[test]
     fn config_error_sleep_shorter_than_conversion() {
         let err = ConfigError::SleepShorterThanConversion {
-            sleep: Micros(1_000),
-            conversion: Micros(3_225),
+            sleep: MicrosIsr(1_000),
+            conversion: MicrosIsr(3_225),
         };
         assert_eq!(
             err,
             ConfigError::SleepShorterThanConversion {
-                sleep: Micros(1_000),
-                conversion: Micros(3_225),
+                sleep: MicrosIsr(1_000),
+                conversion: MicrosIsr(3_225),
             }
         );
     }

@@ -19,6 +19,7 @@ rustdoc-args = ["--cfg", "docsrs"]
 [dependencies]
 embedded-hal = "1.0"
 defmt = { version = "1.0", optional = true }
+libm = { version = "0.2", optional = true }
 thiserror = { version = "2.0", default-features = false }
 
 [dev-dependencies]
@@ -28,8 +29,11 @@ embedded-hal-mock = { version = "0.11", default-features = false, features = [
 
 [features]
 default = []
-crc = []                # CRC-8 validation on I2C reads
-defmt = ["dep:defmt"]   # defmt::Format derives on all public types
+crc = [] # CRC-8 validation on I2C reads
+defmt = ["dep:defmt"] # defmt::Format derives on all public types
+libm = [
+    "dep:libm",
+] # Use libm for sqrt/math instead of fast-inverse-sqrt approximation
 
 [lib]
 name = "tmag5273"
