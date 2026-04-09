@@ -856,6 +856,37 @@ impl DeviceVariant {
 // Measurement newtypes
 // ---------------------------------------------------------------------------
 
+/// Raw 8-bit threshold register value.
+///
+/// One LSB (Least Significant Bit) equals `range / 128` mT, where `range` is the sensor's configured
+/// full-scale (e.g., ±40 mT → 1 LSB ≈ 0.3125 mT). This is the same scale
+/// used by the CORDIC magnitude register (datasheet §8.1.12) and the
+/// magnetic threshold registers (§8.1.5–§8.1.7).
+///
+/// Use [`ThresholdHysteresis::encode_threshold`](crate::config::ThresholdHysteresis::encode_threshold)
+/// to convert from [`MilliTesla`] and
+/// [`ThresholdHysteresis::decode_threshold`](crate::config::ThresholdHysteresis::decode_threshold)
+/// to convert back.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[cfg_attr(feature = "defmt", derive(defmt::Format))]
+pub struct Lsb(pub i8);
+
+impl From<Lsb> for i8 {
+    #[inline]
+    fn from(v: Lsb) -> Self {
+        v.0
+    }
+}
+
+impl From<Lsb> for u8 {
+    /// Bitwise reinterpretation for I2C register writes.
+    /// The bit pattern is preserved: `Lsb(-128).into::<u8>() == 0x80`.
+    #[inline]
+    fn from(v: Lsb) -> Self {
+        v.0 as u8
+    }
+}
+
 /// Magnetic flux density in millitesla.
 #[derive(Debug, Default, Clone, Copy, PartialEq, PartialOrd)]
 #[cfg_attr(feature = "defmt", derive(defmt::Format))]
@@ -908,16 +939,58 @@ impl core::ops::Neg for MilliTesla {
 }
 
 impl MilliTesla {
+    /// 16-bit ADC full-scale code count: 2^15 = 32 768.
+    ///
+    /// The TMAG5273 ADC produces signed 16-bit results where ±32 768 maps
+    /// to ±`range` mT. Used by [`to_raw`](Self::to_raw) to convert mT back
+    /// to an ADC code.
+    ///
+    /// Datasheet §6.5.2.1, Equation 10 solved for `raw`:
+    /// `raw = round(mT × ADC_FULL_SCALE / range)`.
+    const ADC_FULL_SCALE: f32 = 32768.0;
+
+    /// Reciprocal of [`ADC_FULL_SCALE`](Self::ADC_FULL_SCALE) — pre-inverted
+    /// so [`from_raw`](Self::from_raw) multiplies instead of divides.
+    ///
+    /// Datasheet §6.5.2.1, Equation 10: `B = raw / 2^16 × 2|B_R|`,
+    /// rewritten as `B = raw × range × INV_ADC_FULL_SCALE`.
+    const INV_ADC_FULL_SCALE: f32 = 1.0 / Self::ADC_FULL_SCALE;
+
+    /// 8-bit register full-scale code count: 128.
+    ///
+    /// Shared by the CORDIC magnitude register (0x1B) and magnetic threshold
+    /// registers (0x04–0x06). Both encode magnetic field as 8 bits of a
+    /// 16-bit full-scale: [`ADC_FULL_SCALE`](Self::ADC_FULL_SCALE) / 256 = 128.
+    ///
+    /// See datasheet §8.1.12 (CORDIC) and §8.1.5–§8.1.7 (thresholds).
+    const EIGHT_BIT_FULL_SCALE: f32 = 128.0;
+
+    /// MilliTesla per 8-bit register LSB: `range / 128`.
+    ///
+    /// Used by [`CordicMagnitude::from_raw`] and
+    /// [`ThresholdHysteresis::decode_threshold`](crate::config::ThresholdHysteresis::decode_threshold)
+    /// to convert an 8-bit register code to physical mT.
+    #[inline]
+    pub(crate) fn mt_per_lsb(self) -> f32 {
+        self.0 / Self::EIGHT_BIT_FULL_SCALE
+    }
+
+    /// 8-bit register LSBs per milliTesla: `128 / range`.
+    ///
+    /// Used by [`CordicMagnitude::to_raw`] and
+    /// [`ThresholdHysteresis::encode_threshold`](crate::config::ThresholdHysteresis::encode_threshold)
+    /// to convert a physical mT value to an 8-bit register code.
+    #[inline]
+    #[cfg(feature = "libm")]
+    pub(crate) fn lsb_per_mt(self) -> f32 {
+        Self::EIGHT_BIT_FULL_SCALE / self.0
+    }
+
     /// Absolute value of the magnetic flux density.
     #[inline]
     pub fn abs(self) -> Self {
         Self(self.0.abs())
     }
-
-    /// Reciprocal of 2^15 — the 16-bit ADC full-scale divisor from
-    /// datasheet §6.5.2.1, Equation 10: `B = raw / 2^16 × 2|B_R|`.
-    /// Rewritten as `B = raw × B_R / 2^15` (multiply instead of divide).
-    const INV_2_POW_15: f32 = 1.0 / 32768.0;
 
     /// Construct from a raw 16-bit 2's complement ADC code.
     ///
@@ -928,8 +1001,30 @@ impl MilliTesla {
     /// indicate a magnetic **north** pole approaching the sensor's
     /// sensitive face; negative values indicate a **south** pole.
     #[inline]
-    pub(crate) fn from_raw(raw: i16, range: MilliTesla) -> Self {
-        Self((raw as f32) * range.0 * Self::INV_2_POW_15)
+    pub fn from_raw(raw: i16, range: MilliTesla) -> Self {
+        Self((raw as f32) * range.0 * Self::INV_ADC_FULL_SCALE)
+    }
+}
+
+#[cfg(feature = "libm")]
+impl MilliTesla {
+    /// Convert a physical mT value back to the raw 16-bit 2's complement ADC code.
+    ///
+    /// Inverse of [`MilliTesla::from_raw`]; follows TI datasheet §6.5.2.1
+    /// Equation 10 solved for `raw`: `raw = round(mT × ADC_FULL_SCALE / range)`.
+    ///
+    /// Returns `None` if `self` or `range` is non-finite, `range` is zero,
+    /// or the rounded result overflows `i16`.
+    #[inline]
+    pub fn to_raw(self, range: MilliTesla) -> Option<i16> {
+        if !self.0.is_finite() || !range.0.is_finite() || range == MilliTesla(0.0) {
+            return None;
+        }
+        let rounded = libm::roundf(self.0 * Self::ADC_FULL_SCALE / range.0);
+        if rounded < i16::MIN as f32 || rounded > i16::MAX as f32 {
+            return None;
+        }
+        Some(rounded as i16)
     }
 }
 
@@ -959,8 +1054,30 @@ impl CordicMagnitude {
     /// This gives a strictly monotonic unsigned output: every increment of
     /// `raw` increases the returned value.
     #[inline]
-    pub(crate) fn from_raw(raw: u8, range: MilliTesla) -> Self {
-        Self(raw as f32 * (range.0 / 128.0))
+    pub fn from_raw(raw: u8, range: MilliTesla) -> Self {
+        Self(raw as f32 * range.mt_per_lsb())
+    }
+}
+
+#[cfg(feature = "libm")]
+impl CordicMagnitude {
+    /// Convert a physical CORDIC magnitude back to the raw 8-bit register value.
+    ///
+    /// Inverse of [`CordicMagnitude::from_raw`]; see datasheet §8.1.12.
+    /// Formula: `raw = round(mT × 128 / range)`.
+    ///
+    /// Returns `None` if `self` is non-finite or negative, `range` is
+    /// non-finite or zero, or the rounded result overflows `u8`.
+    #[inline]
+    pub fn to_raw(self, range: MilliTesla) -> Option<u8> {
+        if !self.0.is_finite() || self.0 < 0.0 || !range.0.is_finite() || range.0 == 0.0 {
+            return None;
+        }
+        let rounded = libm::roundf(self.0 * range.lsb_per_mt());
+        if rounded > u8::MAX as f32 {
+            return None;
+        }
+        Some(rounded as u8)
     }
 }
 
@@ -999,8 +1116,32 @@ impl Celsius {
     /// Datasheet §6.5.2.2, Equation 12:
     /// `T = T_SENS_T0 + (T_ADC_T − T_ADC_T0) / T_ADC_RES`
     #[inline]
-    pub(crate) fn from_raw(raw: i16) -> Self {
+    pub fn from_raw(raw: i16) -> Self {
         Self(Self::T_SENS_T0 + ((raw as f32) - Self::T_ADC_T0) * Self::T_ADC_RES_INV)
+    }
+}
+
+#[cfg(feature = "libm")]
+impl Celsius {
+    /// Convert a physical temperature back to the raw 16-bit ADC code.
+    ///
+    /// Inverse of [`Celsius::from_raw`]; follows TI datasheet §6.5.2.2
+    /// Equation 12 solved for `T_ADC_T`:
+    /// `raw = round((T − T_SENS_T0) / T_ADC_RES_INV + T_ADC_T0)`.
+    ///
+    /// Returns `None` if `self` is non-finite or the rounded result
+    /// overflows `i16`.
+    #[inline]
+    pub fn to_raw(self) -> Option<i16> {
+        if !self.0.is_finite() {
+            return None;
+        }
+        let rounded =
+            libm::roundf((self.0 - Self::T_SENS_T0) / Self::T_ADC_RES_INV + Self::T_ADC_T0);
+        if rounded < i16::MIN as f32 || rounded > i16::MAX as f32 {
+            return None;
+        }
+        Some(rounded as i16)
     }
 }
 
@@ -1082,7 +1223,7 @@ impl Degrees {
     /// guarantees 0–360° under normal operation; a value above 360° indicates
     /// a corrupted I2C read (enable the `crc` feature to detect this reliably).
     #[inline]
-    pub(crate) fn from_raw(raw: u16) -> Option<Self> {
+    pub fn from_raw(raw: u16) -> Option<Self> {
         let integer = ((raw >> Self::INT_SHIFT) & Self::INT_MASK) as f32;
         let fraction = (raw & Self::FRAC_MASK) as f32 * Self::FRAC_SCALE;
         let candidate = Self(integer + fraction);
@@ -1095,6 +1236,28 @@ impl Degrees {
             );
             None
         }
+    }
+}
+
+#[cfg(feature = "libm")]
+impl Degrees {
+    /// Convert a physical angle back to the raw 16-bit 9.4 fixed-point register value.
+    ///
+    /// Inverse of [`Degrees::from_raw`]; follows the 9.4 fixed-point encoding
+    /// described in datasheet §6.5.2.3, Equation 14.
+    /// Formula: `raw = round(degrees × 16)`.
+    ///
+    /// Returns `None` if `self` is non-finite, negative, or above 360°.
+    #[inline]
+    pub fn to_raw(self) -> Option<u16> {
+        if !self.0.is_finite() || self.0 < 0.0 || self.0 > 360.0 {
+            return None;
+        }
+        let rounded = libm::roundf(self.0 * 16.0);
+        if rounded > 5760.0 {
+            return None;
+        }
+        Some(rounded as u16)
     }
 }
 
@@ -1283,6 +1446,11 @@ impl Crossings {
     #[inline]
     pub const fn saturating_add(self, n: u32) -> Self {
         Self(self.0.saturating_add(n))
+    }
+
+    /// Saturating subtraction: returns `Crossings(0)` instead of wrapping on underflow.
+    pub const fn saturating_sub(self, rhs: Self) -> Self {
+        Self(self.0.saturating_sub(rhs.0))
     }
 }
 
@@ -2577,5 +2745,285 @@ mod tests {
             Crossings(u32::MAX - 1).saturating_add(2),
             Crossings(u32::MAX)
         );
+    }
+
+    // -------------------------------------------------------------------
+    // to_raw() inverse conversions (libm-gated)
+    // -------------------------------------------------------------------
+
+    #[cfg(feature = "libm")]
+    mod to_raw {
+        use super::*;
+
+        // -- MilliTesla round-trips ------------------------------------------
+
+        #[test]
+        fn millitesla_round_trip_zero() {
+            let ranges = [40.0, 80.0, 133.0, 266.0];
+            for r in ranges {
+                let range = MilliTesla(r);
+                assert_eq!(MilliTesla::from_raw(0, range).to_raw(range), Some(0));
+            }
+        }
+
+        #[test]
+        fn millitesla_round_trip_one() {
+            let range = MilliTesla(40.0);
+            assert_eq!(MilliTesla::from_raw(1, range).to_raw(range), Some(1));
+        }
+
+        #[test]
+        fn millitesla_round_trip_neg_one() {
+            let range = MilliTesla(40.0);
+            assert_eq!(MilliTesla::from_raw(-1, range).to_raw(range), Some(-1));
+        }
+
+        #[test]
+        fn millitesla_round_trip_extremes() {
+            let range = MilliTesla(40.0);
+            assert_eq!(
+                MilliTesla::from_raw(i16::MAX, range).to_raw(range),
+                Some(i16::MAX)
+            );
+            assert_eq!(
+                MilliTesla::from_raw(i16::MIN, range).to_raw(range),
+                Some(i16::MIN)
+            );
+        }
+
+        #[test]
+        fn millitesla_round_trip_midpoint() {
+            let range = MilliTesla(80.0);
+            assert_eq!(
+                MilliTesla::from_raw(16384, range).to_raw(range),
+                Some(16384)
+            );
+        }
+
+        #[test]
+        fn millitesla_round_trip_all_ranges() {
+            let ranges = [40.0, 80.0, 133.0, 266.0];
+            let raws: [i16; 6] = [0, 1, -1, i16::MAX, i16::MIN, 16384];
+            for r in ranges {
+                let range = MilliTesla(r);
+                for raw in raws {
+                    assert_eq!(
+                        MilliTesla::from_raw(raw, range).to_raw(range),
+                        Some(raw),
+                        "MilliTesla round-trip failed: raw={raw}, range={r}"
+                    );
+                }
+            }
+        }
+
+        #[test]
+        fn millitesla_overflow_returns_none() {
+            assert_eq!(MilliTesla(100.0).to_raw(MilliTesla(40.0)), None);
+        }
+
+        #[test]
+        fn millitesla_nan_returns_none() {
+            assert_eq!(MilliTesla(f32::NAN).to_raw(MilliTesla(40.0)), None);
+        }
+
+        #[test]
+        fn millitesla_infinity_returns_none() {
+            assert_eq!(MilliTesla(f32::INFINITY).to_raw(MilliTesla(40.0)), None);
+            assert_eq!(MilliTesla(f32::NEG_INFINITY).to_raw(MilliTesla(40.0)), None);
+        }
+
+        #[test]
+        fn millitesla_zero_range_returns_none() {
+            assert_eq!(MilliTesla(0.0).to_raw(MilliTesla(0.0)), None);
+        }
+
+        #[test]
+        fn millitesla_nan_range_returns_none() {
+            assert_eq!(MilliTesla(1.0).to_raw(MilliTesla(f32::NAN)), None);
+        }
+
+        // -- CordicMagnitude round-trips -------------------------------------
+
+        #[test]
+        fn cordic_magnitude_round_trip_key_values() {
+            let range = MilliTesla(80.0);
+            for raw in [0_u8, 1, 128, 181, 255] {
+                assert_eq!(
+                    CordicMagnitude::from_raw(raw, range).to_raw(range),
+                    Some(raw),
+                    "CordicMagnitude round-trip failed: raw={raw}"
+                );
+            }
+        }
+
+        #[test]
+        fn cordic_magnitude_negative_returns_none() {
+            assert_eq!(CordicMagnitude(-1.0).to_raw(MilliTesla(80.0)), None);
+        }
+
+        #[test]
+        fn cordic_magnitude_nan_returns_none() {
+            assert_eq!(CordicMagnitude(f32::NAN).to_raw(MilliTesla(80.0)), None);
+        }
+
+        #[test]
+        fn cordic_magnitude_zero_range_returns_none() {
+            assert_eq!(CordicMagnitude(1.0).to_raw(MilliTesla(0.0)), None);
+        }
+
+        // -- Celsius round-trips ---------------------------------------------
+
+        #[test]
+        fn celsius_round_trip_reference_point() {
+            // raw = 17508 → 25°C
+            assert_eq!(Celsius::from_raw(17508).to_raw(), Some(17508));
+        }
+
+        #[test]
+        fn celsius_round_trip_zero() {
+            assert_eq!(Celsius::from_raw(0).to_raw(), Some(0));
+        }
+
+        #[test]
+        fn celsius_round_trip_extremes() {
+            assert_eq!(Celsius::from_raw(i16::MIN).to_raw(), Some(i16::MIN));
+            assert_eq!(Celsius::from_raw(i16::MAX).to_raw(), Some(i16::MAX));
+        }
+
+        #[test]
+        fn celsius_nan_returns_none() {
+            assert_eq!(Celsius(f32::NAN).to_raw(), None);
+        }
+
+        #[test]
+        fn celsius_infinity_returns_none() {
+            assert_eq!(Celsius(f32::INFINITY).to_raw(), None);
+            assert_eq!(Celsius(f32::NEG_INFINITY).to_raw(), None);
+        }
+
+        // -- Degrees round-trips ---------------------------------------------
+
+        #[test]
+        fn degrees_round_trip_zero() {
+            assert_eq!(Degrees::from_raw(0x0000).unwrap().to_raw(), Some(0x0000));
+        }
+
+        #[test]
+        fn degrees_round_trip_180() {
+            assert_eq!(Degrees::from_raw(0x0B40).unwrap().to_raw(), Some(0x0B40));
+        }
+
+        #[test]
+        fn degrees_round_trip_360() {
+            assert_eq!(Degrees::from_raw(0x1680).unwrap().to_raw(), Some(0x1680));
+        }
+
+        #[test]
+        fn degrees_round_trip_fractional() {
+            // 90.5° → (90 << 4) | 8 = 0x05A8
+            assert_eq!(Degrees::from_raw(0x05A8).unwrap().to_raw(), Some(0x05A8));
+        }
+
+        #[test]
+        fn degrees_negative_returns_none() {
+            assert_eq!(Degrees(-1.0).to_raw(), None);
+        }
+
+        #[test]
+        fn degrees_above_360_returns_none() {
+            assert_eq!(Degrees(361.0).to_raw(), None);
+        }
+
+        #[test]
+        fn degrees_nan_returns_none() {
+            assert_eq!(Degrees(f32::NAN).to_raw(), None);
+        }
+
+        #[test]
+        fn degrees_infinity_returns_none() {
+            assert_eq!(Degrees(f32::INFINITY).to_raw(), None);
+        }
+    }
+
+    // -------------------------------------------------------------------
+    // Exhaustive round-trip verification (Unit 7)
+    //
+    // Verifies `from_raw(x).to_raw() == Some(x)` for ALL valid register
+    // values across all hardware ranges. Any f32 precision issue must be
+    // documented, not silently masked.
+    // -------------------------------------------------------------------
+
+    #[cfg(feature = "libm")]
+    mod exhaustive_round_trip {
+        use super::*;
+
+        #[test]
+        fn millitesla_exhaustive_round_trip() {
+            let ranges = [
+                MilliTesla(40.0),
+                MilliTesla(80.0),
+                MilliTesla(133.0),
+                MilliTesla(266.0),
+            ];
+            for range in ranges {
+                for raw in i16::MIN..=i16::MAX {
+                    let mt = MilliTesla::from_raw(raw, range);
+                    assert_eq!(
+                        mt.to_raw(range),
+                        Some(raw),
+                        "MilliTesla round-trip failed: raw={raw}, range={}",
+                        range.0,
+                    );
+                }
+            }
+        }
+
+        #[test]
+        fn cordic_magnitude_exhaustive_round_trip() {
+            let ranges = [
+                MilliTesla(40.0),
+                MilliTesla(80.0),
+                MilliTesla(133.0),
+                MilliTesla(266.0),
+            ];
+            for range in ranges {
+                for raw in 0..=u8::MAX {
+                    let cm = CordicMagnitude::from_raw(raw, range);
+                    assert_eq!(
+                        cm.to_raw(range),
+                        Some(raw),
+                        "CordicMagnitude round-trip failed: raw={raw}, range={}",
+                        range.0,
+                    );
+                }
+            }
+        }
+
+        #[test]
+        fn celsius_exhaustive_round_trip() {
+            for raw in i16::MIN..=i16::MAX {
+                let c = Celsius::from_raw(raw);
+                assert_eq!(
+                    c.to_raw(),
+                    Some(raw),
+                    "Celsius round-trip failed: raw={raw}, celsius={}",
+                    c.0,
+                );
+            }
+        }
+
+        #[test]
+        fn degrees_exhaustive_round_trip() {
+            for raw in 0u16..=0x1680 {
+                if let Some(d) = Degrees::from_raw(raw) {
+                    assert_eq!(
+                        d.to_raw(),
+                        Some(raw),
+                        "Degrees round-trip failed: raw=0x{raw:04X}, degrees={}",
+                        d.0,
+                    );
+                }
+            }
+        }
     }
 }

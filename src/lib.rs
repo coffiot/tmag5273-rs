@@ -159,8 +159,9 @@ pub use rotation::{Cordic, CordicTracker, RotationTracker, TrackingMode, ZeroCro
 pub use types::{
     AngleEnable, AngleReading, Axis, Celsius, ConversionAverage, ConversionStatus, CordicMagnitude,
     Crossings, Degrees, DeviceStatus, DeviceVariant, Diagnostics, I2cReadMode, InterruptMode,
-    InterruptState, MagneticChannel, MagneticGainChannel, MagneticReading, MagneticTempCoefficient,
-    MagneticThresholdDirection, MicrosIsr, MicrosRange, MilliTesla, NoDelay, OperatingMode,
-    PoleCount, PowerNoiseMode, Range, Rpm, SensorReading, SignedDegrees, SleepTime,
-    TempThresholdConfig, ThresholdCrossingCount, TriggerMode, WAKE_DELAY, WAKE_RETRY_DELAY,
+    InterruptState, Lsb, MagneticChannel, MagneticGainChannel, MagneticReading,
+    MagneticTempCoefficient, MagneticThresholdDirection, MicrosIsr, MicrosRange, MilliTesla,
+    NoDelay, OperatingMode, PoleCount, PowerNoiseMode, Range, Rpm, SensorReading, SignedDegrees,
+    SleepTime, TempThresholdConfig, ThresholdCrossingCount, TriggerMode, WAKE_DELAY,
+    WAKE_RETRY_DELAY,
 };

@@ -6,10 +6,10 @@
 use crate::error::ConfigError;
 use crate::register;
 use crate::types::{
-    AngleEnable, ConversionAverage, I2cReadMode, InterruptMode, InterruptState, MagneticChannel,
-    MagneticGainChannel, MagneticTempCoefficient, MagneticThresholdDirection, MicrosIsr,
-    OperatingMode, PowerNoiseMode, Range, SleepTime, TempThresholdConfig, ThresholdCrossingCount,
-    TriggerMode,
+    AngleEnable, ConversionAverage, I2cReadMode, InterruptMode, InterruptState, Lsb,
+    MagneticChannel, MagneticGainChannel, MagneticTempCoefficient, MagneticThresholdDirection,
+    MicrosIsr, MilliTesla, OperatingMode, PowerNoiseMode, Range, SleepTime, TempThresholdConfig,
+    ThresholdCrossingCount, TriggerMode,
 };
 
 /// Validated device configuration for the TMAG5273.
@@ -410,6 +410,69 @@ impl_try_from_u8!(ThresholdHysteresis {
     1 => SymmetricBand,
 });
 
+impl ThresholdHysteresis {
+    /// Decode a threshold register LSB back to milliTesla.
+    ///
+    /// The threshold registers share the same 8-bit scale as the CORDIC
+    /// magnitude register: 1 LSB = `range / 128` mT (datasheet §8.1.5–§8.1.7).
+    ///
+    /// - [`LimitCross`](Self::LimitCross): full signed 8-bit → mT (preserves sign)
+    /// - [`SymmetricBand`](Self::SymmetricBand): masks to 7 bits → mT (always ≥ 0,
+    ///   represents the ± band width around zero)
+    ///
+    /// Caller must pass the correct per-axis range: `range_xy` for X/Y axes,
+    /// `range_z` for Z axis (these may differ by variant — see
+    /// [`DeviceVariant::range_xy`](crate::types::DeviceVariant::range_xy) and
+    /// [`DeviceVariant::range_z`](crate::types::DeviceVariant::range_z)).
+    #[inline]
+    pub fn decode_threshold(&self, lsb: Lsb, range: MilliTesla) -> MilliTesla {
+        let raw = match self {
+            Self::LimitCross => lsb.0 as f32,
+            Self::SymmetricBand => (lsb.0 as u8 & register::LSB_7BIT_MASK) as f32,
+        };
+        MilliTesla(raw * range.mt_per_lsb())
+    }
+}
+
+#[cfg(feature = "libm")]
+impl ThresholdHysteresis {
+    /// Encode a milliTesla value to a threshold register LSB for this mode.
+    ///
+    /// Operation order: `round(scaled_mT) + margin`, then clamp to mode range.
+    ///
+    /// - [`LimitCross`](Self::LimitCross): `clamp(round(mT × 128 / range) + margin, −128, 127)`.
+    ///   Negative margin is valid (shifts threshold toward zero).
+    /// - [`SymmetricBand`](Self::SymmetricBand): `clamp(round(|mT| × 128 / range) + margin, 0, 127)`.
+    ///   Returns `None` if `margin < 0` (band width cannot be negative).
+    ///
+    /// Returns `None` for NaN, infinity, or zero-range inputs.
+    ///
+    /// Clamping to register bounds is intentional domain policy — the caller
+    /// requests the closest representable threshold. The hardware register
+    /// would saturate identically. See datasheet §8.1.5–§8.1.7.
+    #[inline]
+    pub fn encode_threshold(&self, mt: MilliTesla, range: MilliTesla, margin: i8) -> Option<Lsb> {
+        if !mt.0.is_finite() || !range.0.is_finite() || range.0 == 0.0 {
+            return None;
+        }
+        match self {
+            Self::LimitCross => {
+                let scaled = libm::roundf(mt.0 * range.lsb_per_mt()) as i32;
+                let with_margin = scaled + i32::from(margin);
+                Some(Lsb(with_margin.clamp(-128, 127) as i8))
+            }
+            Self::SymmetricBand => {
+                if margin < 0 {
+                    return None;
+                }
+                let scaled = libm::roundf(mt.abs().0 * range.lsb_per_mt()) as i32;
+                let with_margin = scaled + i32::from(margin);
+                Some(Lsb(with_margin.clamp(0, 127) as i8))
+            }
+        }
+    }
+}
+
 /// Per-axis threshold configuration for magnetic field and temperature.
 ///
 /// Threshold values are signed 8-bit integers in sensor-native units.
@@ -420,11 +483,11 @@ impl_try_from_u8!(ThresholdHysteresis {
 #[cfg_attr(feature = "defmt", derive(defmt::Format))]
 pub struct ThresholdConfig {
     /// X-axis threshold in sensor-native units (each LSB ≈ range / 128 mT).
-    pub x: i8,
+    pub x: Lsb,
     /// Y-axis threshold in sensor-native units (each LSB ≈ range / 128 mT).
-    pub y: i8,
+    pub y: Lsb,
     /// Z-axis threshold in sensor-native units (each LSB ≈ range / 128 mT).
-    pub z: i8,
+    pub z: Lsb,
     /// Temperature threshold code. Valid codes are enforced by the
     /// [`TempThresholdConfig`](crate::TempThresholdConfig) type:
     /// `0x00` (disabled) or `0x1A`–`0x34` (≈ −41 °C to ≈ 170 °C, ~8 °C/LSB).
@@ -457,14 +520,59 @@ pub struct ThresholdConfig {
 impl Default for ThresholdConfig {
     fn default() -> Self {
         Self {
-            x: 0,
-            y: 0,
-            z: 0,
+            x: Lsb(0),
+            y: Lsb(0),
+            z: Lsb(0),
             temperature: TempThresholdConfig::DISABLED,
             hysteresis: ThresholdHysteresis::LimitCross,
             crossing_count: ThresholdCrossingCount::One,
             direction: MagneticThresholdDirection::Above,
         }
+    }
+}
+
+#[cfg(feature = "libm")]
+impl ThresholdConfig {
+    /// Build threshold configuration from milliTesla baselines.
+    ///
+    /// Encodes each axis using [`ThresholdHysteresis::encode_threshold`]:
+    /// X and Y with `range_xy`, Z with `range_z`.
+    ///
+    /// `temperature` is a pre-encoded [`TempThresholdConfig`] (pass-through,
+    /// not converted from °C).
+    ///
+    /// Returns `None` if any axis encoding fails (e.g., negative `margin`
+    /// with [`ThresholdHysteresis::SymmetricBand`]).
+    ///
+    /// `range_xy` and `range_z` should come from
+    /// [`DeviceVariant::range_xy`](crate::types::DeviceVariant::range_xy) and
+    /// [`DeviceVariant::range_z`](crate::types::DeviceVariant::range_z).
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "mirrors ThresholdConfig fields 1:1 — a builder would add complexity without value"
+    )]
+    pub fn from_mt(
+        baselines: [MilliTesla; 3],
+        range_xy: MilliTesla,
+        range_z: MilliTesla,
+        margin: i8,
+        hysteresis: ThresholdHysteresis,
+        direction: MagneticThresholdDirection,
+        crossing_count: ThresholdCrossingCount,
+        temperature: TempThresholdConfig,
+    ) -> Option<Self> {
+        let x = hysteresis.encode_threshold(baselines[0], range_xy, margin)?;
+        let y = hysteresis.encode_threshold(baselines[1], range_xy, margin)?;
+        let z = hysteresis.encode_threshold(baselines[2], range_z, margin)?;
+        Some(Self {
+            x,
+            y,
+            z,
+            temperature,
+            hysteresis,
+            crossing_count,
+            direction,
+        })
     }
 }
 
@@ -755,5 +863,221 @@ mod tests {
             .z_range(Range::Low)
             .build();
         assert!(result.is_ok());
+    }
+
+    // -- ThresholdHysteresis::decode_threshold ---------------------------------
+
+    #[test]
+    fn decode_threshold_limit_cross_zero_lsb() {
+        let mt = ThresholdHysteresis::LimitCross.decode_threshold(Lsb(0), MilliTesla(80.0));
+        assert_eq!(mt, MilliTesla(0.0));
+    }
+
+    #[test]
+    fn decode_threshold_limit_cross_positive_max() {
+        // 127 × 80 / 128 = 79.375
+        let mt = ThresholdHysteresis::LimitCross.decode_threshold(Lsb(127), MilliTesla(80.0));
+        assert_eq!(mt, MilliTesla(79.375));
+    }
+
+    #[test]
+    fn decode_threshold_limit_cross_negative_max() {
+        // -128 × 80 / 128 = -80.0
+        let mt = ThresholdHysteresis::LimitCross.decode_threshold(Lsb(-128), MilliTesla(80.0));
+        assert_eq!(mt, MilliTesla(-80.0));
+    }
+
+    #[test]
+    fn decode_threshold_symmetric_band_positive_max() {
+        // 127 & 0x7F = 127; 127 × 80 / 128 = 79.375
+        let mt = ThresholdHysteresis::SymmetricBand.decode_threshold(Lsb(127), MilliTesla(80.0));
+        assert_eq!(mt, MilliTesla(79.375));
+    }
+
+    #[test]
+    fn decode_threshold_symmetric_band_masks_sign_bit() {
+        // -128_i8 = 0x80; 0x80 & 0x7F = 0 → result is 0.0 mT
+        let mt = ThresholdHysteresis::SymmetricBand.decode_threshold(Lsb(-128), MilliTesla(80.0));
+        assert_eq!(mt, MilliTesla(0.0));
+    }
+
+    #[test]
+    fn decode_threshold_zero_range() {
+        // 1 × 0.0 / 128 = 0.0
+        let mt = ThresholdHysteresis::LimitCross.decode_threshold(Lsb(1), MilliTesla(0.0));
+        assert_eq!(mt, MilliTesla(0.0));
+    }
+
+    // -- ThresholdHysteresis::encode_threshold --------------------------------
+
+    #[cfg(feature = "libm")]
+    mod encode_threshold_tests {
+        use super::*;
+
+        #[test]
+        fn limit_cross_zero_mt() {
+            let r = ThresholdHysteresis::LimitCross.encode_threshold(
+                MilliTesla(0.0),
+                MilliTesla(80.0),
+                0,
+            );
+            assert_eq!(r, Some(Lsb(0)));
+        }
+
+        #[test]
+        fn limit_cross_half_range() {
+            // 40 / 80 × 128 = 64
+            let r = ThresholdHysteresis::LimitCross.encode_threshold(
+                MilliTesla(40.0),
+                MilliTesla(80.0),
+                0,
+            );
+            assert_eq!(r, Some(Lsb(64)));
+        }
+
+        #[test]
+        fn symmetric_band_abs_with_margin() {
+            // |−5| / 80 × 128 = 8, +2 = 10
+            let r = ThresholdHysteresis::SymmetricBand.encode_threshold(
+                MilliTesla(-5.0),
+                MilliTesla(80.0),
+                2,
+            );
+            assert_eq!(r, Some(Lsb(10)));
+        }
+
+        #[test]
+        fn limit_cross_clamps_above_127() {
+            // 80/80 × 128 = 128, +5 = 133 → clamped to 127
+            let r = ThresholdHysteresis::LimitCross.encode_threshold(
+                MilliTesla(80.0),
+                MilliTesla(80.0),
+                5,
+            );
+            assert_eq!(r, Some(Lsb(127)));
+        }
+
+        #[test]
+        fn symmetric_band_negative_margin_returns_none() {
+            let r = ThresholdHysteresis::SymmetricBand.encode_threshold(
+                MilliTesla(1.0),
+                MilliTesla(80.0),
+                -1,
+            );
+            assert_eq!(r, None);
+        }
+
+        #[test]
+        fn zero_range_returns_none() {
+            let r = ThresholdHysteresis::LimitCross.encode_threshold(
+                MilliTesla(1.0),
+                MilliTesla(0.0),
+                0,
+            );
+            assert_eq!(r, None);
+        }
+
+        #[test]
+        fn nan_returns_none() {
+            let r = ThresholdHysteresis::LimitCross.encode_threshold(
+                MilliTesla(f32::NAN),
+                MilliTesla(80.0),
+                0,
+            );
+            assert_eq!(r, None);
+        }
+
+        #[test]
+        fn round_trip_limit_cross() {
+            let mt = MilliTesla(10.0);
+            let range = MilliTesla(80.0);
+            let lsb = ThresholdHysteresis::LimitCross
+                .encode_threshold(mt, range, 0)
+                .unwrap();
+            let decoded = ThresholdHysteresis::LimitCross.decode_threshold(lsb, range);
+            // Tolerance: ±range/256 = ±0.3125
+            assert!((decoded.0 - mt.0).abs() <= 0.3125);
+        }
+    }
+
+    // -- ThresholdConfig::from_mt ---------------------------------------------
+
+    #[cfg(feature = "libm")]
+    mod from_mt_tests {
+        use super::*;
+
+        #[test]
+        fn all_zeros() {
+            let cfg = ThresholdConfig::from_mt(
+                [MilliTesla(0.0), MilliTesla(0.0), MilliTesla(0.0)],
+                MilliTesla(80.0),
+                MilliTesla(80.0),
+                0,
+                ThresholdHysteresis::LimitCross,
+                MagneticThresholdDirection::Above,
+                ThresholdCrossingCount::One,
+                TempThresholdConfig::DISABLED,
+            )
+            .unwrap();
+            assert_eq!(cfg.x, Lsb(0));
+            assert_eq!(cfg.y, Lsb(0));
+            assert_eq!(cfg.z, Lsb(0));
+        }
+
+        #[test]
+        fn mixed_axes_with_margin() {
+            // x: 40/80 × 128 = 64, +5 = 69
+            // y: 20/80 × 128 = 32, +5 = 37
+            // z: 10/80 × 128 = 16, +5 = 21
+            let cfg = ThresholdConfig::from_mt(
+                [MilliTesla(40.0), MilliTesla(20.0), MilliTesla(10.0)],
+                MilliTesla(80.0),
+                MilliTesla(80.0),
+                5,
+                ThresholdHysteresis::LimitCross,
+                MagneticThresholdDirection::Above,
+                ThresholdCrossingCount::One,
+                TempThresholdConfig::DISABLED,
+            )
+            .unwrap();
+            assert_eq!(cfg.x, Lsb(69));
+            assert_eq!(cfg.y, Lsb(37));
+            assert_eq!(cfg.z, Lsb(21));
+        }
+
+        #[test]
+        fn symmetric_band_negative_margin_returns_none() {
+            let r = ThresholdConfig::from_mt(
+                [MilliTesla(1.0), MilliTesla(1.0), MilliTesla(1.0)],
+                MilliTesla(80.0),
+                MilliTesla(80.0),
+                -1,
+                ThresholdHysteresis::SymmetricBand,
+                MagneticThresholdDirection::Above,
+                ThresholdCrossingCount::One,
+                TempThresholdConfig::DISABLED,
+            );
+            assert_eq!(r, None);
+        }
+
+        #[test]
+        fn different_xy_z_ranges() {
+            // XY: 10/80 × 128 = 16
+            // Z:  10/40 × 128 = 32
+            let cfg = ThresholdConfig::from_mt(
+                [MilliTesla(10.0), MilliTesla(10.0), MilliTesla(10.0)],
+                MilliTesla(80.0),
+                MilliTesla(40.0),
+                0,
+                ThresholdHysteresis::LimitCross,
+                MagneticThresholdDirection::Above,
+                ThresholdCrossingCount::One,
+                TempThresholdConfig::DISABLED,
+            )
+            .unwrap();
+            assert_eq!(cfg.x, Lsb(16));
+            assert_eq!(cfg.y, Lsb(16));
+            assert_eq!(cfg.z, Lsb(32));
+        }
     }
 }

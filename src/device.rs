@@ -15,7 +15,7 @@ use crate::register;
 use crate::types::{
     AngleEnable, AngleReading, Celsius, ConversionAverage, ConversionStatus, CordicMagnitude,
     Degrees, DeviceStatus, DeviceVariant, Diagnostics, I2cReadMode, InterruptMode, InterruptState,
-    MagneticChannel, MagneticGainChannel, MagneticReading, MagneticTempCoefficient,
+    Lsb, MagneticChannel, MagneticGainChannel, MagneticReading, MagneticTempCoefficient,
     MagneticThresholdDirection, MicrosIsr, MilliTesla, NoDelay, OperatingMode, PowerNoiseMode,
     Range, SensorReading, SleepTime, TempThresholdConfig, ThresholdCrossingCount, TriggerMode,
     WAKE_DELAY, WAKE_RETRY_DELAY,
@@ -157,7 +157,7 @@ impl<I2C: I2c> Tmag5273<I2C, Unconfigured> {
     /// Returns [`Error::InvalidRegisterValue`] if the version byte is not
     /// 1 or 2, or the address does not match any known family (A–D).
     pub fn detect(mut i2c: I2C, address: u8) -> Result<Self, (Error<I2C::Error>, I2C)> {
-        let address = address & 0x7F;
+        let address = address & register::LSB_7BIT_MASK;
 
         // Wake the sensor (may NACK if already awake — that's fine).
         let _ = i2c.write(address, &[]);
@@ -239,7 +239,7 @@ impl<I2C: I2c> Tmag5273<I2C, Unconfigured> {
     /// Use this when the sensor's address has been changed from the factory
     /// default. Uses [`NoDelay`] as the delay backend.
     ///
-    /// The address is masked to 7 bits (`address & 0x7F`).
+    /// The address is masked to 7 bits (`address & register::LSB_7BIT_MASK`).
     ///
     /// # Panics (debug only)
     ///
@@ -265,7 +265,7 @@ impl<I2C: I2c, D: DelayNs> Tmag5273<I2C, Unconfigured, D> {
 
     /// Create with delay backend and custom I2C address.
     ///
-    /// The address is masked to 7 bits (`address & 0x7F`).
+    /// The address is masked to 7 bits (`address & register::LSB_7BIT_MASK`).
     ///
     /// # Panics (debug only)
     ///
@@ -277,7 +277,7 @@ impl<I2C: I2c, D: DelayNs> Tmag5273<I2C, Unconfigured, D> {
         address: u8,
         delay: D,
     ) -> Self {
-        let addr = address & 0x7F;
+        let addr = address & register::LSB_7BIT_MASK;
         debug_assert!(
             (register::I2C_ADDRESS_MIN..=register::I2C_ADDRESS_MAX).contains(&addr),
             "I2C address 0x{addr:02X} is in the reserved range (valid: 0x08–0x77)"
@@ -1176,9 +1176,9 @@ impl<I2C: I2c, D: DelayNs> Tmag5273<I2C, Configured, D> {
         config: &crate::config::ThresholdConfig,
     ) -> Result<(), Error<I2C::Error>> {
         // Per-axis thresholds: direct register writes (full-byte fields).
-        self.write_register(register::X_THR_CONFIG, config.x as u8)?;
-        self.write_register(register::Y_THR_CONFIG, config.y as u8)?;
-        self.write_register(register::Z_THR_CONFIG, config.z as u8)?;
+        self.write_register(register::X_THR_CONFIG, config.x.into())?;
+        self.write_register(register::Y_THR_CONFIG, config.y.into())?;
+        self.write_register(register::Z_THR_CONFIG, config.z.into())?;
 
         // Temperature threshold: upper 7 bits of T_CONFIG, preserve T_CH_EN.
         let t_reg = self.read_register(register::T_CONFIG)?;
@@ -1871,33 +1871,33 @@ impl<I2C: I2c, D: DelayNs> Tmag5273<I2C, Configured, D> {
     /// # Errors
     ///
     /// Returns [`Error::I2c`] on bus communication failure.
-    pub fn get_x_threshold(&mut self) -> Result<i8, Error<I2C::Error>> {
+    pub fn get_x_threshold(&mut self) -> Result<Lsb, Error<I2C::Error>> {
         let raw = self.read_register(register::X_THR_CONFIG)?;
-        Ok(raw as i8)
+        Ok(Lsb(raw as i8))
     }
 
     /// Read the Y-axis threshold value from register `Y_THR_CONFIG`.
     ///
-    /// Returns the full register byte interpreted as a signed threshold.
+    /// Returns the full register byte as an [`Lsb`] threshold value.
     ///
     /// # Errors
     ///
     /// Returns [`Error::I2c`] on bus communication failure.
-    pub fn get_y_threshold(&mut self) -> Result<i8, Error<I2C::Error>> {
+    pub fn get_y_threshold(&mut self) -> Result<Lsb, Error<I2C::Error>> {
         let raw = self.read_register(register::Y_THR_CONFIG)?;
-        Ok(raw as i8)
+        Ok(Lsb(raw as i8))
     }
 
     /// Read the Z-axis threshold value from register `Z_THR_CONFIG`.
     ///
-    /// Returns the full register byte interpreted as a signed threshold.
+    /// Returns the full register byte as an [`Lsb`] threshold value.
     ///
     /// # Errors
     ///
     /// Returns [`Error::I2c`] on bus communication failure.
-    pub fn get_z_threshold(&mut self) -> Result<i8, Error<I2C::Error>> {
+    pub fn get_z_threshold(&mut self) -> Result<Lsb, Error<I2C::Error>> {
         let raw = self.read_register(register::Z_THR_CONFIG)?;
-        Ok(raw as i8)
+        Ok(Lsb(raw as i8))
     }
 
     /// Read the magnetic gain adjustment value from register
@@ -2115,11 +2115,7 @@ mod tests {
 
     use crate::config::{CalibrationConfig, ConfigBuilder, InterruptConfig, ThresholdConfig};
     use crate::register;
-    use crate::types::{
-        AngleEnable, ConversionAverage, CordicMagnitude, Degrees, InterruptMode, InterruptState,
-        MagneticChannel, MagneticGainChannel, MagneticTempCoefficient, MagneticThresholdDirection,
-        OperatingMode, PowerNoiseMode, Range, SleepTime, ThresholdCrossingCount, TriggerMode,
-    };
+    use crate::types::*;
     use embedded_hal_mock::eh1::delay::{CheckedDelay, Transaction as DelayTransaction};
     use embedded_hal_mock::eh1::i2c::{Mock as I2cMock, Transaction as I2cTransaction};
 
@@ -2560,9 +2556,9 @@ mod tests {
 
         sensor
             .set_thresholds(&ThresholdConfig {
-                x: 5,
-                y: -5,
-                z: 10,
+                x: Lsb(5),
+                y: Lsb(-5),
+                z: Lsb(10),
                 temperature: TempThresholdConfig::from_code(0x1A).unwrap(),
                 hysteresis: crate::config::ThresholdHysteresis::SymmetricBand,
                 crossing_count: ThresholdCrossingCount::Four,
@@ -4958,9 +4954,9 @@ mod tests {
         let i2c = I2cMock::new(&expectations);
         let sensor = Tmag5273::new(i2c, DeviceVariant::B1);
         let mut sensor = sensor.init(&default_config()).unwrap();
-        assert_eq!(sensor.get_x_threshold().unwrap(), 127);
-        assert_eq!(sensor.get_y_threshold().unwrap(), -128);
-        assert_eq!(sensor.get_z_threshold().unwrap(), 0);
+        assert_eq!(sensor.get_x_threshold().unwrap(), Lsb(127));
+        assert_eq!(sensor.get_y_threshold().unwrap(), Lsb(-128));
+        assert_eq!(sensor.get_z_threshold().unwrap(), Lsb(0));
         sensor.into_inner().done();
     }
 
@@ -5325,9 +5321,9 @@ mod tests {
 
         sensor
             .set_thresholds(&ThresholdConfig {
-                x: 42,
-                y: -10,
-                z: 100,
+                x: Lsb(42),
+                y: Lsb(-10),
+                z: Lsb(100),
                 temperature: TempThresholdConfig::from_code(0x28).unwrap(),
                 hysteresis: crate::config::ThresholdHysteresis::LimitCross,
                 crossing_count: ThresholdCrossingCount::Four,
@@ -5335,9 +5331,9 @@ mod tests {
             })
             .unwrap();
 
-        assert_eq!(sensor.get_x_threshold().unwrap(), 42);
-        assert_eq!(sensor.get_y_threshold().unwrap(), -10);
-        assert_eq!(sensor.get_z_threshold().unwrap(), 100);
+        assert_eq!(sensor.get_x_threshold().unwrap(), Lsb(42));
+        assert_eq!(sensor.get_y_threshold().unwrap(), Lsb(-10));
+        assert_eq!(sensor.get_z_threshold().unwrap(), Lsb(100));
         assert_eq!(sensor.get_temp_threshold().unwrap().code(), 0x28);
         assert_eq!(
             sensor.get_threshold_hysteresis().unwrap(),

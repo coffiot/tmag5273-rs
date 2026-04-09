@@ -325,6 +325,19 @@ pub(crate) const I2C_ADDRESS_MIN: u8 = 0x08;
 /// the I2C specification.
 pub(crate) const I2C_ADDRESS_MAX: u8 = 0x77;
 
+/// Lower 7 bits mask (`0b0111_1111`): isolates bits [6:0], clears bit 7.
+///
+/// The datasheet uses this bit width in two register families:
+///
+/// - **`THR_HYST = 1h`** (§7.4.1, DEVICE_CONFIG_2 §8.1.2): *"Takes the
+///   7 LSB bits of the x_THR_CONFIG register to create two opposite
+///   magnetic thresholds of equal magnitude."*
+///
+/// - **`I2C_ADDRESS`** (§8.1.13): *"There are 7-bits to select 128
+///   different addresses."* The `embedded-hal` I2C trait uses 7-bit
+///   addresses; this mask strips any stray bit 7 from user-supplied values.
+pub(crate) const LSB_7BIT_MASK: u8 = 0x7F;
+
 // ---------------------------------------------------------------------------
 // 0x0D — DEVICE_ID (read-only)
 // ---------------------------------------------------------------------------
