@@ -93,7 +93,7 @@ let config = ConfigBuilder::new()
     .conversion_average(ConversionAverage::X4)
     .xy_range(Range::High)                            // default: ±80 mT (v1)
     .z_range(Range::High)
-    .power_noise_mode(PowerNoiseMode::LowNoise)
+    .power_noise_mode(PowerNoiseMode::LowNoise)        // default: LowActiveCurrent
     .magnetic_temp_coefficient(MagneticTempCoefficient::NdBFe)
     .build()?;
 ```
@@ -127,7 +127,7 @@ duration (useful for polling delays or scheduling):
 use tmag5273::{ConversionAverage, MagneticChannel, MicrosIsr};
 
 let t: MicrosIsr = ConversionAverage::X8.conversion_time(MagneticChannel::XYZ, true);
-// t.0 is micros_isreconds
+// t.0 is microseconds
 ```
 
 ## Reading Data
@@ -171,8 +171,6 @@ Compute angle and magnitude for all three canonical planes from any
 `MagneticReading` — no hardware CORDIC configuration needed:
 
 ```rust,no_run
-use tmag5273::{ConfigBuilder, MagneticReading};
-
 let reading = sensor.read_magnetic()?;
 let planes = reading.plane_angles();
 
@@ -230,6 +228,67 @@ if let Some(rec) = cal.recommend() {
 
 The calibrator uses Welford's online algorithm for numerically stable
 variance on f32. Fixed-size, zero heap allocation.
+
+### Rotation Tracking (RPM / IPI)
+
+`RotationTracker<const POLES_COUNT: u8, M: TrackingMode>` is a const-generic
+rotation tracker with two algorithm modes selected at compile time:
+
+| Mode | Pole counts | Input | Returns from `update()` |
+| --- | --- | --- | --- |
+| `Cordic` | **2 only** | `Degrees` from CORDIC engine | `Option<SignedDegrees>` (signed delta) |
+| `ZeroCrossing` | 2, 3, or 4 | `MilliTesla` (raw axis sample) | `Option<MicrosIsr>` (IPI on crossing) |
+
+`POLES_COUNT` and `M` are checked at compile time — invalid combinations
+(e.g. `RotationTracker::<4, Cordic>`) fail to compile.
+
+**CORDIC mode** — diametrically magnetized 2-pole magnets only (TI SBAA463A §3.2).
+Multi-pole magnets produce phantom RPM and undercounting:
+
+```rust,no_run
+use tmag5273::{CordicTracker, MicrosIsr};
+
+let mut tracker = CordicTracker::new(); // = RotationTracker::<2, Cordic>::new()
+
+loop {
+    let angle = sensor.read_angle()?;
+    let elapsed = MicrosIsr(/* time since last update */);
+    let _delta = tracker.update(angle.angle, elapsed);
+
+    if let Some(rpm) = tracker.rpm() {
+        // rpm.0 — revolutions per minute (f32)
+    }
+}
+```
+
+**Zero-crossing mode** — required for multi-pole ring magnets (Gicar 4-pole,
+3-pole). Uses a Schmitt trigger on a single raw axis with hysteresis to reject
+noise. Returns the inter-pulse interval (IPI) when a crossing is detected:
+
+```rust,no_run
+use tmag5273::{RotationTracker, ZeroCrossing, MilliTesla, MicrosIsr};
+
+// 4-pole Gicar ring magnet, H ≈ 10% of peak-to-peak swing
+let mut tracker = RotationTracker::<4, ZeroCrossing>::new(MilliTesla(0.8));
+
+loop {
+    let reading = sensor.read_magnetic()?;
+    let elapsed = MicrosIsr(/* time since last update */);
+
+    if let Some(x) = reading.x {
+        if let Some(ipi) = tracker.update(x, elapsed) {
+            // ipi.0 — microseconds between this and the previous pole transition
+        }
+    }
+
+    if let Some(rpm) = tracker.rpm() {
+        // average RPM since construction or last reset()
+    }
+}
+```
+
+Both modes share the same query API: `rpm()`, `cumulative_revolutions()`,
+`reset()`, `max_abs_delta()`. Sizes: `Cordic` 24 bytes, `ZeroCrossing` 20 bytes.
 
 ### Coherent Burst Read
 
@@ -423,19 +482,15 @@ let sensor_b = Tmag5273::new(RefCellDevice::new(&bus), DeviceVariant::C1);
 
 ```bash
 # Unit tests (no hardware required)
-cargo test -p tmag5273                     # 265 tests (default features)
-cargo test -p tmag5273 --features libm     # 310 tests (+ angle/calibrator)
-cargo test -p tmag5273 --features crc      # 257 tests (+ CRC read paths)
+cargo test -p tmag5273                     # 349 tests (default features)
+cargo test -p tmag5273 --features libm     # 450 tests (+ angle/calibrator/rotation)
+cargo test -p tmag5273 --features crc      # 341 tests (+ CRC read paths)
 
 # Build docs with feature annotations
 cargo doc -p tmag5273 --all-features --open
 
 # Verify bare-metal compilation
 cargo check -p tmag5273 --target thumbv7em-none-eabihf
-
-# HIL tests (requires ESP32-S3 + TMAG5273 B1 on GPIO8/GPIO9)
-make hil-test                              # 35 non-interactive tests
-make hil-test-interactive                  # 37 tests (+ operator with magnet)
 ```
 
 ## Design

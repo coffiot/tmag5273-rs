@@ -31,7 +31,7 @@ RESET := \033[0m
 #	Phony declarations
 # --------------------------------------------------------------------------- #
 
-.PHONY: help test test-all test-crc test-defmt test-minimal lint check \
+.PHONY: help test test-crc test-defmt test-minimal lint check \
         build doc coverage verify clean
 
 # --------------------------------------------------------------------------- #
@@ -42,8 +42,6 @@ RESET := \033[0m
 
 test: ## Run unit tests (~370, all features)
 	cargo test --all-features
-
-test-all: test ## Alias for test (all features)
 
 test-crc: ## Run unit tests with CRC feature only
 	cargo test --features crc

@@ -14,7 +14,9 @@ coverage/
 *.swo
 *~
 *.iml
+.claude/
 .claude.local.md
+CLAUDE.md
 # .cargo/
 .rustup/
 
