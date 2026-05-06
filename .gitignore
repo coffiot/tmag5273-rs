@@ -13,7 +13,6 @@ coverage/
 *.swp
 *.swo
 *~
-.DS_Store
 *.iml
 .claude.local.md
 # .cargo/
