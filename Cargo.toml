@@ -1,9 +1,9 @@
 [package]
 name = "tmag5273"
-version = "0.1.0"
+version = "3.6.9"
 edition = "2024"
-rust-version = "1.93"
-authors = ["CofIoT <info@coffiot.com>"]
+rust-version = "1.94"
+authors = ["CofIoT <dev@coffiot.io>"]
 description = "Platform-agnostic no_std driver for the TI TMAG5273 3-axis Hall-effect sensor"
 documentation = "https://docs.rs/tmag5273"
 repository = "https://github.com/coffiot/tmag5273"

@@ -317,6 +317,25 @@ impl ConversionAverage {
         MicrosIsr(us)
     }
 
+    /// Returns the next-lower averaging level, or `None` if already at `X1`.
+    ///
+    /// Chain: `X32 → X16 → X8 → X4 → X2 → X1 → None`.
+    ///
+    /// Used by auto-commissioning Nyquist validation to find the highest
+    /// averaging level whose effective sample rate satisfies the safety ratio.
+    #[must_use]
+    #[inline]
+    pub const fn lower(self) -> Option<Self> {
+        match self {
+            Self::X32 => Some(Self::X16),
+            Self::X16 => Some(Self::X8),
+            Self::X8 => Some(Self::X4),
+            Self::X4 => Some(Self::X2),
+            Self::X2 => Some(Self::X1),
+            Self::X1 => None,
+        }
+    }
+
     /// Maximum poll count for conversion timeout (2x safety margin over
     /// datasheet max at 400 kHz I2C, ~50 µs per poll).
     pub(crate) const fn max_polls(self) -> u16 {
@@ -2697,6 +2716,34 @@ mod tests {
         assert_eq!(ConversionAverage::X8.max_polls(), 40);
         assert_eq!(ConversionAverage::X16.max_polls(), 70);
         assert_eq!(ConversionAverage::X32.max_polls(), 100);
+    }
+
+    // -- coverage: ConversionAverage::lower step-down chain --------------------
+
+    #[test]
+    fn lower_full_chain() {
+        assert_eq!(ConversionAverage::X32.lower(), Some(ConversionAverage::X16));
+        assert_eq!(ConversionAverage::X16.lower(), Some(ConversionAverage::X8));
+        assert_eq!(ConversionAverage::X8.lower(), Some(ConversionAverage::X4));
+        assert_eq!(ConversionAverage::X4.lower(), Some(ConversionAverage::X2));
+        assert_eq!(ConversionAverage::X2.lower(), Some(ConversionAverage::X1));
+    }
+
+    #[test]
+    fn lower_x1_is_none() {
+        assert_eq!(ConversionAverage::X1.lower(), None);
+    }
+
+    #[test]
+    fn lower_chain_has_exactly_5_steps() {
+        let mut current = ConversionAverage::X32;
+        let mut steps = 0u32;
+        while let Some(next) = current.lower() {
+            steps += 1;
+            current = next;
+        }
+        assert_eq!(steps, 5);
+        assert_eq!(current, ConversionAverage::X1);
     }
 
     // -- coverage: SleepTime::as_micros_isr for all variants ------------------

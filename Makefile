@@ -40,7 +40,7 @@ RESET := \033[0m
 .PHONY: help test test-all test-crc test-defmt test-minimal lint check check-hil check-monitor check-size check-all \
         build build-hil build-monitor build-all doc coverage verify \
         hil-test-non-interactive hil-test-idle-interactive hil-test-spinning-interactive \
-        hil-test-single-magnet hil-test-interactive hil-build monitor size clean
+        hil-test-single-magnet hil-test-interactive hil-build monitor monitor-frother size clean
 
 # --------------------------------------------------------------------------- #
 #	Library targets (no hardware)
@@ -87,9 +87,11 @@ check-hil: ## Verify HIL crate compiles (all feature combos)
 	@printf "$(BOLD)Checking HIL (single-magnet)...$(RESET)\n"
 	@$(ESP_ENV) ( cd $(HIL_DIR) && $(CARGO_ESP) check --release --features single-magnet )
 
-check-monitor: ## Verify monitor crate compiles
-	@printf "$(BOLD)Checking monitor...$(RESET)\n"
-	@$(ESP_ENV) ( cd $(MONITOR_DIR) && $(CARGO_ESP) check --release )
+check-monitor: ## Verify monitor crate compiles (both profiles)
+	@printf "$(BOLD)Checking monitor (gicar)...$(RESET)\n"
+	@$(ESP_ENV) ( cd $(MONITOR_DIR) && $(CARGO_ESP) check --release --features gicar )
+	@printf "$(BOLD)Checking monitor (frother)...$(RESET)\n"
+	@$(ESP_ENV) ( cd $(MONITOR_DIR) && $(CARGO_ESP) check --release --features frother )
 
 check-size: ## Verify size harness compiles
 	@printf "$(BOLD)Checking size harness...$(RESET)\n"
@@ -113,7 +115,7 @@ build-hil: ## Build all HIL test binaries without flashing
 	@$(ESP_ENV) ( cd $(HIL_DIR) && $(CARGO_ESP) build --release --features single-magnet )
 
 build-monitor: ## Build monitor binary without flashing
-	@$(ESP_ENV) ( cd $(MONITOR_DIR) && $(CARGO_ESP) build --release )
+	@$(ESP_ENV) ( cd $(MONITOR_DIR) && $(CARGO_ESP) build --release --features gicar )
 
 build-all: build build-hil build-monitor ## Build everything (driver + HIL + monitor)
 	@printf "\n$(BOLD)$(GREEN)All builds succeeded.$(RESET)\n"
@@ -191,8 +193,11 @@ hil-test-interactive: ## Interactive: run idle + spinning sequentially (prompts 
 	@$(MAKE) hil-test-spinning-interactive
 	@printf "\n$(BOLD)All interactive tests passed.$(RESET)\n"
 
-monitor: ## Flash and run live magnet monitor demo (Ctrl+C to stop)
-	@$(ESP_ENV) ( cd $(MONITOR_DIR) && $(CARGO_ESP) run --release )
+monitor: ## Flash and run monitor — Gicar profile (Ctrl+C to stop)
+	@$(ESP_ENV) ( cd $(MONITOR_DIR) && $(CARGO_ESP) run --release --features gicar )
+
+monitor-frother: ## Flash and run monitor — frother test bench profile
+	@$(ESP_ENV) ( cd $(MONITOR_DIR) && $(CARGO_ESP) run --release --features frother )
 
 # --------------------------------------------------------------------------- #
 #	Housekeeping

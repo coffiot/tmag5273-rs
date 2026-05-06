@@ -454,7 +454,7 @@ make hil-test-interactive                  # 37 tests (+ operator with magnet)
 
 ## Minimum Supported Rust Version
 
-Rust **1.93** (edition 2024).
+Rust **1.94** (edition 2024).
 
 ## License
 
