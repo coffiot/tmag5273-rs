@@ -1,8 +1,8 @@
-# tmag5273 — Build, test, and HIL targets
+# tmag5273 — Build, test, and quality targets
 #
 # Library targets run on the host (no hardware needed).
-# HIL targets require: espup, probe-rs-tools, ESP32-S3 via USB JTAG,
-# TMAG5273 B1 wired to GPIO8 (SDA) / GPIO9 (SCL).
+# Field-test crates (HIL, monitor, size harness) live in a sibling repo:
+# https://github.com/coffiot/tmag5273-field-tests
 
 .DEFAULT_GOAL := help
 
@@ -10,18 +10,12 @@
 #	Config
 # --------------------------------------------------------------------------- #
 
-# Espressif Rust toolchain (override: CARGO_ESP="cargo +nightly" make hil-test)
+# Espressif Rust toolchain — only used by the cross-compile check below.
 CARGO_ESP ?= cargo +esp
 
 # Source the Espressif environment if the export script exists.
 # This adds xtensa-esp32s3-elf-gcc and other ESP tools to PATH.
 ESP_ENV := . $${HOME}/export-esp.sh 2>/dev/null;
-
-HIL_DIR := hil
-MONITOR_DIR := monitor
-
-SIZE_DIR := size
-SIZE_TARGET := xtensa-esp32s3-none-elf
 
 # --------------------------------------------------------------------------- #
 #	ANSI formatting
@@ -37,10 +31,8 @@ RESET := \033[0m
 #	Phony declarations
 # --------------------------------------------------------------------------- #
 
-.PHONY: help test test-all test-crc test-defmt test-minimal lint check check-hil check-monitor check-size check-all \
-        build build-hil build-monitor build-all doc coverage verify \
-        hil-test-non-interactive hil-test-idle-interactive hil-test-spinning-interactive \
-        hil-test-single-magnet hil-test-interactive hil-build monitor monitor-frother size clean
+.PHONY: help test test-all test-crc test-defmt test-minimal lint check \
+        build doc coverage verify clean
 
 # --------------------------------------------------------------------------- #
 #	Library targets (no hardware)
@@ -79,27 +71,6 @@ check: ## Verify driver compiles on ARM, RISC-V and Xtensa (no std/alloc)
 	@printf "$(BOLD)Checking driver (xtensa-esp32s3-none-elf)...$(RESET)\n"
 	@$(ESP_ENV) $(CARGO_ESP) check --target xtensa-esp32s3-none-elf -Zbuild-std=core
 
-check-hil: ## Verify HIL crate compiles (all feature combos)
-	@printf "$(BOLD)Checking HIL (default)...$(RESET)\n"
-	@$(ESP_ENV) ( cd $(HIL_DIR) && $(CARGO_ESP) check --release )
-	@printf "$(BOLD)Checking HIL (interactive)...$(RESET)\n"
-	@$(ESP_ENV) ( cd $(HIL_DIR) && $(CARGO_ESP) check --release --features interactive )
-	@printf "$(BOLD)Checking HIL (single-magnet)...$(RESET)\n"
-	@$(ESP_ENV) ( cd $(HIL_DIR) && $(CARGO_ESP) check --release --features single-magnet )
-
-check-monitor: ## Verify monitor crate compiles (both profiles)
-	@printf "$(BOLD)Checking monitor (gicar)...$(RESET)\n"
-	@$(ESP_ENV) ( cd $(MONITOR_DIR) && $(CARGO_ESP) check --release --features gicar )
-	@printf "$(BOLD)Checking monitor (frother)...$(RESET)\n"
-	@$(ESP_ENV) ( cd $(MONITOR_DIR) && $(CARGO_ESP) check --release --features frother )
-
-check-size: ## Verify size harness compiles
-	@printf "$(BOLD)Checking size harness...$(RESET)\n"
-	@$(ESP_ENV) ( cd $(SIZE_DIR) && $(CARGO_ESP) check --release )
-
-check-all: check check-hil check-monitor check-size ## All compilation checks (driver + HIL + monitor + size)
-	@printf "\n$(BOLD)$(GREEN)All compilation checks passed.$(RESET)\n"
-
 # --------------------------------------------------------------------------- #
 #	Build targets
 # --------------------------------------------------------------------------- #
@@ -109,24 +80,13 @@ check-all: check check-hil check-monitor check-size ## All compilation checks (d
 build: ## Build driver (all features, host target)
 	cargo build --all-features
 
-build-hil: ## Build all HIL test binaries without flashing
-	@$(ESP_ENV) ( cd $(HIL_DIR) && $(CARGO_ESP) build --release )
-	@$(ESP_ENV) ( cd $(HIL_DIR) && $(CARGO_ESP) build --release --features interactive )
-	@$(ESP_ENV) ( cd $(HIL_DIR) && $(CARGO_ESP) build --release --features single-magnet )
-
-build-monitor: ## Build monitor binary without flashing
-	@$(ESP_ENV) ( cd $(MONITOR_DIR) && $(CARGO_ESP) build --release --features gicar )
-
-build-all: build build-hil build-monitor ## Build everything (driver + HIL + monitor)
-	@printf "\n$(BOLD)$(GREEN)All builds succeeded.$(RESET)\n"
-
 # --------------------------------------------------------------------------- #
 #	Unified verify target
 # --------------------------------------------------------------------------- #
 
 ##@ Quality
 
-verify: test lint check-all ## Run tests + lint + all compilation checks
+verify: test lint check ## Run tests + lint + cross-compile checks
 	@printf "\n$(BOLD)$(GREEN)════════════════════════════════════════$(RESET)\n"
 	@printf "$(BOLD)$(GREEN)  All verification passed.$(RESET)\n"
 	@printf "$(BOLD)$(GREEN)════════════════════════════════════════$(RESET)\n\n"
@@ -142,63 +102,6 @@ coverage: ## Generate test coverage report (lcov + HTML)
 	@printf "  lcov:  coverage/lcov.info\n"
 	@printf "  HTML:  coverage/html/html/index.html\n\n"
 
-size: ## Report .text size per feature combo (requires esp toolchain)
-	@$(ESP_ENV) \
-	LLVM_SIZE=$$(find "$$($(CARGO_ESP) rustc --print sysroot 2>/dev/null || rustc --print sysroot)" -name llvm-size 2>/dev/null | head -1); \
-	if [ -z "$$LLVM_SIZE" ]; then \
-		printf "$(BOLD)Error:$(RESET) llvm-size not found. Install with: rustup component add llvm-tools\n"; \
-		exit 1; \
-	fi; \
-	printf "\n$(BOLD)tmag5273 binary size ($(SIZE_TARGET), release)$(RESET)\n\n"; \
-	printf "  $(CYAN)%-20s$(RESET) %8s %8s %8s\n" "Features" ".text" ".data" ".bss"; \
-	printf "  %-20s %8s %8s %8s\n" "--------" "-----" "-----" "----"; \
-	for combo in "default:--no-default-features" "crc:--features crc" "defmt:--features defmt" "crc+defmt:--features crc,defmt"; do \
-		name=$${combo%%:*}; flags=$${combo#*:}; \
-		if ! ( cd $(SIZE_DIR) && RUSTFLAGS="-C llvm-args=--disable-block-placement -C llvm-args=--disable-branch-fold" $(CARGO_ESP) build --release $$flags 2>/dev/null ); then \
-			printf "  %-20s %8s %8s %8s\n" "$$name" "FAILED" "-" "-"; \
-			continue; \
-		fi; \
-		sizes=$$($$LLVM_SIZE $(SIZE_DIR)/target/$(SIZE_TARGET)/release/tmag5273-size 2>/dev/null | tail -1); \
-		text=$$(echo "$$sizes" | awk '{print $$1}'); \
-		data=$$(echo "$$sizes" | awk '{print $$2}'); \
-		bss=$$(echo "$$sizes" | awk '{print $$3}'); \
-		printf "  %-20s %8s %8s %8s\n" "$$name" "$$text" "$$data" "$$bss"; \
-	done; \
-	printf "\n"
-
-# --------------------------------------------------------------------------- #
-#	HIL targets (requires ESP32-S3 + TMAG5273 hardware)
-# --------------------------------------------------------------------------- #
-
-##@ HIL (hardware-in-the-loop — requires ESP32-S3 + TMAG5273)
-
-hil-test-non-interactive: ## Non-interactive: flash and run HIL tests (no magnet needed)
-	@$(ESP_ENV) ( cd $(HIL_DIR) && $(CARGO_ESP) test --release --bin tmag5273-non-interactive )
-
-hil-test-idle-interactive: ## Interactive: hold Gicar frother still, motor OFF
-	@$(ESP_ENV) ( cd $(HIL_DIR) && $(CARGO_ESP) test --release --features interactive --bin tmag5273-interactive-idle )
-
-hil-test-spinning-interactive: ## Interactive: spin Gicar frother continuously
-	@$(ESP_ENV) ( cd $(HIL_DIR) && $(CARGO_ESP) test --release --features interactive --bin tmag5273-interactive-spinning )
-
-hil-test-single-magnet: ## Interactive: hold single bar magnet near sensor (CORDIC tests)
-	@$(ESP_ENV) ( cd $(HIL_DIR) && $(CARGO_ESP) test --release --features single-magnet --bin tmag5273-interactive-single-magnet )
-
-hil-test-interactive: ## Interactive: run idle + spinning sequentially (prompts between)
-	@printf "$(BOLD)$(CYAN)Step 1/2: IDLE tests$(RESET) — hold Gicar frother near sensor, motor OFF\n"
-	@$(MAKE) hil-test-idle-interactive
-	@printf "\n$(BOLD)$(MAGENTA)Idle tests passed.$(RESET)\n"
-	@printf "$(BOLD)$(CYAN)Step 2/2: SPINNING tests$(RESET) — start frother now and keep spinning.\n"
-	@read -p "Press Enter when frother is spinning... " _
-	@$(MAKE) hil-test-spinning-interactive
-	@printf "\n$(BOLD)All interactive tests passed.$(RESET)\n"
-
-monitor: ## Flash and run monitor — Gicar profile (Ctrl+C to stop)
-	@$(ESP_ENV) ( cd $(MONITOR_DIR) && $(CARGO_ESP) run --release --features gicar )
-
-monitor-frother: ## Flash and run monitor — frother test bench profile
-	@$(ESP_ENV) ( cd $(MONITOR_DIR) && $(CARGO_ESP) run --release --features frother )
-
 # --------------------------------------------------------------------------- #
 #	Housekeeping
 # --------------------------------------------------------------------------- #
@@ -207,9 +110,6 @@ monitor-frother: ## Flash and run monitor — frother test bench profile
 
 clean: ## Remove all build artifacts
 	cargo clean
-	( cd $(HIL_DIR) && cargo clean )
-	( cd $(MONITOR_DIR) && cargo clean 2>/dev/null || true )
-	( cd $(SIZE_DIR) && cargo clean 2>/dev/null || true )
 
 # --------------------------------------------------------------------------- #
 #	Help

@@ -31,13 +31,10 @@ Thumbs.db
 *.tmp
 *.log
 
-.embuild/
-
 # Docs
 .full-review
 docs/bytebase
 docs/embedonomicon
-docs/esp*
 docs/rust-*
 
 docs/brainstorms
