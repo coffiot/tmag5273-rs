@@ -21,12 +21,12 @@ The number (1/2) determines the full-scale sensitivity range.
 
 ```toml
 [dependencies]
-tmag5273 = "0.1"
+tmag5273 = "3"
 
 # Optional features:
-# tmag5273 = { version = "0.1", features = ["crc"] }
-# tmag5273 = { version = "0.1", features = ["defmt"] }
-# tmag5273 = { version = "0.1", features = ["libm"] }
+# tmag5273 = { version = "3", features = ["crc"] }
+# tmag5273 = { version = "3", features = ["defmt"] }
+# tmag5273 = { version = "3", features = ["libm"] }
 ```
 
 ## Quick Start
