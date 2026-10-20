@@ -5225,7 +5225,7 @@ mod tests {
         // X threshold = 42
         expectations.push(I2cTransaction::write(
             address,
-            vec![register::X_THR_CONFIG, 42u8 as u8],
+            vec![register::X_THR_CONFIG, 42_u8],
         ));
         // Y threshold = -10 (0xF6)
         expectations.push(I2cTransaction::write(
@@ -5235,7 +5235,7 @@ mod tests {
         // Z threshold = 100 (wraps: 100i8 as u8 = 0x64)
         expectations.push(I2cTransaction::write(
             address,
-            vec![register::Z_THR_CONFIG, 100u8 as u8],
+            vec![register::Z_THR_CONFIG, 100_u8],
         ));
         // T_CONFIG read-modify-write: preserve T_CH_EN bit (0x01 from init)
         // temperature=0x28 → (0x28 << 1) | T_CH_EN=1 = 0x51

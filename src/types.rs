@@ -2098,7 +2098,7 @@ mod tests {
 
     #[test]
     fn millitesla_into_f32() {
-        assert_eq!(f32::from(MilliTesla(3.14)), 3.14);
+        assert_eq!(f32::from(MilliTesla(2.5)), 2.5);
     }
 
     #[test]
@@ -2211,7 +2211,7 @@ mod tests {
 
     #[test]
     fn cordic_magnitude_into_f32() {
-        assert_eq!(f32::from(CordicMagnitude(3.14)), 3.14);
+        assert_eq!(f32::from(CordicMagnitude(2.5)), 2.5);
     }
 
     #[test]
